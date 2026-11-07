@@ -423,7 +423,7 @@ suite green. The remaining `INC $4014` regression was the sticky OAM2-freeze
 flag: it was being re-raised on every temporary-counter wrap after the
 dot-255 clear. Raising it only on the first wrap of an evaluation restores the
 page-06 OAM-DMA sprite-zero hit without changing the frozen-OAM2 tests. The
-isolated battery is now **128/151**.
+isolated battery is now **129/151**.
 
 A secondary-OAM-driven renderer was also prototyped: evaluation stayed on the
 calibrated baseline path (so overflow behaviour was bit-identical), while a
@@ -453,6 +453,12 @@ blargg `spr_overflow_*`/`spr_hit_*` ROMs regressed. It was reverted rather than
 trading calibrated tests. Resolving this requires modelling the hardware
 overflow scan as a separate state from the normal in-range byte copy, not just
 one shared counter.
+
+The `Implied Dummy Reads` test now passes. Implied and accumulator
+instructions perform their second-cycle dummy read from `PC` instead of an
+internal-only idle; `PLA`/`PLP` additionally dummy-read the stack pointer
+before pulling, and `PHA`/`PHP` dummy-read `PC` before pushing. This matches
+the bus side effects the test observes without changing instruction timing.
 
 The `Controller Strobing` test now passes. Normal writes to `$4016` always
 strobe, while an RMW dummy write only reaches the controller when it lands on a
@@ -736,7 +742,7 @@ Current measured result (v3.1.0 ROM):
 
 ```text
 Full-battery mode:   84/151 pass, 44 fail, 5 skip, 18 unrun (stall at $F278)
-Isolated mode:       128/151 pass, 18 fail, 5 skip,  0 unrun (199320 frames)
+Isolated mode:       129/151 pass, 17 fail, 5 skip,  0 unrun (199320 frames)
 ```
 
 The 5 skipped rows are the DRAW tests. The 3 remaining unrun all hang even with

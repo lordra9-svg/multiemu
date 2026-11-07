@@ -320,6 +320,16 @@ impl Cpu {
         self.registers.pc = u16::from(low) | (u16::from(high) << 8);
     }
 
+    fn dummy_read_pc(&mut self, bus: &mut impl CpuBus) {
+        let pc = self.registers.pc;
+        self.read(bus, pc);
+    }
+
+    fn dummy_read_stack(&mut self, bus: &mut impl CpuBus) {
+        let address = 0x0100 | u16::from(self.registers.sp);
+        self.read(bus, address);
+    }
+
     fn execute(&mut self, bus: &mut impl CpuBus, opcode: u8) {
         let (kind, mode) = decode(opcode);
         match kind {
@@ -626,116 +636,116 @@ impl Cpu {
                 self.registers.pc = u16::from(low) | (u16::from(high) << 8);
             }
             Kind::Pha => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.push(bus, self.registers.a);
             }
             Kind::Php => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 let mut p = self.registers.p;
                 p.set(Status::BREAK, true);
                 self.push(bus, p.bits());
             }
             Kind::Pla => {
-                self.idle(bus);
-                self.idle(bus);
+                self.dummy_read_pc(bus);
+                self.dummy_read_stack(bus);
                 let value = self.pull(bus);
                 self.registers.a = value;
                 self.registers.p.set_zn(value);
             }
             Kind::Plp => {
-                self.idle(bus);
-                self.idle(bus);
+                self.dummy_read_pc(bus);
+                self.dummy_read_stack(bus);
                 let p = self.pull(bus);
                 self.registers.p = Status::from_bits(p & !Status::BREAK);
             }
             Kind::Tax => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.x = self.registers.a;
                 let x = self.registers.x;
                 self.registers.p.set_zn(x);
             }
             Kind::Tay => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.y = self.registers.a;
                 let y = self.registers.y;
                 self.registers.p.set_zn(y);
             }
             Kind::Txa => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.a = self.registers.x;
                 let a = self.registers.a;
                 self.registers.p.set_zn(a);
             }
             Kind::Tya => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.a = self.registers.y;
                 let a = self.registers.a;
                 self.registers.p.set_zn(a);
             }
             Kind::Tsx => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.x = self.registers.sp;
                 let x = self.registers.x;
                 self.registers.p.set_zn(x);
             }
             Kind::Txs => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.sp = self.registers.x;
             }
             Kind::Inx => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.x = self.registers.x.wrapping_add(1);
                 let x = self.registers.x;
                 self.registers.p.set_zn(x);
             }
             Kind::Iny => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.y = self.registers.y.wrapping_add(1);
                 let y = self.registers.y;
                 self.registers.p.set_zn(y);
             }
             Kind::Dex => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.x = self.registers.x.wrapping_sub(1);
                 let x = self.registers.x;
                 self.registers.p.set_zn(x);
             }
             Kind::Dey => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.y = self.registers.y.wrapping_sub(1);
                 let y = self.registers.y;
                 self.registers.p.set_zn(y);
             }
             Kind::Clc => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.p.set(Status::CARRY, false);
             }
             Kind::Sec => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.p.set(Status::CARRY, true);
             }
             Kind::Cli => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.p.set(Status::INTERRUPT, false);
             }
             Kind::Sei => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.p.set(Status::INTERRUPT, true);
             }
             Kind::Clv => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.p.set(Status::OVERFLOW, false);
             }
             Kind::Cld => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.p.set(Status::DECIMAL, false);
             }
             Kind::Sed => {
-                self.idle(bus);
+                self.dummy_read_pc(bus);
                 self.registers.p.set(Status::DECIMAL, true);
             }
             Kind::Nop => match mode {
-                Mode::Imp => self.idle(bus),
+                Mode::Imp => self.dummy_read_pc(bus),
                 Mode::Imm => {
                     self.fetch(bus);
                 }
@@ -821,7 +831,7 @@ impl Cpu {
         operation: impl FnOnce(&mut Self, u8) -> u8,
     ) {
         if mode == Mode::Acc {
-            self.idle(bus);
+            self.dummy_read_pc(bus);
             let value = self.registers.a;
             self.registers.a = operation(self, value);
             let a = self.registers.a;
