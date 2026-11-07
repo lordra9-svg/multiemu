@@ -880,13 +880,25 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 AccuracyCoin v3.1.0, isolated mode:
 
 ```text
-AccuracyCoin: 143/151 passed, 3 failed, 5 skipped, 0 unrun (199320 frames)
+AccuracyCoin: 144/151 passed, 2 failed, 5 skipped, 0 unrun (199320 frames)
 ```
 
 All A1–A3 public suites remain green: `nestest` 0 diff, `instr_timing`,
 `instr_basics`, `vbl_nmi` 12/12, `ppu_sprites` 19/19, and all 13 blargg
-APU/DMC ROMs. The three open failures are catalogued with their failing
+APU/DMC ROMs. The two open failures are catalogued with their failing
 sub-tests and suspected causes in `docs/accuracy-divergences.md`.
+
+### 2026-11-07 — load-DMA phase covers mid-byte writes
+
+`DMA Landing on Write` now passes. The four-cycle load-DMA halt (the get cycle
+of the second following APU cycle) is now used whenever the enable write lands
+on a get, not only when the shift register is idle. The one exception is the
+implicit-abort window (`bits_remaining == 1` with the DMC timer at 0 or 1),
+where the fetched byte is being handed to the shift register as the timer rolls
+over; that window and put-cycle writes keep the timer-parity 2/3-cycle start
+delay. This satisfies `DMA Landing on Write` sub-test 6 as well as `DMA +
+$2002 Read` while leaving `Delta Modulation Channel`, `Implicit DMA Abort`,
+`Explicit DMA Abort`, `DMC Reload Timing` and the DMA-read tests green.
 
 ### 2026-11-07 — NMI interrupt hijacking
 

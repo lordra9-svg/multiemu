@@ -7,7 +7,7 @@ entry whenever a divergence is found, and remove it only when a test or a
 hardware capture proves the behaviour matches.
 
 Current snapshot: **2026-11-07**, AccuracyCoin v3.1.0, isolated battery
-**143/151 passed, 3 failed, 5 skipped, 0 unrun**.
+**144/151 passed, 2 failed, 5 skipped, 0 unrun**.
 
 The five skipped rows are the `DRAW` tests, which need a human-drawn reference
 image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
@@ -18,7 +18,6 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 | Suite | Test | CLI code | Failing sub-test | Divergence |
 |---|---|---|---|---|
 | APU Registers and DMA | DMC DMA + OAM DMA | 5 | ErrorCode 2 (30/32 bytes) | Interleave implemented. Only loop 2, X=5 differs: the fetch lands on the final OAM cycle and the first post-OAM request is ~20 cycles off the ROM's phase, so the measured duration wraps one 576-cycle period (`$2C` = `556 & $FF`). |
-| CPU Behavior 2 | DMA Landing on Write | 13 | ErrorCode 6 | Sub-test 6 wants the "extra APU cycle" load-DMA variant (halt four cycles after the write) while a byte is still shifting. That variant is only produced with the shift register idle; with a byte in flight the calibrated 2/3-cycle start delay is used. The ROM's own note says sub-test 6 fails on CPUs that do not take the extra cycle. Sub-tests 1–5 pass. |
 | PPU Misc. | `$2007` Stress Test | 5 | ErrorCode 2 | The `$2007` read buffer during a visible scanline does not match per dot. Feeding fetch reads into the buffer exposes attribute/pattern values, but the sequence is misaligned; the full three-cycle PPU data state machine and shared octal latch are needed. |
 
 ## Intentional approximations
@@ -35,6 +34,9 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 - **No `Accuracy::CycleAccurate` badge** is exposed until the A5 gate passes.
 
 ## Recently closed
+
+- `DMA Landing on Write`: the four-cycle load-DMA halt now also applies
+  mid-byte, except inside the timer-rollover implicit-abort window.
 
 - `NMI Overlap BRK` / `NMI Overlap IRQ`: an NMI detected before the status
   push now hijacks the vector (`$FFFA`) while keeping the BRK/IRQ `B` flag in

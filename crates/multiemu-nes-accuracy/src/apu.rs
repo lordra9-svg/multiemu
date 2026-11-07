@@ -517,12 +517,14 @@ impl Dmc {
             0
         } else {
             match write_get {
-                // With the shift register idle, a write that lands on a get
-                // pushes the load DMA out to the get cycle of the second
-                // following APU cycle.
-                Some(true) if self.bits_remaining == 8 => 4,
-                // A byte still shifting, put writes and the standalone
-                // harnesses keep the timer-parity calibration.
+                // A write that lands on a get pushes the load DMA out to the
+                // get cycle of the second following APU cycle. The one
+                // exception is the implicit-abort window, where the fetched
+                // byte is being handed to the shift register as the timer
+                // rolls over.
+                Some(true) if !(self.bits_remaining == 1 && self.timer < 2) => 4,
+                // The abort window, put writes and the standalone harnesses
+                // keep the timer-parity calibration.
                 _ => {
                     if self.timer & 1 == 0 {
                         2
