@@ -19,7 +19,7 @@ The accuracy core is at milestone **A5** (accuracy gate):
 
 - `nestest` 0 diff, blargg `instr_timing` / `instr_basics` pass
 - `vbl_nmi` 12/12, `ppu_sprites` 19/19, all 13 blargg APU/DMC ROMs pass
-- AccuracyCoin isolated battery: **138/151** (5 DRAW skips, 8 failures)
+- AccuracyCoin isolated battery: **139/151** (5 DRAW skips, 7 failures)
 
 Cycle accuracy is not claimed yet. The remaining failures and every known
 approximation are recorded in

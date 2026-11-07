@@ -15,7 +15,7 @@ Status: `shipped` · `planned` · `deferred` · `reference-only`
 | Adapter | `crates/multiemu-nes` (TetaNES) |
 | Accuracy bar | reference parity; see `docs/accuracy.md` |
 | Scope | licensed library, then FDS/VS/PAL/Dendy/expansion/peripherals/unlicensed/NSF |
-| Status | compatibility core shipped; accuracy core at A5 (CPU/PPU 12+19, APU 13, mappers + system + Core ABI; AccuracyCoin 138/151) |
+| Status | compatibility core shipped; accuracy core at A5 (CPU/PPU 12+19, APU 13, mappers + system + Core ABI; AccuracyCoin 139/151) |
 
 TetaNES remains the default until the accuracy core passes its gates; both will
 be selectable by `CoreInfo.id`. The accuracy core is MIT with documented

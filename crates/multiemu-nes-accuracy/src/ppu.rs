@@ -1129,7 +1129,20 @@ impl Ppu {
                 self.secondary_oam[base + 1],
                 self.secondary_oam[base + 2],
                 self.secondary_oam[base + 3],
-                self.oam_id[slot],
+                if self.scanline == 261 {
+                    // Sprite evaluation does not run on the pre-render line,
+                    // so the fetch uses whatever secondary OAM still holds.
+                    // The first non-empty entry is treated as sprite zero.
+                    if self.secondary_oam[base] == 0xFF {
+                        64
+                    } else if slot == 0 {
+                        0
+                    } else {
+                        1
+                    }
+                } else {
+                    self.oam_id[slot]
+                },
             )
         };
         self.spr_x[slot] = x;

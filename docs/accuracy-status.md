@@ -423,7 +423,7 @@ suite green. The remaining `INC $4014` regression was the sticky OAM2-freeze
 flag: it was being re-raised on every temporary-counter wrap after the
 dot-255 clear. Raising it only on the first wrap of an evaluation restores the
 page-06 OAM-DMA sprite-zero hit without changing the frozen-OAM2 tests. The
-isolated battery is now **138/151**.
+isolated battery is now **139/151**.
 
 `Stale Sprite Shift Regs` now passes. Two sprite-fetch details were wrong:
 the per-slot shifter/position latch ran on the first dot of each slot's fetch
@@ -776,7 +776,7 @@ Current measured result (v3.1.0 ROM):
 
 ```text
 Full-battery mode:   84/151 pass, 44 fail, 5 skip, 18 unrun (stall at $F278)
-Isolated mode:       138/151 pass,  8 fail, 5 skip,  0 unrun (199320 frames)
+Isolated mode:       139/151 pass,  7 fail, 5 skip,  0 unrun (199320 frames)
 ```
 
 The 5 skipped rows are the DRAW tests. The 3 remaining unrun all hang even with
@@ -880,10 +880,25 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 AccuracyCoin v3.1.0, isolated mode:
 
 ```text
-AccuracyCoin: 138/151 passed, 8 failed, 5 skipped, 0 unrun (199320 frames)
+AccuracyCoin: 139/151 passed, 7 failed, 5 skipped, 0 unrun (199320 frames)
 ```
 
 All A1–A3 public suites remain green: `nestest` 0 diff, `instr_timing`,
 `instr_basics`, `vbl_nmi` 12/12, `ppu_sprites` 19/19, and all 13 blargg
-APU/DMC ROMs. The eight open failures are catalogued with their failing
+APU/DMC ROMs. The seven open failures are catalogued with their failing
 sub-tests and suspected causes in `docs/accuracy-divergences.md`.
+
+### 2026-11-07 — pre-render sprites; `$2007` buffer investigation
+
+`Sprites On Scanline 0` now passes. Evaluation does not run on the pre-render
+line, so its sprite fetch works from whatever secondary OAM still holds. The
+fetch now treats the first non-empty stale slot as sprite zero; combined with
+the existing `(261 - Y) & 7` row calculation, a Y=0 sprite is drawn from tile
+row 5 on line 0, which is the documented behaviour.
+
+`$2007 Stress Test` was investigated but remains open. Feeding the
+background-fetch reads into `read_buffer` made attribute/pattern values appear,
+but the sequence is still misaligned and the pattern reads use the `v` that the
+`$2007` reads themselves advanced. A correct model needs the PPU data state
+machine (address latch, idle, read) with the shared octal latch, not an
+immediate buffer update; that experiment was reverted.

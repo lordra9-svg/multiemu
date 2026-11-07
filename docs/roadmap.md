@@ -27,7 +27,7 @@ The main effort is now the reference-parity accuracy core. Details in
       Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, MMC2/MMC4
       PPU-latched CHR, ROM-nametable mappers, and the remaining small ASICs.
 - [ ] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
-      all 151 rows: **138 pass, 8 fail, 5 DRAW skips, 0 unrun** (146 non-DRAW).
+      all 151 rows: **139 pass, 7 fail, 5 DRAW skips, 0 unrun** (146 non-DRAW).
       All A1–A3 public suites remain green. Remaining clusters: DMA/abort timing
       (`DMA + $2002 Read`, `DMC DMA + OAM DMA`, `Explicit DMA Abort`,
       `DMA Landing on Write`), NMI/BRK hijack, the `$2007` read buffer, and the
