@@ -44,6 +44,8 @@ pub struct System {
     /// A DMA used the bus on the current CPU cycle.
     dma_event: bool,
     cpu_pc: u16,
+    /// DMC fetch state carried out of an OAM transfer that ended first.
+    dmc_carry: u8,
     /// CPU program counter, used for APU register activation during OAM DMA.
     /// PPU dots still owed at the end of a split CPU cycle.
     end_dots: u8,
@@ -80,6 +82,8 @@ struct Dma {
     oam_buffer: u8,
     oam_write_ready: bool,
     oam_halt_done: bool,
+    /// Interleaved DMC fetch state: 0 idle, 1 halted, 2 ready to read.
+    dmc_state: u8,
 }
 
 impl System {
@@ -114,6 +118,7 @@ impl System {
             rmw_dummy: false,
             dma_event: false,
             cpu_pc: 0,
+            dmc_carry: 0,
             end_dots: 0,
             cycle_before_scanline: 0,
             dma: None,
@@ -299,6 +304,74 @@ impl System {
         self.mix_sample();
         self.phase = !self.phase;
 
+        if self.dmc_carry != 0 {
+            // The OAM transfer ended while a DMC fetch was in flight, so the
+            // halt (and possibly the dummy) already ran against OAM cycles.
+            // The fetch continues on this CPU cycle, which the top of this
+            // function already advanced; only additional cycles cost ticks.
+            let mut phase = !self.phase;
+            let mut dummy = self.dmc_carry == 2;
+            let mut extra = 0u32;
+            loop {
+                if phase {
+                    // Put cycle: alignment/dummy read of the CPU address.
+                    dummy = true;
+                    if let Some(addr) = address {
+                        let value = self.dma_read(addr);
+                        if addr != 0x4015 {
+                            self.open_bus = value;
+                        }
+                    }
+                } else if dummy {
+                    // Get cycle: the real sample read.
+                    let addr = self.apu.dmc.address;
+                    let byte = self.dma_read(addr);
+                    if addr != 0x4015 {
+                        self.open_bus = byte;
+                    }
+                    self.apu.dmc_sample(byte);
+                    break;
+                } else {
+                    // Get cycle before the dummy: consume it as the dummy.
+                    dummy = true;
+                    if let Some(addr) = address {
+                        let value = self.dma_read(addr);
+                        if addr != 0x4015 {
+                            self.open_bus = value;
+                        }
+                    }
+                }
+                self.clock();
+                extra += 1;
+                phase = !phase;
+            }
+            self.dmc_carry = 0;
+            self.stall_cycles += extra;
+            self.dma_event = true;
+            return;
+        }
+
+        if self.apu.take_dmc_disable_event() && self.apu.dmc_request_pending() {
+            // A stop landed in the abort window. A fetch that has not reached
+            // its halt cycle yet is dropped without any cycle cost on a write;
+            // on a read cycle it still halts once, then gives up.
+            self.apu.take_dmc_request();
+            if write.is_none() {
+                if let Some(addr) = address {
+                    let value = self.dma_read(addr);
+                    if addr != 0x4015 {
+                        self.open_bus = value;
+                    }
+                }
+                // The halt cycle is the whole transfer: one stolen cycle,
+                // after which the fetch is abandoned.
+                self.clock();
+                self.stall_cycles += 1;
+                self.dma_event = true;
+                return;
+            }
+        }
+
         if write.is_none() && self.apu.dmc_needs_sample() {
             let short_fetch = self.apu.take_dmc_held();
             // Halt cycle: the CPU read is stolen and the current address is
@@ -419,9 +492,17 @@ impl System {
                 }
             }
             DmaKind::Oam => {
-                // Phase-driven: reads happen on get cycles and writes on put
-                // cycles. Starting on a put cycle inserts one alignment cycle.
+                // A DMC fetch may run at the same time. Its halt and dummy
+                // cycles are no-operation cycles, so the OAM transfer keeps
+                // going through them; only the DMC get displaces an OAM read.
                 let phase = phase_now;
+                let mut dmc = dma.dmc_state;
+                // A new request performs its halt cycle during this OAM cycle;
+                // the dummy cycle is the next one. Both are no-ops for the
+                // sprite transfer, and only the get displaces an OAM read.
+                let halt_now = dmc == 0 && self.apu.dmc_needs_sample();
+
+                let mut ended = false;
                 if !dma.oam_halt_done {
                     dma.oam_halt_done = true;
                 } else if phase {
@@ -436,11 +517,22 @@ impl System {
                         dma.oam_counter = dma.oam_counter.wrapping_add(1);
                         if dma.oam_counter == 0 {
                             dma.remaining = 0;
+                            ended = true;
                         }
                     } else if let Some(address) = dma.cpu_address {
                         let value = self.dma_read(address);
                         self.open_bus = value;
                     }
+                } else if dmc == 2 {
+                    // The DMC read takes priority; the OAM transfer stays
+                    // paused and picks up again after an alignment cycle.
+                    let address = self.apu.dmc.address;
+                    let byte = self.dma_read(address);
+                    if address != 0x4015 {
+                        self.open_bus = byte;
+                    }
+                    self.apu.dmc_sample(byte);
+                    dmc = 0;
                 } else {
                     let address = dma.page + u16::from(dma.oam_counter);
                     let byte = if self.cpu_pc >> 8 == 0x40 {
@@ -456,6 +548,21 @@ impl System {
                     self.open_bus = byte;
                     dma.oam_buffer = byte;
                     dma.oam_write_ready = true;
+                }
+
+                if halt_now {
+                    // The halt cycle has now run; the dummy is next.
+                    dmc = 1;
+                } else if dmc == 1 {
+                    // The dummy cycle has now run; the read is next.
+                    dmc = 2;
+                }
+                dma.dmc_state = dmc;
+                if ended && dmc != 0 {
+                    // The OAM transfer finished first; the fetch continues
+                    // from the CPU side with its halt/dummy work already done.
+                    self.dmc_carry = dmc;
+                    dma.dmc_state = 0;
                 }
             }
         }
@@ -593,6 +700,7 @@ impl CpuBus for System {
                     oam_buffer: 0,
                     oam_write_ready: false,
                     oam_halt_done: false,
+                    dmc_state: 0,
                 });
             }
             0x4016 => {

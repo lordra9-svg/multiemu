@@ -880,13 +880,34 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 AccuracyCoin v3.1.0, isolated mode:
 
 ```text
-AccuracyCoin: 139/151 passed, 7 failed, 5 skipped, 0 unrun (199320 frames)
+AccuracyCoin: 140/151 passed, 6 failed, 5 skipped, 0 unrun (199320 frames)
 ```
 
 All A1–A3 public suites remain green: `nestest` 0 diff, `instr_timing`,
 `instr_basics`, `vbl_nmi` 12/12, `ppu_sprites` 19/19, and all 13 blargg
-APU/DMC ROMs. The seven open failures are catalogued with their failing
+APU/DMC ROMs. The six open failures are catalogued with their failing
 sub-tests and suspected causes in `docs/accuracy-divergences.md`.
+
+### 2026-11-07 — Explicit DMA Abort and DMC/OAM interleave
+
+`Explicit DMA Abort` now passes. A `$4015` write that clears the DMC enable bit
+arms a 2–3 cycle stop delay; when the stop lands between a queued fetch and its
+halt cycle the fetch is dropped, and when it lands after the halt it costs the
+single halted cycle and aborts, reproducing the ROM's 3-cycle and 1-cycle abort
+durations. The byte counter is only cleared when the delay expires, so a fetch
+started inside the window is cancelled instead of completing.
+
+`DMC DMA + OAM DMA` is now modelled as a real interleave rather than a
+synchronous 4-cycle fetch: the OAM transfer keeps running through the DMC halt
+and dummy cycles, the DMC get takes priority on a get cycle and pauses the OAM
+read, the OAM transfer then adds one alignment cycle, and a fetch still in
+flight when the OAM transfer ends is carried into the CPU's next cycles. The
+result array now matches 30 of 32 answer-key bytes; only loop 2, X=5 differs
+(`2C` instead of `00`). That entry is the alignment where the DMC fetch lands on
+the final OAM cycle; the measured duration wraps one 576-cycle DMC period
+(`44` is `556 & $FF`), so the first post-OAM fetch is about 20 cycles off the
+ROM's phase. The interleave is kept because it also fixes `Explicit DMA Abort`
+and keeps the rest of the DMA cluster green.
 
 ### 2026-11-07 — pre-render sprites; `$2007` buffer investigation
 

@@ -440,6 +440,10 @@ pub struct Dmc {
     enable_delay: u8,
     /// A fetch request was held because the enable latch was still running.
     held_request: bool,
+    /// CPU cycles until a `$4015` D4=0 write takes effect (2 or 3).
+    disable_delay: u8,
+    /// The delayed stop took effect on this CPU cycle.
+    disable_event: bool,
     /// A sample byte fetch is pending.
     pub dma_pending: bool,
     /// Reload address from `$4012`.
@@ -471,6 +475,8 @@ impl Default for Dmc {
             init: 0,
             enable_delay: 0,
             held_request: false,
+            disable_delay: 0,
+            disable_event: false,
             dma_pending: false,
             sample_address: 0xC000,
             length: 1,
@@ -519,6 +525,23 @@ impl Dmc {
     /// Counts the `$4015` enable delay.
     fn clock_enable_delay(&mut self) {
         self.enable_delay = self.enable_delay.saturating_sub(1);
+    }
+
+    /// Counts the `$4015` disable delay.
+    ///
+    /// The write stops playback, but the byte counter is only cleared two or
+    /// three CPU cycles later, so a fetch that starts inside that window is
+    /// cancelled or aborted instead of completing.
+    fn clock_disable_delay(&mut self) {
+        if self.disable_delay > 0 {
+            self.disable_delay -= 1;
+            if self.disable_delay == 0 {
+                self.bytes_remaining = 0;
+                self.enable_delay = 0;
+                self.held_request = false;
+                self.disable_event = true;
+            }
+        }
     }
 
     /// Counts the start delay and requests the first byte when ready.
@@ -772,6 +795,7 @@ impl Apu {
         self.noise.clock_timer();
         self.dmc.clock_timer();
         self.dmc.clock_init();
+        self.dmc.clock_disable_delay();
         self.clock_frame();
         self.pulse1.reload_length();
         self.pulse2.reload_length();
@@ -849,13 +873,11 @@ impl Apu {
                     self.noise.length = 0;
                 }
                 if value & 0x10 == 0 {
-                    // Stopping the DMC clears the byte counter but keeps the
-                    // in-flight sample/bit state, so a pending fetch is still
-                    // generated when the last bit is shifted out.
-                    self.dmc.bytes_remaining = 0;
-                    self.dmc.dma_pending = false;
-                    self.dmc.enable_delay = 0;
-                    self.dmc.held_request = false;
+                    // The stop takes effect two or three CPU cycles later and
+                    // is re-armed by a second write only once it has expired.
+                    if self.dmc.disable_delay == 0 {
+                        self.dmc.disable_delay = if self.cycle & 1 == 0 { 2 } else { 3 };
+                    }
                 } else {
                     let in_flight = !self.dmc.buffer_empty || self.dmc.bits_remaining < 8;
                     if self.dmc.bytes_remaining == 0 {
@@ -933,13 +955,35 @@ impl Apu {
     /// Whether the DMC needs a sample byte from CPU memory.
     #[must_use]
     pub fn dmc_needs_sample(&mut self) -> bool {
-        if self.dmc.enabled && self.dmc.dma_pending && self.dmc.enable_delay > 0 {
+        if self.dmc.dma_pending && self.dmc.enable_delay > 0 {
             // The request is already queued; it is only held off until the
             // enable latch expires, which makes the eventual transfer shorter.
             self.dmc.held_request = true;
             return false;
         }
-        self.dmc.enabled && self.dmc.dma_pending
+        self.dmc.dma_pending
+    }
+
+    /// Whether a sample byte fetch is waiting for its halt cycle.
+    #[must_use]
+    pub fn dmc_request_pending(&self) -> bool {
+        self.dmc.dma_pending
+    }
+
+    /// Drops a queued sample byte fetch.
+    pub fn take_dmc_request(&mut self) {
+        self.dmc.dma_pending = false;
+    }
+
+    /// Whether the delayed `$4015` stop took effect on this cycle.
+    #[must_use]
+    pub fn dmc_disable_event(&self) -> bool {
+        self.dmc.disable_event
+    }
+
+    /// Takes the "the delayed `$4015` stop just took effect" marker.
+    pub fn take_dmc_disable_event(&mut self) -> bool {
+        std::mem::take(&mut self.dmc.disable_event)
     }
 
     /// Takes the "this fetch was held by the enable latch" marker.
