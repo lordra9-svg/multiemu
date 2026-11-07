@@ -880,13 +880,30 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 AccuracyCoin v3.1.0, isolated mode:
 
 ```text
-AccuracyCoin: 141/151 passed, 5 failed, 5 skipped, 0 unrun (199320 frames)
+AccuracyCoin: 143/151 passed, 3 failed, 5 skipped, 0 unrun (199320 frames)
 ```
 
 All A1–A3 public suites remain green: `nestest` 0 diff, `instr_timing`,
 `instr_basics`, `vbl_nmi` 12/12, `ppu_sprites` 19/19, and all 13 blargg
-APU/DMC ROMs. The five open failures are catalogued with their failing
+APU/DMC ROMs. The three open failures are catalogued with their failing
 sub-tests and suspected causes in `docs/accuracy-divergences.md`.
+
+### 2026-11-07 — NMI interrupt hijacking
+
+`NMI Overlap BRK` and `NMI Overlap IRQ` now pass. An NMI detected before the
+status push of an interrupt sequence replaces the vector with `$FFFA` while the
+pushed status keeps the BRK/IRQ `B` flag, so the handler reads a BRK-shaped
+status byte from a hijacked `BRK` and an IRQ-shaped one from a hijacked IRQ.
+The hijack is applied both in `BRK` and in the shared `interrupt()` sequence
+(which covers the hardware IRQ and the NMI service path). Taking the NMI now
+clears a simultaneously latched IRQ, because the interrupt sequence sets `I`
+and the IRQ must not be taken on top of the NMI. An NMI edge that arrives
+after the `BRK` hijack sample is left pending for the following instruction's
+penultimate-cycle poll, matching the hardware poll cadence.
+
+The answer keys now match byte for byte: `$500` = `$A4`×10, `$36`×15, `$26`×7
+and `$520` = `$36`×10, `$00`×15, `$36`×7 for `NMI Overlap BRK`, and the
+corresponding 64-entry arrays for `NMI Overlap IRQ`.
 
 ### 2026-11-07 — load-DMA start phase
 

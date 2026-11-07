@@ -274,6 +274,9 @@ impl Cpu {
         if self.service_nmi {
             self.service_nmi = false;
             self.nmi_latched = false;
+            // The NMI sequence sets I, so the IRQ latched at the same poll is
+            // not taken on top of it.
+            self.service_irq = false;
             self.interrupt(bus, 0xFFFA, false);
         } else if self.service_irq {
             self.service_irq = false;
@@ -284,7 +287,11 @@ impl Cpu {
             self.execute(bus, opcode);
 
             // The 6502 polls interrupt lines during the penultimate cycle.
-            if self.prev_latched && !bus.nmi_suppressed() {
+            // BRK already samples the NMI for its hijack decision before the
+            // status push, so an edge that arrives later in the BRK sequence
+            // is only polled by the following instruction.
+            let deferred_brk = opcode == 0x00 && self.nmi_latched;
+            if self.prev_latched && !deferred_brk && !bus.nmi_suppressed() {
                 self.service_nmi = true;
             }
             if bus.nmi_suppressed() {
@@ -307,11 +314,18 @@ impl Cpu {
         (self.cycles - start) as u32
     }
 
-    fn interrupt(&mut self, bus: &mut impl CpuBus, vector: u16, brk: bool) {
+    fn interrupt(&mut self, bus: &mut impl CpuBus, mut vector: u16, brk: bool) {
         self.idle(bus);
         self.idle(bus);
         self.push(bus, (self.registers.pc >> 8) as u8);
         self.push(bus, self.registers.pc as u8);
+        // An NMI detected before the status push hijacks the IRQ sequence:
+        // the NMI vector is used but the pushed status keeps the IRQ's B flag.
+        if vector != 0xFFFA && self.nmi_latched {
+            self.nmi_latched = false;
+            self.prev_latched = false;
+            vector = 0xFFFA;
+        }
         let mut p = self.registers.p;
         p.set(Status::BREAK, brk);
         self.push(bus, p.bits());
@@ -642,12 +656,25 @@ impl Cpu {
                 self.fetch(bus);
                 self.push(bus, (self.registers.pc >> 8) as u8);
                 self.push(bus, self.registers.pc as u8);
+                // An NMI detected before the status push replaces the BRK
+                // vector. The pushed status still has B set, so the NMI
+                // handler sees a BRK-shaped status byte.
+                let hijack = self.nmi_latched;
                 let mut p = self.registers.p;
                 p.set(Status::BREAK, true);
                 self.push(bus, p.bits());
                 self.registers.p.set(Status::INTERRUPT, true);
-                let low = self.read(bus, 0xFFFE);
-                let high = self.read(bus, 0xFFFF);
+                let vector = if hijack {
+                    // The NMI has been taken; do not service it again at the
+                    // next instruction boundary.
+                    self.nmi_latched = false;
+                    self.prev_latched = false;
+                    0xFFFA
+                } else {
+                    0xFFFE
+                };
+                let low = self.read(bus, vector);
+                let high = self.read(bus, vector + 1);
                 self.registers.pc = u16::from(low) | (u16::from(high) << 8);
             }
             Kind::Pha => {
