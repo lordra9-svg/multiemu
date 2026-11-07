@@ -59,9 +59,9 @@ references or separate products. Details in `docs/systems.md`.
 
 ```sh
 cargo build --release
-cargo run -p multiemu-cli -- scan roms
-cargo run -p multiemu-cli -- info "roms/.../Castlevania (Europe).zip"
-cargo run -p multiemu-cli -- run "roms/.../Castlevania (Europe).zip" --frames 120 --out shot.ppm
+cargo run -p multiemu-cli -- scan game folder
+cargo run -p multiemu-cli -- info "game folder/.../game.zip"
+cargo run -p multiemu-cli -- run "game folder/.../game.zip" --frames 120 --out shot.ppm
 ```
 
 ROMs may be loose `.nes` files or inside `.zip`, `.7z`, or `.rar` archives;
@@ -75,10 +75,10 @@ output without a window.
 
 ```sh
 cargo run -p multiemu-app --release
-cargo run -p multiemu-app --release -- --rom "roms/.../Castlevania (Europe).zip"
+cargo run -p multiemu-app --release -- --rom "game folder/.../game.zip"
 ```
 
-The library defaults to `roms/`. The shell follows Dolphin's desktop
+The library defaults to `game folder/`. The shell follows Dolphin's desktop
 UX: a game library as the home screen, menu bar, toolbar, player viewport,
 status bar, and one settings window with a category rail. See
 `docs/frontend.md` for the blueprint and the GPL boundary.
