@@ -423,7 +423,18 @@ suite green. The remaining `INC $4014` regression was the sticky OAM2-freeze
 flag: it was being re-raised on every temporary-counter wrap after the
 dot-255 clear. Raising it only on the first wrap of an evaluation restores the
 page-06 OAM-DMA sprite-zero hit without changing the frozen-OAM2 tests. The
-isolated battery is now **130/151**.
+isolated battery is now **132/151**.
+
+The DMC `$4015` enable latch was then modelled at the request level.
+Disabling the DMC clears the byte counter but preserves the in-flight bit
+counter and sample buffer, so the last shifted bit still queues a fetch. A
+re-enable while a byte is in flight takes three CPU cycles to become effective:
+the queued request is held for one cycle (the CPU's access is redirected but no
+transfer starts), then serviced with the shorter `[halt][put][get]` transfer
+instead of the usual four-cycle form. The held transfer compensates the DMC
+timer by the one cycle spent waiting so the next fetch keeps its 432-cycle
+phase. This fixes both `Delta Modulation Channel` and `Implicit DMA Abort`
+without changing `DMC Reload Timing`, `APU Register Activation` or `INC $4014`.
 
 A secondary-OAM-driven renderer was also prototyped: evaluation stayed on the
 calibrated baseline path (so overflow behaviour was bit-identical), while a
@@ -748,7 +759,7 @@ Current measured result (v3.1.0 ROM):
 
 ```text
 Full-battery mode:   84/151 pass, 44 fail, 5 skip, 18 unrun (stall at $F278)
-Isolated mode:       130/151 pass, 16 fail, 5 skip,  0 unrun (199320 frames)
+Isolated mode:       132/151 pass, 14 fail, 5 skip,  0 unrun (199320 frames)
 ```
 
 The 5 skipped rows are the DRAW tests. The 3 remaining unrun all hang even with

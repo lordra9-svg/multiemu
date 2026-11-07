@@ -296,6 +296,7 @@ impl System {
         self.phase = !self.phase;
 
         if write.is_none() && self.apu.dmc_needs_sample() {
+            let short_fetch = self.apu.take_dmc_held();
             // Halt cycle: the CPU read is stolen and the current address is
             // used for the dummy read, exactly as the reference DMA routine.
             let skip = address.is_some_and(|a| matches!(a & 0x1F, 0x16 | 0x17));
@@ -347,10 +348,14 @@ impl System {
                 self.clock();
                 extra += 1;
             }
-            // Trailing idle cycle: the calibrated DMA reads expect a four-cycle
-            // transfer including this cycle.
-            self.clock();
-            extra += 1;
+            if short_fetch {
+                // The held request was already attempted one cycle earlier;
+                // keep the shorter [halt][put][get] form.
+                self.apu.dmc_catch_up();
+            } else {
+                self.clock();
+                extra += 1;
+            }
             self.stall_cycles += extra;
             return;
         }

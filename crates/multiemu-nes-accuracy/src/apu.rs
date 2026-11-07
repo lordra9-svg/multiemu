@@ -436,6 +436,10 @@ pub struct Dmc {
     silence: bool,
     /// Cycles to wait before the first fetch after a start.
     init: u8,
+    /// Cycles until a re-enable write to `$4015` takes effect.
+    enable_delay: u8,
+    /// A fetch request was held because the enable latch was still running.
+    held_request: bool,
     /// A sample byte fetch is pending.
     pub dma_pending: bool,
     /// Reload address from `$4012`.
@@ -465,6 +469,8 @@ impl Default for Dmc {
             shift: 0,
             silence: true,
             init: 0,
+            enable_delay: 0,
+            held_request: false,
             dma_pending: false,
             sample_address: 0xC000,
             length: 1,
@@ -498,9 +504,21 @@ impl Dmc {
     fn init_sample(&mut self, _cycle: u64) {
         self.address = self.sample_address;
         self.bytes_remaining = self.length;
-        // The start delay is selected by the DMC timer parity, not the CPU
-        // cycle parity.
-        self.init = if self.timer & 1 != 0 { 2 } else { 3 };
+        // The start delay is selected by the DMC timer parity and only applies
+        // while the sample buffer is empty. `timer` here is one less than the
+        // reference period counter, so its parity is complemented.
+        self.init = if !self.buffer_empty {
+            0
+        } else if self.timer & 1 == 0 {
+            2
+        } else {
+            3
+        };
+    }
+
+    /// Counts the `$4015` enable delay.
+    fn clock_enable_delay(&mut self) {
+        self.enable_delay = self.enable_delay.saturating_sub(1);
     }
 
     /// Counts the start delay and requests the first byte when ready.
@@ -747,12 +765,13 @@ impl Apu {
     /// Advances one CPU cycle.
     pub fn tick(&mut self) {
         self.cycle += 1;
-        self.dmc.clock_init();
+        self.dmc.clock_enable_delay();
         self.pulse1.clock_timer();
         self.pulse2.clock_timer();
         self.triangle.clock_timer();
         self.noise.clock_timer();
         self.dmc.clock_timer();
+        self.dmc.clock_init();
         self.clock_frame();
         self.pulse1.reload_length();
         self.pulse2.reload_length();
@@ -815,6 +834,7 @@ impl Apu {
                 self.pulse2.enabled = value & 0x02 != 0;
                 self.triangle.enabled = value & 0x04 != 0;
                 self.noise.enabled = value & 0x08 != 0;
+                let was_enabled = self.dmc.enabled;
                 self.dmc.enabled = value & 0x10 != 0;
                 if value & 0x01 == 0 {
                     self.pulse1.length = 0;
@@ -829,10 +849,23 @@ impl Apu {
                     self.noise.length = 0;
                 }
                 if value & 0x10 == 0 {
+                    // Stopping the DMC clears the byte counter but keeps the
+                    // in-flight sample/bit state, so a pending fetch is still
+                    // generated when the last bit is shifted out.
                     self.dmc.bytes_remaining = 0;
                     self.dmc.dma_pending = false;
-                } else if self.dmc.bytes_remaining == 0 {
-                    self.dmc.init_sample(self.cycle);
+                    self.dmc.enable_delay = 0;
+                    self.dmc.held_request = false;
+                } else {
+                    let in_flight = !self.dmc.buffer_empty || self.dmc.bits_remaining < 8;
+                    if self.dmc.bytes_remaining == 0 {
+                        self.dmc.init_sample(self.cycle);
+                    }
+                    if !was_enabled && in_flight {
+                        // A channel re-enabled while a byte is still shifting
+                        // takes three CPU cycles to become effective.
+                        self.dmc.enable_delay = 3;
+                    }
                 }
             }
             0x4017 => {
@@ -899,8 +932,24 @@ impl Apu {
 
     /// Whether the DMC needs a sample byte from CPU memory.
     #[must_use]
-    pub fn dmc_needs_sample(&self) -> bool {
+    pub fn dmc_needs_sample(&mut self) -> bool {
+        if self.dmc.enabled && self.dmc.dma_pending && self.dmc.enable_delay > 0 {
+            // The request is already queued; it is only held off until the
+            // enable latch expires, which makes the eventual transfer shorter.
+            self.dmc.held_request = true;
+            return false;
+        }
         self.dmc.enabled && self.dmc.dma_pending
+    }
+
+    /// Takes the "this fetch was held by the enable latch" marker.
+    pub fn take_dmc_held(&mut self) -> bool {
+        std::mem::take(&mut self.dmc.held_request)
+    }
+
+    /// Advances the DMC timer by one extra cycle for a held request.
+    pub fn dmc_catch_up(&mut self) {
+        self.dmc.clock_timer();
     }
 
     /// Supplies a byte fetched for the DMC.
