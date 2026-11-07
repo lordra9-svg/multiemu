@@ -1,7 +1,6 @@
 target/
 saves/
 roms/
-roms/
 test-roms
 test-roms/
 multiemu.conf
