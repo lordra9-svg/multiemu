@@ -423,7 +423,15 @@ suite green. The remaining `INC $4014` regression was the sticky OAM2-freeze
 flag: it was being re-raised on every temporary-counter wrap after the
 dot-255 clear. Raising it only on the first wrap of an evaluation restores the
 page-06 OAM-DMA sprite-zero hit without changing the frozen-OAM2 tests. The
-isolated battery is now **132/151**.
+isolated battery is now **137/151**.
+
+The `SH*` cluster (`$93`, `$9F`, `$9B`, `$9C`, `$9E`) now passes. The CPU bus
+reports whether a DMA drove the bus on the bus cycle that just ran, and the
+unstable stores drop the `H+1` AND term when it did: the DMA's fetch replaces
+the high-byte read, so the stored value is only the register term (`A & X` for
+SHA, `X` for SHX, `Y` for SHY, `SP` for SHS). Non-DMA stores keep the normal
+constant, so the five instruction variants all pass without affecting the
+non-DMA sub-tests.
 
 The DMC `$4015` enable latch was then modelled at the request level.
 Disabling the DMC clears the byte counter but preserves the in-flight bit
@@ -759,7 +767,7 @@ Current measured result (v3.1.0 ROM):
 
 ```text
 Full-battery mode:   84/151 pass, 44 fail, 5 skip, 18 unrun (stall at $F278)
-Isolated mode:       132/151 pass, 14 fail, 5 skip,  0 unrun (199320 frames)
+Isolated mode:       137/151 pass,  9 fail, 5 skip,  0 unrun (199320 frames)
 ```
 
 The 5 skipped rows are the DRAW tests. The 3 remaining unrun all hang even with

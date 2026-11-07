@@ -41,6 +41,8 @@ pub struct System {
     internal_bus: u8,
     stall_cycles: u32,
     rmw_dummy: bool,
+    /// A DMA used the bus on the current CPU cycle.
+    dma_event: bool,
     cpu_pc: u16,
     /// CPU program counter, used for APU register activation during OAM DMA.
     /// PPU dots still owed at the end of a split CPU cycle.
@@ -110,6 +112,7 @@ impl System {
             internal_bus: 0,
             stall_cycles: 0,
             rmw_dummy: false,
+            dma_event: false,
             cpu_pc: 0,
             end_dots: 0,
             cycle_before_scanline: 0,
@@ -269,6 +272,7 @@ impl System {
     /// cycle; the DMA uses it for the halt/alignment dummy reads and to detect
     /// a `$4015` disable that aborts an in-flight DMC fetch.
     fn begin_dma_cycle(&mut self, address: Option<u16>, write: Option<u8>) {
+        self.dma_event = false;
         if let Some(mut dma) = self.dma.take() {
             // A `$4015` write with the DMC enable bit clear aborts a DMC fetch.
             let disables_dmc = dma.kind == DmaKind::Dmc
@@ -356,6 +360,7 @@ impl System {
                 self.clock();
                 extra += 1;
             }
+            self.dma_event = true;
             self.stall_cycles += extra;
             return;
         }
@@ -564,14 +569,6 @@ impl CpuBus for System {
     fn write(&mut self, address: u16, value: u8) {
         match address {
             0x0000..=0x1FFF => {
-                if std::env::var("CTRL").is_ok() && (0x50..=0x53).contains(&address) {
-                    eprintln!(
-                        "W {:02X}={:02X} cyc={}",
-                        address & 0x7F,
-                        value,
-                        self.cpu.cycles
-                    );
-                }
                 self.ram[usize::from(address) & 0x07FF] = value;
             }
             0x2000..=0x3FFF => {
@@ -643,6 +640,10 @@ impl CpuBus for System {
 
     fn set_cpu_pc(&mut self, pc: u16) {
         self.cpu_pc = pc;
+    }
+
+    fn dma_event(&self) -> bool {
+        self.dma_event
     }
 
     fn dma_active(&self) -> bool {

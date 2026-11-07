@@ -550,27 +550,41 @@ impl Cpu {
             }
             Kind::Ahx => {
                 let address = self.address(bus, mode, Penalty::Store);
-                let high = self.unstable_high(address);
-                let value = self.registers.a & self.registers.x & high;
+                let value = if bus.dma_event() {
+                    // A DMA drove the data bus instead of the high-byte fetch,
+                    // so the "H+1" AND term is not part of the value.
+                    self.registers.a & self.registers.x
+                } else {
+                    self.registers.a & self.registers.x & self.unstable_high(address)
+                };
                 self.unstable_store(bus, address, value);
             }
             Kind::Shy => {
                 let address = self.address(bus, mode, Penalty::Store);
-                let high = self.unstable_high(address);
-                let value = self.registers.y & high;
+                let value = if bus.dma_event() {
+                    self.registers.y
+                } else {
+                    self.registers.y & self.unstable_high(address)
+                };
                 self.unstable_store(bus, address, value);
             }
             Kind::Shx => {
                 let address = self.address(bus, mode, Penalty::Store);
-                let high = self.unstable_high(address);
-                let value = self.registers.x & high;
+                let value = if bus.dma_event() {
+                    self.registers.x
+                } else {
+                    self.registers.x & self.unstable_high(address)
+                };
                 self.unstable_store(bus, address, value);
             }
             Kind::Tas => {
                 self.registers.sp = self.registers.a & self.registers.x;
                 let address = self.address(bus, mode, Penalty::Store);
-                let high = self.unstable_high(address);
-                let value = self.registers.sp & high;
+                let value = if bus.dma_event() {
+                    self.registers.sp
+                } else {
+                    self.registers.sp & self.unstable_high(address)
+                };
                 self.unstable_store(bus, address, value);
             }
             Kind::Las => {

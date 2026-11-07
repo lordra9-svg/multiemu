@@ -57,6 +57,11 @@ pub trait CpuBus {
     /// Completes the PPU portion of the current CPU cycle.
     fn end_cycle(&mut self) {}
 
+    /// Whether a DMA engine used the bus on the bus cycle that just ran.
+    fn dma_event(&self) -> bool {
+        false
+    }
+
     /// Marks the dummy write cycle of a read-modify-write instruction.
     fn set_rmw_dummy(&mut self, _dummy: bool) {}
 
