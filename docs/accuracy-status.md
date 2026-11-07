@@ -874,3 +874,16 @@ test accuracycoin_runner_parses_results ... ok
 isolated: 5/5 pass, 0 fail, 0 unrun
 test accuracycoin_isolated_runner_writes_every_row ... ok
 ```
+
+## Current status (2026-11-07)
+
+AccuracyCoin v3.1.0, isolated mode:
+
+```text
+AccuracyCoin: 138/151 passed, 8 failed, 5 skipped, 0 unrun (199320 frames)
+```
+
+All A1–A3 public suites remain green: `nestest` 0 diff, `instr_timing`,
+`instr_basics`, `vbl_nmi` 12/12, `ppu_sprites` 19/19, and all 13 blargg
+APU/DMC ROMs. The eight open failures are catalogued with their failing
+sub-tests and suspected causes in `docs/accuracy-divergences.md`.

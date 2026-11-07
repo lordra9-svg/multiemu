@@ -15,13 +15,15 @@ Status: `shipped` · `planned` · `deferred` · `reference-only`
 | Adapter | `crates/multiemu-nes` (TetaNES) |
 | Accuracy bar | reference parity; see `docs/accuracy.md` |
 | Scope | licensed library, then FDS/VS/PAL/Dendy/expansion/peripherals/unlicensed/NSF |
-| Status | compatibility core shipped; accuracy core at A4 (CPU/PPU 12+19, APU 13, mappers + system + Core ABI) |
+| Status | compatibility core shipped; accuracy core at A5 (CPU/PPU 12+19, APU 13, mappers + system + Core ABI; AccuracyCoin 138/151) |
 
 TetaNES remains the default until the accuracy core passes its gates; both will
-be selectable by `CoreInfo.id`. The accuracy core is written from public
-hardware documentation only — no GPL source is read or translated.
+be selectable by `CoreInfo.id`. The accuracy core is MIT with documented
+ISC-licensed adaptations from ares; no GPL source is read, translated or
+linked. Provenance is recorded in `crates/multiemu-nes-accuracy/PROVENANCE.md`.
 
-Next: A0 harness, then A1 CPU (`nestest` 0-diff).
+Next: close the remaining A5 failures (DMA/abort timing, NMI hijack, `$2007`
+read buffer, scanline-0 sprites), then A6 breadth.
 
 ## SNES / Super Famicom — planned
 

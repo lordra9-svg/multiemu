@@ -15,7 +15,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://example.invalid/multiemu"
+repository = "https://github.com/lordra9-svg/multiemu"
 
 [workspace.dependencies]
 multiemu-core = { path = "crates/multiemu-core" }

@@ -26,18 +26,14 @@ The main effort is now the reference-parity accuracy core. Details in
       594/908 loaded ROMs render in a 1000-ROM sample.
       Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, MMC2/MMC4
       PPU-latched CHR, ROM-nametable mappers, and the remaining small ASICs.
-- [ ] **A5** AccuracyCoin 146/146, divergence ledger. Isolated runner exercises
-      all 151 rows: 123 pass, 23 fail, 5 DRAW skips, 0 unrun. Remaining clusters:
-      DMA/abort timings (5 of 10), APU Tests, CPU Behavior 2, SH*, PPU
-      Misc./Advanced Background/Sprite Evaluation. Recent PPU fixes: $2004 reads
-      during sprite evaluation return $FF, $2004 writes during rendering advance
-      OAMADDR by 4, vertical scroll is copied from `t` only on the pre-render
-      line (dots 280-304), and visible scanlines are composed as they are reached
-      so mid-frame scroll changes apply. The SH* unstable stores now
-      corrupt the store-address high byte on a page crossing, moving those
-      failures to the DMA-collision subtest. DMA has a spanning state machine
-      (`begin_cycle`/`dma_active`) and a 513-cycle OAM transfer; DMC abort
-      answer keys and the get/put cycle alignment still need exact modelling.
+- [ ] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
+      all 151 rows: **138 pass, 8 fail, 5 DRAW skips, 0 unrun** (146 non-DRAW).
+      All A1–A3 public suites remain green. Remaining clusters: DMA/abort timing
+      (`DMA + $2002 Read`, `DMC DMA + OAM DMA`, `Explicit DMA Abort`,
+      `DMA Landing on Write`), NMI/BRK hijack, the `$2007` read buffer, and the
+      scanline-0 stale-sprite path. The open list is
+      `docs/accuracy-divergences.md`; the dated measured log is
+      `docs/accuracy-status.md`.
 - [ ] **A6** FDS, VS, PAL/Dendy, expansion audio, peripherals, NSF.
 - [ ] **A7** differential harness, hardware captures, performance pass.
 
@@ -71,7 +67,7 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] CLI regression mode: hash frames/audio, fresh-run vs state-resume, assert
       byte-identical tails (`multiemu verify`).
 - [ ] Test-ROM harness: `nestest`, blargg CPU/PPU/APU, `ppu_vbl_nmi`, MMC3 A12,
-      and any freely licensed suites. Record pass counts in `docs/status.md`.
+      and any freely licensed suites. Record pass counts in `docs/accuracy-status.md`.
 - [ ] Mapper audit against a licensed ROM library: log unsupported mapper IDs and
       boot failures; rank the gaps by prevalence.
 
@@ -107,5 +103,5 @@ The main effort is now the reference-parity accuracy core. Details in
 The NES backend is currently classed `Accuracy::High`, not `CycleAccurate`,
 because TetaNES is not dot-locked to the same degree as ares/Mesen/RustyNES.
 Do not raise the badge without a passing page of the test matrix and a
-documented list of known approximations. `docs/status.md` will hold that record
-once M1's harness lands.
+documented list of known approximations. `docs/accuracy-status.md` and
+`docs/accuracy-divergences.md` hold that record.

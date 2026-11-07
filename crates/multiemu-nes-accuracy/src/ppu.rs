@@ -559,10 +559,9 @@ impl Ppu {
                     self.mask = value;
                 } else {
                     self.pending_mask = Some(value);
-                    self.mask_delay = std::env::var("MD")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(2);
+                    // PPU register writes reach their destination two dots
+                    // after the bus write.
+                    self.mask_delay = 2;
                 }
             }
             3 => self.oam_addr = value,
@@ -1178,14 +1177,7 @@ impl Ppu {
                 let full = 0x2000 | (self.v & 0x0FFF);
                 let address = if self.hybrid_fetch {
                     self.hybrid_fetch = false;
-                    let hybrid = (full & 0xFF00) | u16::from(self.hybrid_low);
-                    if std::env::var("HYB").is_ok() {
-                        eprintln!(
-                            "HYB line={} dot={} full={:04X} low={:02X} -> {:04X}",
-                            self.scanline, self.dot, full, self.hybrid_low, hybrid
-                        );
-                    }
-                    hybrid
+                    (full & 0xFF00) | u16::from(self.hybrid_low)
                 } else {
                     full
                 };

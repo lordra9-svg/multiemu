@@ -24,7 +24,7 @@ Public suites must be 100%:
 | `ppu_sprites` | 19/19 |
 | MMC3 A12 IRQ tests | all |
 | `apu_test`, `blargg_apu_2005` | all |
-| AccuracyCoin | 146/146 |
+| AccuracyCoin | 146/146 non-DRAW rows (currently 138/146) |
 | Commercial oracle corpus | byte-identical frames/audio |
 
 "Reference parity" is stronger than "runs the library": a game that looks right
@@ -40,7 +40,8 @@ When references disagree, decide in this order:
 4. **RustyNES** — best public test evidence and ledger.
 
 Every divergence gets a dated entry in `docs/accuracy-divergences.md` with the
-ROM/test, the observed values, and the chosen rule.
+ROM/test, the observed values, and the chosen rule. The current open list and
+the intentional approximations live in that file.
 
 ## 3. Source rules (hard)
 
@@ -146,7 +147,9 @@ See `docs/accuracy-status.md` for the measured log.
 - Exit: top 30 families and commercial oracle corpus boot.
 
 ### A5 — accuracy gate
-- Exit: AccuracyCoin 146/146 and a documented divergence ledger.
+- Exit: AccuracyCoin 146/146 non-DRAW rows and a documented divergence ledger.
+- Progress: 138/146 non-DRAW rows pass as of 2026-11-07; see
+  `docs/accuracy-status.md` and `docs/accuracy-divergences.md`.
 
 ### A6 — breadth
 - FDS, VS, PAL/Dendy, expansion audio, peripherals, NSF.
