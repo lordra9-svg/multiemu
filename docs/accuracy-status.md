@@ -880,13 +880,29 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 AccuracyCoin v3.1.0, isolated mode:
 
 ```text
-AccuracyCoin: 144/151 passed, 2 failed, 5 skipped, 0 unrun (199320 frames)
+AccuracyCoin: 145/151 passed, 1 failed, 5 skipped, 0 unrun (199320 frames)
 ```
 
 All A1–A3 public suites remain green: `nestest` 0 diff, `instr_timing`,
 `instr_basics`, `vbl_nmi` 12/12, `ppu_sprites` 19/19, and all 13 blargg
-APU/DMC ROMs. The two open failures are catalogued with their failing
+APU/DMC ROMs. The remaining open failure is catalogued with its failing
 sub-tests and suspected causes in `docs/accuracy-divergences.md`.
+
+### 2026-11-07 — DMC/OAM carry trailing cycle
+
+`DMC DMA + OAM DMA` now matches all 32 answer-key bytes. When the OAM transfer
+ends while a DMC fetch is still in flight, the fetch is finished on the CPU
+side (halt, dummy, alignment, get), and the get now costs the same trailing
+idle cycle as a normal inline fetch. Without it the CPU resumed one cycle early
+for the alignments where the DMC halt lands in the last four OAM cycles, so
+loop 2 X=5..8 measured one cycle short (and X=5 wrapped a whole 576-cycle DMC
+period, storing `$2C`). With the trailing cycle the measured array is
+byte-identical to the key:
+
+```
+04 03 04 03 04 03 02 01 02 01 02 01 02 01 02 01
+02 01 02 01 02 00 01 02 03 03 04 03 04 03 04 03
+```
 
 ### 2026-11-07 — load-DMA phase covers mid-byte writes
 

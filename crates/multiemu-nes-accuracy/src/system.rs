@@ -330,6 +330,8 @@ impl System {
                         self.open_bus = byte;
                     }
                     self.apu.dmc_sample(byte);
+                    self.clock();
+                    extra += 1;
                     break;
                 } else {
                     // Get cycle before the dummy: consume it as the dummy.

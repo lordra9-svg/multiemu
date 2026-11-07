@@ -70,7 +70,14 @@ fn accuracycoin_runner_parses_results() {
     assert_eq!(report.total(), entries.len());
     assert_eq!(report.skipped, 5, "the five DRAW rows should be skipped");
     assert!(report.passed > 0, "no tests passed");
-    assert!(report.failed > 0, "no failures recorded");
+    // This full-battery mode is the documented workaround path: a failing test
+    // can corrupt the saved cursor and stall the $F278 text scanner, which
+    // leaves later rows unrun instead of fail. Require that the runner records
+    // the non-pass rows either way.
+    assert!(
+        report.failed > 0 || report.unrun > 0,
+        "no failures or unrun rows recorded"
+    );
     assert!(report.failures.iter().all(|failure| failure.code > 0));
 }
 
