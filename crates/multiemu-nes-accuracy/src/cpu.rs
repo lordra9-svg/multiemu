@@ -269,6 +269,7 @@ impl Cpu {
             return 0;
         }
         let start = self.cycles;
+        bus.set_cpu_pc(self.registers.pc);
 
         if self.service_nmi {
             self.service_nmi = false;

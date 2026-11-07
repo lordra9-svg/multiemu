@@ -41,6 +41,7 @@ pub struct System {
     internal_bus: u8,
     stall_cycles: u32,
     rmw_dummy: bool,
+    cpu_pc: u16,
     /// CPU program counter, used for APU register activation during OAM DMA.
     /// PPU dots still owed at the end of a split CPU cycle.
     end_dots: u8,
@@ -109,6 +110,7 @@ impl System {
             internal_bus: 0,
             stall_cycles: 0,
             rmw_dummy: false,
+            cpu_pc: 0,
             end_dots: 0,
             cycle_before_scanline: 0,
             dma: None,
@@ -430,7 +432,17 @@ impl System {
                         self.open_bus = value;
                     }
                 } else {
-                    let byte = self.dma_read(dma.page + u16::from(dma.oam_counter));
+                    let address = dma.page + u16::from(dma.oam_counter);
+                    let byte = if self.cpu_pc >> 8 == 0x40 {
+                        // With the 6502 address bus in $4000-$40FF the APU
+                        // registers and their $20-byte mirrors are active for
+                        // every OAM DMA read.
+                        self.dma_read(0x4000 | (address & 0x001F))
+                    } else if (0x4000..=0x401F).contains(&address) {
+                        self.open_bus
+                    } else {
+                        self.dma_read(address)
+                    };
                     self.open_bus = byte;
                     dma.oam_buffer = byte;
                     dma.oam_write_ready = true;
@@ -622,6 +634,10 @@ impl CpuBus for System {
 
     fn set_rmw_dummy(&mut self, dummy: bool) {
         self.rmw_dummy = dummy;
+    }
+
+    fn set_cpu_pc(&mut self, pc: u16) {
+        self.cpu_pc = pc;
     }
 
     fn dma_active(&self) -> bool {

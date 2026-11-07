@@ -495,10 +495,12 @@ impl Dmc {
         }
     }
 
-    fn init_sample(&mut self, cycle: u64) {
+    fn init_sample(&mut self, _cycle: u64) {
         self.address = self.sample_address;
         self.bytes_remaining = self.length;
-        self.init = if cycle & 1 == 0 { 2 } else { 3 };
+        // The start delay is selected by the DMC timer parity, not the CPU
+        // cycle parity.
+        self.init = if self.timer & 1 != 0 { 2 } else { 3 };
     }
 
     /// Counts the start delay and requests the first byte when ready.

@@ -423,7 +423,7 @@ suite green. The remaining `INC $4014` regression was the sticky OAM2-freeze
 flag: it was being re-raised on every temporary-counter wrap after the
 dot-255 clear. Raising it only on the first wrap of an evaluation restores the
 page-06 OAM-DMA sprite-zero hit without changing the frozen-OAM2 tests. The
-isolated battery is now **129/151**.
+isolated battery is now **130/151**.
 
 A secondary-OAM-driven renderer was also prototyped: evaluation stayed on the
 calibrated baseline path (so overflow behaviour was bit-identical), while a
@@ -453,6 +453,12 @@ blargg `spr_overflow_*`/`spr_hit_*` ROMs regressed. It was reverted rather than
 trading calibrated tests. Resolving this requires modelling the hardware
 overflow scan as a separate state from the normal in-range byte copy, not just
 one shared counter.
+
+The `APU Register Activation` test now passes. OAM DMA now observes the 6502
+address bus: when the CPU program counter is in `$40xx`, every OAM DMA read
+selects the APU register/mirror at `$4000 | (address & $1F)`; otherwise reads in
+`$4000-$401F` are open bus. This covers both the inactive and active test cases
+without changing ordinary OAM DMA pages.
 
 The `Implied Dummy Reads` test now passes. Implied and accumulator
 instructions perform their second-cycle dummy read from `PC` instead of an
@@ -742,7 +748,7 @@ Current measured result (v3.1.0 ROM):
 
 ```text
 Full-battery mode:   84/151 pass, 44 fail, 5 skip, 18 unrun (stall at $F278)
-Isolated mode:       129/151 pass, 17 fail, 5 skip,  0 unrun (199320 frames)
+Isolated mode:       130/151 pass, 16 fail, 5 skip,  0 unrun (199320 frames)
 ```
 
 The 5 skipped rows are the DRAW tests. The 3 remaining unrun all hang even with

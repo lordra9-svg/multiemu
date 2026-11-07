@@ -44,6 +44,10 @@ pub trait CpuBus {
         0
     }
 
+    /// Records the CPU program counter for peripherals that observe the
+    /// 6502 address bus during DMA.
+    fn set_cpu_pc(&mut self, _pc: u16) {}
+
     /// Called once at the start of every CPU cycle, before the bus access.
     ///
     /// Implementations advance the rest of the machine and may start or step a
