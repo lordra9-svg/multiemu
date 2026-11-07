@@ -1,0 +1,15 @@
+target/
+saves/
+roms/
+roms/
+test-roms/
+multiemu.conf
+*.ppm
+*.sav
+*.srm
+*.state
+refs/
+rom dat/
+build*/
+.deps/
+*.exe

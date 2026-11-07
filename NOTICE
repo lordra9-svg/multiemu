@@ -1,0 +1,31 @@
+multi emu
+Copyright (c) 2026 multiemu contributors
+
+This product includes software developed by Luke Petherbridge
+(tetanes-core, https://github.com/lukexor/tetanes), used under the
+MIT license option of its MIT OR Apache-2.0 dual license.
+
+The MIT text applying to tetanes-core is reproduced in
+licenses/tetanes-MIT.txt.
+
+The desktop frontend uses egui/eframe (https://github.com/emilk/egui),
+Copyright (c) egui developers, dual-licensed MIT OR Apache-2.0. Its
+UX structure is inspired by Dolphin, but no Dolphin code, icons or
+assets are included.
+
+Archive reading uses:
+- zip (https://github.com/zip-rs/zip2), MIT
+- sevenz-rust2 (https://github.com/hasenbanck/sevenz-rust), Apache-2.0
+- rars (https://github.com/bitplane/rars), Apache-2.0
+
+The Apache-2.0 text is reproduced in licenses/Apache-2.0.txt.
+
+No ROM images are included or distributed by this project.
+
+The NES accuracy core (`multiemu-nes-accuracy`) includes algorithms adapted
+from the ares emulator (https://github.com/ares-emulator/ares), Copyright
+(c) 2004-2025 ares team, Near et al, used under the ISC license. The full
+ares license text is reproduced in `licenses/ares-LICENSE.txt`.
+
+No GPL-licensed emulator source (including MesenCE, RustyNES or Dolphin) is
+included in this repository.

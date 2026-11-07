@@ -1,0 +1,11 @@
+[package]
+name = "multiemu-nes"
+description = "NES core adapter for the multiemu shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+multiemu-core.workspace = true
+tetanes-core.workspace = true

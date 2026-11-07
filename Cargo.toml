@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/multiemu-core",
+    "crates/multiemu-rom",
+    "crates/multiemu-nes",
+    "crates/multiemu-nes-accuracy",
+    "crates/multiemu-nes-accuracy-core",
+    "crates/multiemu-cli",
+    "crates/multiemu-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://example.invalid/multiemu"
+
+[workspace.dependencies]
+multiemu-core = { path = "crates/multiemu-core" }
+tetanes-core = "0.17.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

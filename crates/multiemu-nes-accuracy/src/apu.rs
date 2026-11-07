@@ -1,0 +1,968 @@
+//! 2A03 APU: pulse, triangle, noise, DMC, frame counter and mixer.
+//!
+//! Timing base is the CPU cycle. A3 begins with the register/IRQ/length
+//! behaviour needed by the public APU suites; audio is mixed to a float sample.
+
+/// Length counter load table.
+pub const LENGTH_TABLE: [u8; 32] = [
+    10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14, 12, 16, 24, 18, 48, 20, 96, 22,
+    192, 24, 72, 26, 16, 28, 32, 30,
+];
+
+const DUTY: [[u8; 8]; 4] = [
+    [0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 1, 1, 0, 0, 0, 0, 0],
+    [0, 1, 1, 1, 1, 0, 0, 0],
+    [1, 0, 0, 1, 1, 1, 1, 1],
+];
+
+const TRIANGLE: [u8; 32] = [
+    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+    13, 14, 15,
+];
+
+const NOISE_PERIODS: [u16; 16] = [
+    4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068,
+];
+
+const DMC_PERIODS: [u16; 16] = [
+    428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54,
+];
+
+/// One pulse channel.
+#[derive(Debug, Clone, Default)]
+pub struct Pulse {
+    /// Channel enabled from `$4015`.
+    pub enabled: bool,
+    /// Length counter.
+    pub length: u8,
+    /// Deferred length reload value.
+    length_reload: u8,
+    /// Counter value observed when the reload was written.
+    length_prev: u8,
+    /// Halt/length-enable flag.
+    pub halt: bool,
+    /// Constant-volume flag.
+    pub constant: bool,
+    /// Envelope volume / divider period.
+    pub volume: u8,
+    /// Envelope divider.
+    envelope_divider: u8,
+    /// Envelope decay level.
+    envelope_level: u8,
+    /// Envelope start flag.
+    envelope_start: bool,
+    /// Duty index.
+    pub duty: u8,
+    /// Duty step.
+    duty_step: u8,
+    /// 11-bit timer reload.
+    pub timer: u16,
+    /// Timer counter.
+    timer_counter: u16,
+    /// Sweep enabled.
+    pub sweep_enabled: bool,
+    /// Sweep period.
+    pub sweep_period: u8,
+    /// Sweep negate.
+    pub sweep_negate: bool,
+    /// Sweep shift.
+    pub sweep_shift: u8,
+    /// Sweep divider.
+    sweep_divider: u8,
+    /// Sweep reload flag.
+    sweep_reload: bool,
+    /// Channel muted by sweep.
+    pub muted: bool,
+    /// Pulse 1 uses ones' complement for negate.
+    ones_complement: bool,
+}
+
+impl Pulse {
+    fn write(&mut self, index: u16, value: u8) {
+        match index {
+            0 => {
+                self.duty = value >> 6;
+                self.halt = value & 0x20 != 0;
+                self.constant = value & 0x10 != 0;
+                self.volume = value & 0x0F;
+            }
+            1 => {
+                self.sweep_enabled = value & 0x80 != 0;
+                self.sweep_period = (value >> 4) & 0x07;
+                self.sweep_negate = value & 0x08 != 0;
+                self.sweep_shift = value & 0x07;
+                self.sweep_reload = true;
+            }
+            2 => {
+                self.timer = (self.timer & 0x0700) | u16::from(value);
+            }
+            3 => {
+                self.timer = (self.timer & 0x00FF) | (u16::from(value & 0x07) << 8);
+                if self.enabled {
+                    self.length_reload = LENGTH_TABLE[usize::from(value >> 3)];
+                    self.length_prev = self.length;
+                }
+                self.duty_step = 0;
+                self.envelope_start = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn reload_length(&mut self) {
+        if self.length_reload > 0 {
+            if self.length == self.length_prev {
+                self.length = self.length_reload;
+            }
+            self.length_reload = 0;
+        }
+    }
+
+    fn clock_timer(&mut self) {
+        if self.timer_counter == 0 {
+            self.timer_counter = self.timer;
+            self.duty_step = (self.duty_step + 1) & 7;
+        } else {
+            self.timer_counter -= 1;
+        }
+    }
+
+    fn clock_quarter(&mut self) {
+        if self.envelope_start {
+            self.envelope_start = false;
+            self.envelope_level = 15;
+            self.envelope_divider = self.volume;
+        } else if self.envelope_divider == 0 {
+            self.envelope_divider = self.volume;
+            if self.envelope_level > 0 {
+                self.envelope_level -= 1;
+            } else if self.halt {
+                self.envelope_level = 15;
+            }
+        } else {
+            self.envelope_divider -= 1;
+        }
+    }
+
+    fn clock_half(&mut self) {
+        if !self.halt && self.length > 0 {
+            self.length -= 1;
+        }
+        if self.sweep_enabled {
+            if self.sweep_divider == 0 {
+                if self.sweep_shift > 0 {
+                    let delta = self.timer >> self.sweep_shift;
+                    let target = if self.sweep_negate {
+                        if self.ones_complement {
+                            self.timer.wrapping_sub(delta).wrapping_sub(1)
+                        } else {
+                            self.timer.wrapping_sub(delta)
+                        }
+                    } else {
+                        self.timer.wrapping_add(delta)
+                    };
+                    self.muted = self.timer < 8 || target > 0x7FF;
+                }
+                self.sweep_divider = self.sweep_period;
+            } else {
+                self.sweep_divider -= 1;
+            }
+            if self.sweep_reload {
+                self.sweep_reload = false;
+                self.sweep_divider = self.sweep_period;
+            }
+        }
+    }
+
+    fn output(&self) -> f32 {
+        if !self.enabled || self.length == 0 || self.muted || self.timer < 8 {
+            return 0.0;
+        }
+        if DUTY[usize::from(self.duty & 3)][usize::from(self.duty_step)] == 0 {
+            return 0.0;
+        }
+        if self.constant {
+            f32::from(self.volume)
+        } else {
+            f32::from(self.envelope_level)
+        }
+    }
+}
+
+/// Triangle channel.
+#[derive(Debug, Clone, Default)]
+pub struct Triangle {
+    /// Enabled.
+    pub enabled: bool,
+    /// Length counter.
+    pub length: u8,
+    /// Deferred length reload value.
+    length_reload: u8,
+    /// Counter value observed when the reload was written.
+    length_prev: u8,
+    /// Control (halt).
+    pub control: bool,
+    /// Linear counter reload value.
+    pub linear_reload: u8,
+    /// Linear counter.
+    pub linear: u8,
+    /// Linear reload flag.
+    linear_reload_flag: bool,
+    /// Timer reload.
+    pub timer: u16,
+    timer_counter: u16,
+    /// Sequence step.
+    step: u8,
+}
+
+impl Triangle {
+    fn write(&mut self, index: u16, value: u8) {
+        match index {
+            0 => {
+                self.control = value & 0x80 != 0;
+                self.linear_reload = value & 0x7F;
+            }
+            2 => self.timer = (self.timer & 0x0700) | u16::from(value),
+            3 => {
+                self.timer = (self.timer & 0x00FF) | (u16::from(value & 0x07) << 8);
+                if self.enabled {
+                    self.length_reload = LENGTH_TABLE[usize::from(value >> 3)];
+                    self.length_prev = self.length;
+                }
+                self.linear_reload_flag = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn reload_length(&mut self) {
+        if self.length_reload > 0 {
+            if self.length == self.length_prev {
+                self.length = self.length_reload;
+            }
+            self.length_reload = 0;
+        }
+    }
+
+    fn clock_timer(&mut self) {
+        if self.timer_counter == 0 {
+            self.timer_counter = self.timer;
+            if self.length > 0 && self.linear > 0 {
+                self.step = (self.step + 1) & 31;
+            }
+        } else {
+            self.timer_counter -= 1;
+        }
+    }
+
+    fn clock_quarter(&mut self) {
+        if self.linear_reload_flag {
+            self.linear = self.linear_reload;
+        } else if self.linear > 0 {
+            self.linear -= 1;
+        }
+        if !self.control {
+            self.linear_reload_flag = false;
+        }
+    }
+
+    fn clock_half(&mut self) {
+        if !self.control && self.length > 0 {
+            self.length -= 1;
+        }
+    }
+
+    fn output(&self) -> f32 {
+        if !self.enabled || self.length == 0 || self.linear == 0 {
+            0.0
+        } else {
+            f32::from(TRIANGLE[usize::from(self.step)])
+        }
+    }
+}
+
+/// Noise channel.
+#[derive(Debug, Clone)]
+pub struct Noise {
+    /// Enabled.
+    pub enabled: bool,
+    /// Length counter.
+    pub length: u8,
+    /// Deferred length reload value.
+    length_reload: u8,
+    /// Counter value observed when the reload was written.
+    length_prev: u8,
+    /// Halt flag.
+    pub halt: bool,
+    /// Constant-volume flag.
+    pub constant: bool,
+    /// Envelope period / volume.
+    pub volume: u8,
+    envelope_divider: u8,
+    envelope_level: u8,
+    envelope_start: bool,
+    /// Mode flag (short LFSR).
+    pub mode: bool,
+    /// Period index.
+    pub period_index: u8,
+    timer: u16,
+    lfsr: u16,
+}
+
+impl Default for Noise {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            length: 0,
+            length_reload: 0,
+            length_prev: 0,
+            halt: false,
+            constant: false,
+            volume: 0,
+            envelope_divider: 0,
+            envelope_level: 0,
+            envelope_start: false,
+            mode: false,
+            period_index: 0,
+            timer: NOISE_PERIODS[0],
+            lfsr: 1,
+        }
+    }
+}
+
+impl Noise {
+    fn write(&mut self, index: u16, value: u8) {
+        match index {
+            0 => {
+                self.halt = value & 0x20 != 0;
+                self.constant = value & 0x10 != 0;
+                self.volume = value & 0x0F;
+            }
+            2 => {
+                self.mode = value & 0x80 != 0;
+                self.period_index = value & 0x0F;
+            }
+            3 => {
+                if self.enabled {
+                    self.length_reload = LENGTH_TABLE[usize::from(value >> 3)];
+                    self.length_prev = self.length;
+                }
+                self.envelope_start = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn reload_length(&mut self) {
+        if self.length_reload > 0 {
+            if self.length == self.length_prev {
+                self.length = self.length_reload;
+            }
+            self.length_reload = 0;
+        }
+    }
+
+    fn clock_timer(&mut self) {
+        if self.timer == 0 {
+            self.timer = NOISE_PERIODS[usize::from(self.period_index & 0x0F)];
+            let bit = (self.lfsr & 1) ^ ((self.lfsr >> 1) & 1);
+            self.lfsr = (self.lfsr >> 1) | (bit << 14);
+            if self.mode {
+                self.lfsr = (self.lfsr & !0x40) | (bit << 6);
+            }
+        } else {
+            self.timer -= 1;
+        }
+    }
+
+    fn clock_quarter(&mut self) {
+        if self.envelope_start {
+            self.envelope_start = false;
+            self.envelope_level = 15;
+            self.envelope_divider = self.volume;
+        } else if self.envelope_divider == 0 {
+            self.envelope_divider = self.volume;
+            if self.envelope_level > 0 {
+                self.envelope_level -= 1;
+            } else if self.halt {
+                self.envelope_level = 15;
+            }
+        } else {
+            self.envelope_divider -= 1;
+        }
+    }
+
+    fn clock_half(&mut self) {
+        if !self.halt && self.length > 0 {
+            self.length -= 1;
+        }
+    }
+
+    fn output(&self) -> f32 {
+        if !self.enabled || self.length == 0 || (self.lfsr & 1) != 0 {
+            0.0
+        } else if self.constant {
+            f32::from(self.volume)
+        } else {
+            f32::from(self.envelope_level)
+        }
+    }
+}
+
+/// Delta modulation channel.
+#[derive(Debug, Clone)]
+pub struct Dmc {
+    /// Enabled.
+    pub enabled: bool,
+    /// IRQ enabled.
+    pub irq_enabled: bool,
+    /// Loop flag.
+    pub looped: bool,
+    /// Timer period index.
+    pub period_index: u8,
+    timer: u16,
+    /// Current output level.
+    pub level: u8,
+    /// Sample buffer.
+    pub sample_buffer: u8,
+    /// Whether the sample buffer is empty.
+    pub buffer_empty: bool,
+    /// Bits remaining in the current sample byte.
+    bits_remaining: u8,
+    /// Shift register.
+    shift: u8,
+    /// Output muted (empty buffer).
+    silence: bool,
+    /// Cycles to wait before the first fetch after a start.
+    init: u8,
+    /// A sample byte fetch is pending.
+    pub dma_pending: bool,
+    /// Reload address from `$4012`.
+    pub sample_address: u16,
+    /// Reload length from `$4013`.
+    pub length: u16,
+    /// Current address.
+    pub address: u16,
+    /// Bytes remaining.
+    pub bytes_remaining: u16,
+    /// IRQ flag.
+    pub irq: bool,
+}
+
+impl Default for Dmc {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            irq_enabled: false,
+            looped: false,
+            period_index: 0,
+            timer: DMC_PERIODS[0] - 1,
+            level: 0,
+            sample_buffer: 0,
+            buffer_empty: true,
+            bits_remaining: 8,
+            shift: 0,
+            silence: true,
+            init: 0,
+            dma_pending: false,
+            sample_address: 0xC000,
+            length: 1,
+            address: 0xC000,
+            bytes_remaining: 0,
+            irq: false,
+        }
+    }
+}
+
+impl Dmc {
+    fn write(&mut self, index: u16, value: u8) {
+        match index {
+            0 => {
+                self.irq_enabled = value & 0x80 != 0;
+                if !self.irq_enabled {
+                    self.irq = false;
+                }
+                self.looped = value & 0x40 != 0;
+                self.period_index = value & 0x0F;
+            }
+            1 => self.level = value & 0x7F,
+            2 => self.sample_address = 0xC000 | (u16::from(value) << 6),
+            3 => {
+                self.length = (u16::from(value) << 4) | 1;
+            }
+            _ => {}
+        }
+    }
+
+    fn init_sample(&mut self, cycle: u64) {
+        self.address = self.sample_address;
+        self.bytes_remaining = self.length;
+        self.init = if cycle & 1 == 0 { 2 } else { 3 };
+    }
+
+    /// Counts the start delay and requests the first byte when ready.
+    fn clock_init(&mut self) {
+        if self.init > 0 {
+            self.init -= 1;
+            if self.init == 0 && self.buffer_empty && self.bytes_remaining > 0 {
+                self.dma_pending = true;
+            }
+        }
+    }
+
+    /// Stores a fetched sample byte, returning whether the sample ended.
+    fn load_buffer(&mut self, byte: u8) {
+        self.dma_pending = false;
+        if self.bytes_remaining > 0 {
+            self.sample_buffer = byte;
+            self.buffer_empty = false;
+            if self.address == 0xFFFF {
+                self.address = 0x8000;
+            } else {
+                self.address = self.address.wrapping_add(1);
+            }
+            self.bytes_remaining -= 1;
+            if self.bytes_remaining == 0 {
+                if self.looped {
+                    // Loop restart reloads the address/length immediately; the
+                    // $4015 enable delay only applies to the first fetch.
+                    self.address = self.sample_address;
+                    self.bytes_remaining = self.length;
+                } else if self.irq_enabled {
+                    self.irq = true;
+                }
+            }
+        }
+    }
+
+    fn clock_timer(&mut self) {
+        if self.timer == 0 {
+            let period = DMC_PERIODS[usize::from(self.period_index & 0x0F)];
+            self.timer = period - 1;
+            self.step_output();
+        } else {
+            self.timer -= 1;
+        }
+    }
+
+    fn step_output(&mut self) {
+        if !self.silence {
+            if self.shift & 1 != 0 {
+                if self.level <= 125 {
+                    self.level += 2;
+                }
+            } else if self.level >= 2 {
+                self.level -= 2;
+            }
+            self.shift >>= 1;
+        }
+        if self.bits_remaining > 0 {
+            self.bits_remaining -= 1;
+        }
+        if self.bits_remaining == 0 {
+            self.bits_remaining = 8;
+            self.silence = self.buffer_empty;
+            if !self.buffer_empty {
+                self.shift = self.sample_buffer;
+                self.buffer_empty = true;
+                if self.bytes_remaining > 0 {
+                    self.dma_pending = true;
+                }
+            }
+        }
+    }
+
+    fn output(&self) -> f32 {
+        if !self.enabled || self.silence {
+            0.0
+        } else {
+            f32::from(self.level)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameMode {
+    Four,
+    Five,
+}
+
+#[derive(Debug, Clone)]
+struct FrameCounter {
+    counter: u16,
+    step: usize,
+    mode: FrameMode,
+    inhibit: bool,
+    irq_pending: bool,
+    odd: bool,
+    delay_irq: bool,
+    delay_counter: [bool; 2],
+}
+
+const PERIOD4: [u16; 6] = [7457, 7456, 7458, 7457, 1, 1];
+const PERIOD5: [u16; 6] = [7457, 7456, 7458, 7458, 7452, 1];
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FrameEvents {
+    quarter: bool,
+    half: bool,
+}
+
+impl Default for FrameCounter {
+    fn default() -> Self {
+        Self {
+            counter: PERIOD4[0],
+            step: 0,
+            mode: FrameMode::Four,
+            inhibit: false,
+            irq_pending: false,
+            odd: true,
+            delay_irq: false,
+            delay_counter: [false; 2],
+        }
+    }
+}
+
+impl FrameCounter {
+    fn period(&self) -> u16 {
+        match self.mode {
+            FrameMode::Four => PERIOD4[self.step],
+            FrameMode::Five => PERIOD5[self.step],
+        }
+    }
+
+    fn write(&mut self, value: u8) {
+        self.mode = if value & 0x80 != 0 {
+            FrameMode::Five
+        } else {
+            FrameMode::Four
+        };
+        self.delay_counter[1] = true;
+        self.inhibit = value & 0x40 != 0;
+        if self.inhibit {
+            self.irq_pending = false;
+        }
+    }
+
+    fn tick(&mut self, phase: Option<bool>) -> FrameEvents {
+        let mut events = FrameEvents::default();
+        self.counter = self.counter.wrapping_sub(1);
+        self.odd = phase.unwrap_or(!self.odd);
+        if !self.odd {
+            // The IRQ flag is cleared on the GET cycle after a $4015 read.
+            if self.delay_irq {
+                self.delay_irq = false;
+                self.irq_pending = false;
+            }
+            if self.delay_counter[0] {
+                self.step = 0;
+                self.counter = self.period();
+                if self.mode == FrameMode::Five {
+                    events.half = true;
+                }
+            }
+            self.delay_counter[0] = self.delay_counter[1];
+            self.delay_counter[1] = false;
+        }
+        if self.counter == 0 {
+            match self.step {
+                0 => {
+                    self.step = 1;
+                    events.quarter = true;
+                }
+                1 => {
+                    self.step = 2;
+                    events.half = true;
+                }
+                2 => {
+                    self.step = 3;
+                    events.quarter = true;
+                }
+                3 => {
+                    self.step = 4;
+                    if self.mode == FrameMode::Four {
+                        self.irq_pending = true;
+                    }
+                }
+                4 => {
+                    self.step = 5;
+                    events.half = true;
+                    if self.mode == FrameMode::Four {
+                        self.irq_pending = true;
+                    }
+                }
+                _ => {
+                    self.step = 0;
+                    if self.mode == FrameMode::Four {
+                        self.irq_pending = !self.inhibit;
+                    }
+                }
+            }
+            self.counter = self.period();
+        }
+        events
+    }
+}
+
+/// The full APU.
+#[derive(Debug, Clone, Default)]
+pub struct Apu {
+    /// Pulse 1.
+    pub pulse1: Pulse,
+    /// Pulse 2.
+    pub pulse2: Pulse,
+    /// Triangle.
+    pub triangle: Triangle,
+    /// Noise.
+    pub noise: Noise,
+    /// DMC.
+    pub dmc: Dmc,
+    frame: FrameCounter,
+    /// Optional CPU get/put phase supplied by the system each cycle.
+    pub phase_override: Option<bool>,
+    /// Frame-counter IRQ flag.
+    pub frame_irq: bool,
+    cycle: u64,
+    /// Mixed output from the last cycle.
+    pub output: f32,
+    /// Last written `$4015` value.
+    status: u8,
+    /// Halt-bit changes waiting for the next APU cycle (applied after the
+    /// length-counter clock, matching hardware write latency).
+    pending_halt: [Option<bool>; 4],
+}
+
+impl Apu {
+    /// Creates an APU in its power-on state.
+    #[must_use]
+    pub fn new() -> Self {
+        let mut apu = Self::default();
+        apu.pulse1.ones_complement = true;
+        apu
+    }
+
+    /// Advances one CPU cycle.
+    pub fn tick(&mut self) {
+        self.cycle += 1;
+        self.dmc.clock_init();
+        self.pulse1.clock_timer();
+        self.pulse2.clock_timer();
+        self.triangle.clock_timer();
+        self.noise.clock_timer();
+        self.dmc.clock_timer();
+        self.clock_frame();
+        self.pulse1.reload_length();
+        self.pulse2.reload_length();
+        self.triangle.reload_length();
+        self.noise.reload_length();
+        for index in 0..4 {
+            if let Some(halt) = self.pending_halt[index].take() {
+                self.set_halt(index, halt);
+            }
+        }
+        self.output = self.mix();
+    }
+
+    fn clock_frame(&mut self) {
+        let phase = self.phase_override.take();
+        let events = self.frame.tick(phase);
+        if events.quarter {
+            self.pulse1.clock_quarter();
+            self.pulse2.clock_quarter();
+            self.triangle.clock_quarter();
+            self.noise.clock_quarter();
+        }
+        if events.half {
+            self.pulse1.clock_half();
+            self.pulse2.clock_half();
+            self.triangle.clock_half();
+            self.noise.clock_half();
+        }
+        self.frame_irq = self.frame.irq_pending;
+    }
+
+    /// Writes a register in `$4000..=$4017`.
+    pub fn write(&mut self, address: u16, value: u8) {
+        match address {
+            0x4000..=0x4003 => {
+                let old = self.pulse1.halt;
+                self.pulse1.write(address - 0x4000, value);
+                self.delay_halt(0, old, self.pulse1.halt);
+            }
+            0x4004..=0x4007 => {
+                let old = self.pulse2.halt;
+                self.pulse2.write(address - 0x4004, value);
+                self.delay_halt(1, old, self.pulse2.halt);
+            }
+            0x4008..=0x400B => {
+                let old = self.triangle.control;
+                self.triangle.write(address - 0x4008, value);
+                self.delay_halt(2, old, self.triangle.control);
+            }
+            0x400C..=0x400F => {
+                let old = self.noise.halt;
+                self.noise.write(address - 0x400C, value);
+                self.delay_halt(3, old, self.noise.halt);
+            }
+            0x4010..=0x4013 => self.dmc.write(address - 0x4010, value),
+            0x4015 => {
+                self.status = value;
+                self.dmc.irq = false;
+                self.pulse1.enabled = value & 0x01 != 0;
+                self.pulse2.enabled = value & 0x02 != 0;
+                self.triangle.enabled = value & 0x04 != 0;
+                self.noise.enabled = value & 0x08 != 0;
+                self.dmc.enabled = value & 0x10 != 0;
+                if value & 0x01 == 0 {
+                    self.pulse1.length = 0;
+                }
+                if value & 0x02 == 0 {
+                    self.pulse2.length = 0;
+                }
+                if value & 0x04 == 0 {
+                    self.triangle.length = 0;
+                }
+                if value & 0x08 == 0 {
+                    self.noise.length = 0;
+                }
+                if value & 0x10 == 0 {
+                    self.dmc.bytes_remaining = 0;
+                    self.dmc.dma_pending = false;
+                } else if self.dmc.bytes_remaining == 0 {
+                    self.dmc.init_sample(self.cycle);
+                }
+            }
+            0x4017 => {
+                self.frame.write(value);
+                if value & 0x40 != 0 {
+                    self.frame_irq = false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn delay_halt(&mut self, index: usize, old: bool, new: bool) {
+        if new != old {
+            self.pending_halt[index] = Some(new);
+            self.set_halt(index, old);
+        }
+    }
+
+    fn set_halt(&mut self, index: usize, halt: bool) {
+        match index {
+            0 => self.pulse1.halt = halt,
+            1 => self.pulse2.halt = halt,
+            2 => self.triangle.control = halt,
+            _ => self.noise.halt = halt,
+        }
+    }
+
+    /// Reads `$4015` and clears the frame IRQ flag.
+    pub fn read_status(&mut self) -> u8 {
+        let mut value = 0;
+        if self.pulse1.length > 0 {
+            value |= 0x01;
+        }
+        if self.pulse2.length > 0 {
+            value |= 0x02;
+        }
+        if self.triangle.length > 0 {
+            value |= 0x04;
+        }
+        if self.noise.length > 0 {
+            value |= 0x08;
+        }
+        if self.dmc.bytes_remaining > 0 {
+            value |= 0x10;
+        }
+        if self.frame.irq_pending {
+            value |= 0x40;
+        }
+        if self.dmc.irq {
+            value |= 0x80;
+        }
+        // The flag is actually cleared on the next GET cycle; reading $4015
+        // only requests the clear.
+        self.frame.delay_irq = true;
+        value
+    }
+
+    /// IRQ line state.
+    #[must_use]
+    pub fn irq_line(&self) -> bool {
+        (self.frame.irq_pending && !self.frame.inhibit) || self.dmc.irq
+    }
+
+    /// Whether the DMC needs a sample byte from CPU memory.
+    #[must_use]
+    pub fn dmc_needs_sample(&self) -> bool {
+        self.dmc.enabled && self.dmc.dma_pending
+    }
+
+    /// Supplies a byte fetched for the DMC.
+    pub fn dmc_sample(&mut self, byte: u8) {
+        self.dmc.load_buffer(byte);
+    }
+
+    /// Mixed output in the range `0..~100`.
+    #[must_use]
+    pub fn mix(&self) -> f32 {
+        let pulse = self.pulse1.output() + self.pulse2.output();
+        let tnd = self.triangle.output() + self.noise.output() + self.dmc.output();
+        let pulse_out = if pulse > 0.0 {
+            95.88 / (8128.0 / pulse + 100.0)
+        } else {
+            0.0
+        };
+        let tnd_out = if tnd > 0.0 {
+            159.79 / (1.0 / (tnd / 8227.0) + 100.0)
+        } else {
+            0.0
+        };
+        pulse_out + tnd_out
+    }
+
+    /// Current frame-counter position `(step, cycle)`.
+    #[must_use]
+    pub const fn frame_position(&self) -> (usize, u32) {
+        (self.frame.step, self.frame.counter as u32)
+    }
+
+    /// Cycles elapsed.
+    #[must_use]
+    pub const fn cycles(&self) -> u64 {
+        self.cycle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn length_table_loads_on_write() {
+        let mut apu = Apu::new();
+        apu.write(0x4015, 0x01);
+        apu.write(0x4003, 0xF8);
+        // The length reload is applied on the next APU update.
+        apu.tick();
+        assert!(apu.pulse1.length > 0);
+        assert_eq!(apu.read_status() & 1, 1);
+    }
+
+    #[test]
+    fn frame_irq_sets_and_clears() {
+        let mut apu = Apu::new();
+        for _ in 0..30_000 {
+            apu.tick();
+        }
+        assert!(apu.frame_irq);
+        let status = apu.read_status();
+        assert_eq!(status & 0x40, 0x40);
+        // The flag clears on the next GET cycle, not immediately.
+        apu.tick();
+        assert!(!apu.frame_irq);
+    }
+}
