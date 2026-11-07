@@ -308,7 +308,7 @@ impl Ppu {
                 self.fetch_addr = self.fetch_addr.wrapping_add(1);
             }
             let slot = ((self.dot - 257) / 8) as usize;
-            if (self.dot - 257).is_multiple_of(8) {
+            if (self.dot - 257) % 8 == 4 {
                 self.latch_sprite(slot);
             }
         }
@@ -319,7 +319,15 @@ impl Ppu {
             self.oam2_overflow = true;
         }
         if self.dot == 339 && self.mask & 0x18 != 0 {
-            self.spr_counting = [true; 8];
+            // Only slots that actually received a sprite from this line's
+            // fetch are armed. Empty slots keep their previous shifter state,
+            // which is what lets a stale sprite appear on line 0 when the
+            // pre-render line's dot 339 is blanked.
+            for slot in 0..8 {
+                if self.spr_id[slot] != 64 {
+                    self.spr_counting[slot] = true;
+                }
+            }
         }
         if (1..=64).contains(&self.dot) {
             self.oam_fetch = 0xFF;
