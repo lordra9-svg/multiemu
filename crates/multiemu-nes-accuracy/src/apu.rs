@@ -507,7 +507,7 @@ impl Dmc {
         }
     }
 
-    fn init_sample(&mut self, _cycle: u64) {
+    fn init_sample(&mut self, _cycle: u64, write_get: Option<bool>) {
         self.address = self.sample_address;
         self.bytes_remaining = self.length;
         // The start delay is selected by the DMC timer parity and only applies
@@ -515,10 +515,22 @@ impl Dmc {
         // reference period counter, so its parity is complemented.
         self.init = if !self.buffer_empty {
             0
-        } else if self.timer & 1 == 0 {
-            2
         } else {
-            3
+            match write_get {
+                // With the shift register idle, a write that lands on a get
+                // pushes the load DMA out to the get cycle of the second
+                // following APU cycle.
+                Some(true) if self.bits_remaining == 8 => 4,
+                // A byte still shifting, put writes and the standalone
+                // harnesses keep the timer-parity calibration.
+                _ => {
+                    if self.timer & 1 == 0 {
+                        2
+                    } else {
+                        3
+                    }
+                }
+            }
         };
     }
 
@@ -751,6 +763,11 @@ impl FrameCounter {
 /// The full APU.
 #[derive(Debug, Clone, Default)]
 pub struct Apu {
+    /// CPU get/put phase of the current `$4015` write, when known.
+    ///
+    /// `None` keeps the timer-parity start delay used by the standalone APU
+    /// harnesses; the system bus sets the real phase.
+    pub write_get: Option<bool>,
     /// Pulse 1.
     pub pulse1: Pulse,
     /// Pulse 2.
@@ -881,7 +898,7 @@ impl Apu {
                 } else {
                     let in_flight = !self.dmc.buffer_empty || self.dmc.bits_remaining < 8;
                     if self.dmc.bytes_remaining == 0 {
-                        self.dmc.init_sample(self.cycle);
+                        self.dmc.init_sample(self.cycle, self.write_get);
                     }
                     if !was_enabled && in_flight {
                         // A channel re-enabled while a byte is still shifting

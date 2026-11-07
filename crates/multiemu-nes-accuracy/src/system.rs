@@ -681,7 +681,12 @@ impl CpuBus for System {
             0x2000..=0x3FFF => {
                 self.ppu.write_register(address, value);
             }
-            0x4000..=0x4013 | 0x4015 | 0x4017 => self.apu.write(address, value),
+            0x4000..=0x4013 | 0x4015 | 0x4017 => {
+                // `self.phase` has already toggled to the next cycle, so the
+                // write cycle is a get when it is set.
+                self.apu.write_get = Some(self.phase);
+                self.apu.write(address, value);
+            }
             0x4014 if self.rmw_dummy => {
                 // The dummy write of an RMW instruction does not start a
                 // second transfer; the real write supplies the page.

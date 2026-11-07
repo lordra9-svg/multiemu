@@ -880,13 +880,26 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 AccuracyCoin v3.1.0, isolated mode:
 
 ```text
-AccuracyCoin: 140/151 passed, 6 failed, 5 skipped, 0 unrun (199320 frames)
+AccuracyCoin: 141/151 passed, 5 failed, 5 skipped, 0 unrun (199320 frames)
 ```
 
 All A1–A3 public suites remain green: `nestest` 0 diff, `instr_timing`,
 `instr_basics`, `vbl_nmi` 12/12, `ppu_sprites` 19/19, and all 13 blargg
-APU/DMC ROMs. The six open failures are catalogued with their failing
+APU/DMC ROMs. The five open failures are catalogued with their failing
 sub-tests and suspected causes in `docs/accuracy-divergences.md`.
+
+### 2026-11-07 — load-DMA start phase
+
+`DMA + $2002 Read` now passes. A load DMA raised by a `$4015` DMC-enable write
+halts on the get cycle of the second following APU cycle when the shift
+register is idle. With the CPU's get/put phase available at the write, that is
+four cycles after a write that lands on a get (previously two), which lets the
+DMA's dummy reads hit the `$2002` data-read cycle and clear VBlank before the
+CPU's own read. Writes on a put cycle, and writes while a byte is still
+shifting, keep the timer-parity 2/3-cycle start delay, which is what the
+`Delta Modulation Channel`, abort and DMC-reload tests are calibrated to. This
+also matches the ROM's own note that `DMA Landing on Write` sub-test 6 (the
+4-cycle load-DMA variant) only passes on CPUs that take the extra APU cycle.
 
 ### 2026-11-07 — Explicit DMA Abort and DMC/OAM interleave
 

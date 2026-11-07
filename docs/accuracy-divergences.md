@@ -7,7 +7,7 @@ entry whenever a divergence is found, and remove it only when a test or a
 hardware capture proves the behaviour matches.
 
 Current snapshot: **2026-11-07**, AccuracyCoin v3.1.0, isolated battery
-**140/151 passed, 6 failed, 5 skipped, 0 unrun**.
+**141/151 passed, 5 failed, 5 skipped, 0 unrun**.
 
 The five skipped rows are the `DRAW` tests, which need a human-drawn reference
 image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
@@ -19,9 +19,8 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 |---|---|---|---|---|
 | CPU Interrupts | NMI Overlap BRK | 5 | ErrorCode 2 | The status byte pushed when an NMI hijacks a `BRK` does not match the ROM's answer key; NMI polling/hijack ordering needs work. |
 | CPU Interrupts | NMI Overlap IRQ | 3 | ErrorCode 1 | Same hijack path for a hardware IRQ; the pushed status is wrong. |
-| APU Registers and DMA | DMA + `$2002` Read | 5 | ErrorCode 2 | A load DMA intended to land on the `LDA $2002` data-read cycle starts two cycles early (on the operand fetch), so the dummy reads do not clear VBlank before the CPU read. Measured: `$4015` write → halt after 2 cycles, on the next instruction's operand fetch. Delaying the start delay by two cycles makes this test pass but regresses `Delta Modulation Channel`, `Implicit/Explicit DMA Abort` and `DMC DMA + OAM DMA`, so the divergence is the halt phase, not the start delay. |
 | APU Registers and DMA | DMC DMA + OAM DMA | 5 | ErrorCode 2 (30/32 bytes) | Interleave implemented. Only loop 2, X=5 differs: the fetch lands on the final OAM cycle and the first post-OAM request is ~20 cycles off the ROM's phase, so the measured duration wraps one 576-cycle period (`$2C` = `556 & $FF`). |
-| CPU Behavior 2 | DMA Landing on Write | 13 | ErrorCode 6 | The 4-cycle load-DMA variant is not produced; sub-tests 1–5 (including the 3-cycle get-start case) pass. |
+| CPU Behavior 2 | DMA Landing on Write | 13 | ErrorCode 6 | Sub-test 6 wants the "extra APU cycle" load-DMA variant (halt four cycles after the write) while a byte is still shifting. That variant is only produced with the shift register idle; with a byte in flight the calibrated 2/3-cycle start delay is used. The ROM's own note says sub-test 6 fails on CPUs that do not take the extra cycle. Sub-tests 1–5 pass. |
 | PPU Misc. | `$2007` Stress Test | 5 | ErrorCode 2 | The `$2007` read buffer during a visible scanline does not match per dot. Feeding fetch reads into the buffer exposes attribute/pattern values, but the sequence is misaligned; the full three-cycle PPU data state machine and shared octal latch are needed. |
 
 ## Intentional approximations
@@ -38,6 +37,10 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 - **No `Accuracy::CycleAccurate` badge** is exposed until the A5 gate passes.
 
 ## Recently closed
+
+- `DMA + $2002 Read`: an idle shift register now gives the load DMA the
+  second-following-APU-cycle halt (four cycles after a get-cycle write), so its
+  dummy reads hit the `$2002` data-read cycle.
 
 - `Explicit DMA Abort`: the `$4015` stop delay is now 2–3 cycles and a fetch
   that has not halted yet is dropped, giving the ROM's 3-cycle and 1-cycle
