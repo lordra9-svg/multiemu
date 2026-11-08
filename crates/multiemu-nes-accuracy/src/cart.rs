@@ -2360,6 +2360,11 @@ pub struct Mmc5 {
     chr_banks: [u8; 8],
     mul_a: u8,
     mul_b: u8,
+    protect1: u8,
+    protect2: u8,
+    exram_mode: u8,
+    prg_ram_bank: u8,
+    chr_upper: u8,
     irq_latch: u8,
     irq_counter: u8,
     irq_enabled: bool,
@@ -2382,6 +2387,11 @@ impl Mmc5 {
             chr_banks: [0, 1, 2, 3, 4, 5, 6, 7],
             mul_a: 0,
             mul_b: 0,
+            protect1: 0x01,
+            protect2: 0x02,
+            exram_mode: 0x03,
+            prg_ram_bank: 0,
+            chr_upper: 0,
             irq_latch: 0,
             irq_counter: 0,
             irq_enabled: false,
@@ -2427,7 +2437,7 @@ impl Mmc5 {
 
     fn chr_bank(&self, slot: usize) -> usize {
         let banks = self.chr_bank_count();
-        (match self.chr_mode & 3 {
+        let base = match self.chr_mode & 3 {
             0 => (usize::from(self.chr_banks[0]) & !7) + slot,
             1 => {
                 if slot < 4 {
@@ -2441,13 +2451,30 @@ impl Mmc5 {
                 (usize::from(self.chr_banks[group * 2]) & !1) + (slot & 1)
             }
             _ => usize::from(self.chr_banks[slot]),
-        }) % banks
+        };
+        ((usize::from(self.chr_upper) << 8) | (base & 0xFF)) % banks
+    }
+
+    /// PRG-RAM window for mode 3 registers with bit 7 set.
+    fn ram_window(&self, address: u16) -> Option<usize> {
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        if (self.prg_mode & 3) != 3 || slot == 3 {
+            return None;
+        }
+        let value = self.prg_banks[slot];
+        if value & 0x80 != 0 {
+            return None;
+        }
+        Some(usize::from(value & 0x07) * 0x2000 + usize::from(address & 0x1FFF))
     }
 
     fn write_register(&mut self, address: u16, value: u8) {
         match address {
             0x5100 => self.prg_mode = value & 3,
             0x5101 => self.chr_mode = value & 3,
+            0x5102 => self.protect1 = value & 0x03,
+            0x5103 => self.protect2 = value & 0x03,
+            0x5104 => self.exram_mode = value & 0x03,
             0x5105 => {
                 let nt0 = value & 3;
                 let nt1 = (value >> 2) & 3;
@@ -2459,10 +2486,7 @@ impl Mmc5 {
                     Mirroring::Vertical
                 };
             }
-            0x5113 => {
-                let bank = usize::from(value & 0x07);
-                let _ = bank;
-            }
+            0x5113 => self.prg_ram_bank = value & 0x07,
             0x5114..=0x5117 => {
                 let index = usize::from(address - 0x5114);
                 self.prg_banks[index] = value;
@@ -2471,8 +2495,9 @@ impl Mmc5 {
                 let index = usize::from(address - 0x5120);
                 self.chr_banks[index] = value;
             }
-            0x5200 => self.mul_a = value,
-            0x5201 => self.mul_b = value,
+            0x5205 => self.mul_a = value,
+            0x5206 => self.mul_b = value,
+            0x5130 => self.chr_upper = value & 0x03,
             0x5203 => self.irq_latch = value,
             0x5204 => {
                 if value & 0x80 != 0 {
@@ -2493,19 +2518,51 @@ impl Mmc5 {
 impl Mapper for Mmc5 {
     fn prg_read(&self, address: u16) -> u8 {
         match address {
+            0x5204 => {
+                // In-frame is not tracked without PPU integration; expose only
+                // the pending IRQ flag.
+                (u8::from(self.irq_pending)) << 6
+            }
+            0x5205 => (u16::from(self.mul_a) * u16::from(self.mul_b)) as u8,
+            0x5206 => ((u16::from(self.mul_a) * u16::from(self.mul_b)) >> 8) as u8,
+            0x5C00..=0x5FFF => match self.exram_mode {
+                0 | 1 => 0,
+                _ => self.exram[usize::from(address - 0x5C00)],
+            },
             0x5000..=0x5FFF => 0,
-            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
-            0x8000..=0xFFFF => self.prg[self.prg_offset(address)],
+            0x6000..=0x7FFF => {
+                let offset =
+                    usize::from(self.prg_ram_bank) * 0x2000 + usize::from(address - 0x6000);
+                self.prg_ram[offset % self.prg_ram.len()]
+            }
+            0x8000..=0xFFFF => {
+                if let Some(ram) = self.ram_window(address) {
+                    return self.prg_ram[ram % self.prg_ram.len()];
+                }
+                self.prg[self.prg_offset(address)]
+            }
             _ => 0,
         }
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
         match address {
-            0x5000..=0x5FFF => self.write_register(address, value),
+            0x5000..=0x5FFF => {
+                if (0x5C00..=0x5FFF).contains(&address) {
+                    if self.exram_mode != 3 {
+                        self.exram[usize::from(address - 0x5C00)] = value;
+                    }
+                } else {
+                    self.write_register(address, value);
+                }
+            }
             0x6000..=0x7FFF => {
-                let index = usize::from(address - 0x6000) % self.prg_ram.len();
-                self.prg_ram[index] = value;
+                if self.protect1 == 0x02 && self.protect2 == 0x01 {
+                    let index =
+                        usize::from(self.prg_ram_bank) * 0x2000 + usize::from(address - 0x6000);
+                    let len = self.prg_ram.len();
+                    self.prg_ram[index % len] = value;
+                }
             }
             0x8000..=0xFFFF => {}
             _ => {}
@@ -11393,6 +11450,50 @@ mod tests {
     }
 
     #[test]
+    fn mmc5_multiplier_ram_protect_exram_and_mirroring() {
+        let rom = synth_banked(5, 512, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 5);
+
+        // Unsigned 8x8 multiplier.
+        cart.cpu_write(0x5205, 7);
+        cart.cpu_write(0x5206, 9);
+        assert_eq!(cart.cpu_read(0x5205), 63);
+        assert_eq!(cart.cpu_read(0x5206), 0);
+        cart.cpu_write(0x5205, 0x10);
+        cart.cpu_write(0x5206, 0x10);
+        assert_eq!(cart.cpu_read(0x5205), 0);
+        assert_eq!(cart.cpu_read(0x5206), 1);
+
+        // PRG-RAM writes need $5102=2 and $5103=1.
+        cart.cpu_write(0x6000, 0x11);
+        assert_eq!(cart.cpu_read(0x6000), 0);
+        cart.cpu_write(0x5102, 0x02);
+        cart.cpu_write(0x5103, 0x01);
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+        cart.cpu_write(0x5113, 1);
+        cart.cpu_write(0x6000, 0x33);
+        cart.cpu_write(0x5113, 0);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+
+        // ExRAM: mode 2 is read/write, mode 3 is read-only.
+        cart.cpu_write(0x5104, 2);
+        cart.cpu_write(0x5C00, 0xA5);
+        assert_eq!(cart.cpu_read(0x5C00), 0xA5);
+        cart.cpu_write(0x5104, 3);
+        cart.cpu_write(0x5C00, 0x11);
+        assert_eq!(cart.cpu_read(0x5C00), 0xA5);
+
+        // Nametable assignment (approximated as vertical/horizontal until the
+        // PPU supports per-nametable pages).
+        cart.cpu_write(0x5105, 0x00);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0x5105, 0x44);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
     fn sachen172_reverses_data_and_switches_mirroring() {
         let rom = synth_banked(172, 32, 32);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
@@ -11798,8 +11899,10 @@ mod tests {
         let rom = synth_banked(5, 64, 64);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         cart.cpu_write(0x5100, 3); // 8 KiB PRG mode
-        cart.cpu_write(0x5114, 2);
+        cart.cpu_write(0x5114, 0x82); // bit 7 = ROM, bank 2
         assert_eq!(cart.cpu_read(0x8000), 2);
+        cart.cpu_write(0x5114, 0x02); // bit 7 clear = PRG-RAM
+        assert_eq!(cart.cpu_read(0x8000), 0);
         cart.cpu_write(0x5101, 3); // 1 KiB CHR mode
         cart.cpu_write(0x5120, 3);
         assert_eq!(cart.ppu_read(0x0000), 0x83);

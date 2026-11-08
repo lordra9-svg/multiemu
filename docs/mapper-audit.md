@@ -81,6 +81,13 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   latches (page 0 is CHR-RAM), toggled by `$FD`/`$FE` pattern fetches and by
   `$2007` reads. The PPU reads and writes through the shared map. 8/8 render at
   600 frames.
+- **MMC5 (5, partial)** — the CPU-visible register file now covers the
+  unsigned 8×8 multiplier (`$5205`/`$5206`), PRG-RAM protect (`$5102`/`$5103`),
+  the `$5113` 8 KiB PRG-RAM bank, the `$5114-$5116` RAM/ROM toggle, ExRAM CPU
+  access modes (`$5104`, `$5C00-$5FFF`), `$5130` upper CHR bits and the
+  `$5204` IRQ-pending read. 12/37 render at 20 frames, 17/37 at 600. Still
+  missing: true per-nametable pages (ExRAM/fill modes), split-screen and
+  extended attributes, in-frame CHR/PRG switching, and expansion audio.
 - **PPU** — the backdrop no longer double-indirects the palette; all five
   mirroring modes are modelled with 4 KiB CIRAM; the `$2007` read buffer is
   fed by the per-dot background/sprite fetch with a four-dot data state

@@ -33,8 +33,9 @@ The main effort is now the reference-parity accuracy core. Details in
       3,554 rendering, 446 unsupported, 0 panics; 136/193/197 render 7/7,
       159/165 8/8, 172 4/6, 195 8/8 (Tiexue needs Start on its title screen)
       (`docs/mapper-audit.md`).
-      Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, mapper
-      193, the Datach peripheral and the small six-image ASIC tail.
+      Remaining: MMC5 per-nametable/split-screen/expansion audio,
+      VRC/VRC6/N163 expansion audio, the Datach peripheral and the small
+      six-image ASIC tail (triage in `docs/mapper-audit.md`).
 - [x] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
       all 151 rows: **146 pass, 0 fail, 5 DRAW skips, 0 unrun** — every
       non-DRAW test passes. `$2007 Stress Test` was closed with the PPU data
