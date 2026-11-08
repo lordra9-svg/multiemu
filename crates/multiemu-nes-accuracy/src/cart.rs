@@ -6,7 +6,9 @@
 //! Scope: iNES 1.0 headers plus the NES 2.0 mapper-number extension, NROM
 //! (mapper 0) and MMC1 (mapper 1). Further mappers slot into [`Mapper`].
 
+use std::cell::RefCell;
 use std::fmt;
+use std::rc::Rc;
 
 /// Nametable mirroring requested by the cartridge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +23,206 @@ pub enum Mirroring {
     SingleLower,
     /// Single upper nametable.
     SingleUpper,
+}
+
+/// Which hybrid CHR board the shared state models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridKind {
+    /// Mapper 165: MMC3 registers used as two latched 4 KiB pages; page 0 is
+    /// the 4 KiB CHR-RAM page.
+    Mmc2,
+    /// Mapper 195: MMC3 1 KiB CHR banks with a CHR-RAM window selected by the
+    /// bank number written through `$2007`.
+    Waixing195,
+}
+
+/// Shared hybrid CHR state: full CHR ROM, 4 KiB CHR-RAM, the current MMC3
+/// bank registers and the latch/CHRB selection.
+///
+/// The mapper updates the registers; the PPU owns reads, writes and (for 165)
+/// the `$FD`/`$FE` fetch latches.
+#[derive(Debug)]
+pub struct HybridChr {
+    kind: HybridKind,
+    rom: Vec<u8>,
+    ram: Vec<u8>,
+    select: u8,
+    bank_data: [u8; 8],
+    latch: [bool; 2],
+    chrb: u8,
+}
+
+impl HybridChr {
+    fn new(kind: HybridKind, rom: Vec<u8>) -> Self {
+        let ram_size = if kind == HybridKind::Mmc2 {
+            0x1000
+        } else {
+            0x8000
+        };
+        Self {
+            kind,
+            rom,
+            ram: vec![0; ram_size],
+            select: 0,
+            bank_data: [0; 8],
+            latch: [false; 2],
+            chrb: 0x80,
+        }
+    }
+
+    fn update_regs(&mut self, select: u8, bank_data: [u8; 8]) {
+        self.select = select;
+        self.bank_data = bank_data;
+    }
+
+    fn mmc3_slot_bank(&self, slot: usize) -> usize {
+        let mode = self.select & 0x80;
+        let raw = if mode == 0 {
+            match slot {
+                0 | 1 => usize::from(self.bank_data[0] & 0xFE) + (slot & 1),
+                2 | 3 => usize::from(self.bank_data[1] & 0xFE) + (slot & 1),
+                4 => usize::from(self.bank_data[2]),
+                5 => usize::from(self.bank_data[3]),
+                6 => usize::from(self.bank_data[4]),
+                _ => usize::from(self.bank_data[5]),
+            }
+        } else {
+            match slot {
+                0 => usize::from(self.bank_data[2]),
+                1 => usize::from(self.bank_data[3]),
+                2 => usize::from(self.bank_data[4]),
+                3 => usize::from(self.bank_data[5]),
+                4 | 5 => usize::from(self.bank_data[0] & 0xFE) + (slot & 1),
+                _ => usize::from(self.bank_data[1] & 0xFE) + (slot & 1),
+            }
+        };
+        raw & 0xFF
+    }
+
+    /// First bank and size (1 KiB units) of the CHR-RAM window selected by the
+    /// CHRB value written through the PPU.
+    fn ram_range(&self) -> Option<(usize, usize)> {
+        match self.chrb {
+            0x80 => Some((0x28, 4)),
+            0x82 => Some((0x00, 4)),
+            0x88 => Some((0x4C, 4)),
+            0x8A => Some((0x64, 4)),
+            0xC0 => Some((0x46, 2)),
+            0xC2 => Some((0x7C, 2)),
+            0xC8 => Some((0x0A, 2)),
+            0xCA => None,
+            _ => Some((0x28, 4)),
+        }
+    }
+
+    fn is_chrb_value(bank: usize) -> bool {
+        matches!(bank, 0x80 | 0x82 | 0x88 | 0x8A | 0xC0 | 0xC2 | 0xC8 | 0xCA)
+    }
+
+    /// Maps a PPU CHR address to `(is_ram, offset)`.
+    fn map(&self, address: u16) -> (bool, usize) {
+        match self.kind {
+            HybridKind::Mmc2 => {
+                let half = usize::from(address) / 0x1000;
+                let reg = if half == 0 {
+                    if self.latch[0] {
+                        1
+                    } else {
+                        0
+                    }
+                } else if self.latch[1] {
+                    4
+                } else {
+                    2
+                };
+                let page = usize::from(self.bank_data[reg]);
+                if page == 0 {
+                    (true, usize::from(address) & 0x0FFF)
+                } else {
+                    (false, page * 0x1000 + (usize::from(address) & 0x0FFF))
+                }
+            }
+            HybridKind::Waixing195 => {
+                let slot = usize::from(address) / 0x400;
+                let bank = self.mmc3_slot_bank(slot);
+                // Low banks are the writable CHR pages these games upload to;
+                // the CHRB window adds the ROM banks remapped to RAM. Banks in
+                // the upper half are the ROM side unless selected.
+                if bank < 0x80 {
+                    // The writable window is addressed raw, as the games
+                    // expect when they upload tiles through $2007.
+                    return (true, usize::from(address) & 0x1FFF);
+                }
+                if let Some((start, size)) = self.ram_range() {
+                    if bank >= start && bank < start + size {
+                        return (
+                            true,
+                            (bank * 0x400 + (usize::from(address) & 0x3FF)) % self.ram.len(),
+                        );
+                    }
+                }
+                (false, bank * 0x400 + (usize::from(address) & 0x3FF))
+            }
+        }
+    }
+
+    /// Reads one CHR byte through the hybrid map.
+    #[must_use]
+    pub fn read(&self, address: u16) -> u8 {
+        let (is_ram, offset) = self.map(address);
+        if is_ram {
+            return self.ram[offset % self.ram.len()];
+        }
+        self.rom.get(offset).copied().unwrap_or(0)
+    }
+
+    /// Writes one CHR byte. CHR-ROM planes are read-only; the RAM window and
+    /// the 195 CHRB latch are updated.
+    pub fn write(&mut self, address: u16, value: u8) {
+        if self.kind == HybridKind::Waixing195 {
+            let slot = usize::from(address) / 0x400;
+            let bank = self.mmc3_slot_bank(slot);
+            if Self::is_chrb_value(bank) {
+                self.chrb = bank as u8;
+            }
+        }
+        let (is_ram, offset) = self.map(address);
+        if is_ram {
+            let len = self.ram.len();
+            self.ram[offset % len] = value;
+        }
+    }
+
+    /// Feeds a pattern fetch to the MMC2-style latches (mapper 165).
+    pub fn note_fetch(&mut self, address: u16) {
+        if self.kind != HybridKind::Mmc2 {
+            return;
+        }
+        let tile = (address >> 4) as u8;
+        if tile == 0xFD || tile == 0xFE {
+            let half = usize::from(address & 0x1000 != 0);
+            self.latch[half] = tile == 0xFE;
+        }
+    }
+
+    /// Feeds a `$2007` CHR read; games can toggle the latch this way.
+    pub fn note_read(&mut self, address: u16) {
+        if address < 0x2000 {
+            self.note_fetch(address);
+        }
+    }
+
+    /// Current latch state (165), for tests.
+    #[must_use]
+    pub fn latch(&self) -> [bool; 2] {
+        self.latch
+    }
+
+    /// Current CHRB value (195), for tests.
+    #[must_use]
+    pub fn chrb(&self) -> u8 {
+        self.chrb
+    }
 }
 
 /// A cartridge mapper.
@@ -61,6 +263,11 @@ pub trait Mapper: fmt::Debug {
 
     /// Two 1 KiB CHR bank indices for ROM nametables, when enabled.
     fn rom_nametable_banks(&self) -> Option<[u16; 2]> {
+        None
+    }
+
+    /// Shared hybrid CHR state for mappers that mix ROM and RAM pages.
+    fn hybrid_chr(&self) -> Option<Rc<RefCell<HybridChr>>> {
         None
     }
 
@@ -129,10 +336,7 @@ impl Cartridge {
         }
         let prg_rom = bytes[offset..prg_end].to_vec();
         let chr = bytes[prg_end..chr_end].to_vec();
-        // Mapper 195/165 mix CHR-ROM and CHR-RAM on the board. Start with a
-        // writable 8 KiB window so the games can upload their own tiles; the
-        // ROM bank half of the hybrid is a follow-up.
-        let chr_is_ram = header.chr_size == 0 || matches!(header.mapper, 165 | 195);
+        let chr_is_ram = header.chr_size == 0;
         let chr = if chr_is_ram {
             let size = match header.mapper {
                 13 => 0x4000,
@@ -161,7 +365,13 @@ impl Cartridge {
             136 => Box::new(Sachen136::new(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
             195 => Box::new(Waixing195::new(prg_rom, chr, header)),
-            165 => Box::new(Mmc3::new_as(prg_rom, chr, header, 165)),
+            165 => Box::new(Mmc3::new_hybrid(
+                prg_rom,
+                chr,
+                header,
+                165,
+                HybridKind::Mmc2,
+            )),
             45 => Box::new(Mmc3::new_as(prg_rom, chr, header, 45)),
             116 => Box::new(Mmc3::new_as(prg_rom, chr, header, 116)),
             118 => Box::new(Mmc3::new_txsrom(prg_rom, chr, header)),
@@ -326,6 +536,12 @@ impl Cartridge {
     #[must_use]
     pub fn rom_nametable_banks(&self) -> Option<[u16; 2]> {
         self.mapper.rom_nametable_banks()
+    }
+
+    /// Shared hybrid CHR state (mappers 165/195).
+    #[must_use]
+    pub fn hybrid_chr(&self) -> Option<Rc<RefCell<HybridChr>>> {
+        self.mapper.hybrid_chr()
     }
 
     /// Battery-backed PRG-RAM contents.
@@ -795,7 +1011,7 @@ pub struct Waixing195 {
 impl Waixing195 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
         Self {
-            inner: Mmc3::new_as(prg, chr, header, 195),
+            inner: Mmc3::new_hybrid(prg, chr, header, 195, HybridKind::Waixing195),
             ram4k: [0; 0x1000],
         }
     }
@@ -835,6 +1051,10 @@ impl Mapper for Waixing195 {
 
     fn prg_ram(&self) -> &[u8] {
         self.inner.prg_ram()
+    }
+
+    fn hybrid_chr(&self) -> Option<Rc<RefCell<HybridChr>>> {
+        self.inner.hybrid_chr()
     }
 
     fn irq_line(&self) -> bool {
@@ -1432,11 +1652,25 @@ pub struct Mmc3 {
     irq_reload: bool,
     irq_enabled: bool,
     irq_pending: bool,
+    hybrid: Option<Rc<RefCell<HybridChr>>>,
 }
 
 impl Mmc3 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
         Self::new_as(prg, chr, header, 4)
+    }
+
+    fn new_hybrid(
+        prg: Vec<u8>,
+        chr: Vec<u8>,
+        header: Header,
+        mapper: u16,
+        kind: HybridKind,
+    ) -> Self {
+        let hybrid = Rc::new(RefCell::new(HybridChr::new(kind, chr.clone())));
+        let mut mmc3 = Self::new_as(prg, chr, header, mapper);
+        mmc3.hybrid = Some(hybrid);
+        mmc3
     }
 
     fn new_196(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
@@ -1468,6 +1702,7 @@ impl Mmc3 {
             irq_reload: false,
             irq_enabled: false,
             irq_pending: false,
+            hybrid: None,
         }
     }
 
@@ -1550,10 +1785,18 @@ impl Mapper for Mmc3 {
             address
         };
         match address & 0xE001 {
-            0x8000 => self.select = value,
+            0x8000 => {
+                self.select = value;
+                if let Some(hybrid) = &self.hybrid {
+                    hybrid.borrow_mut().update_regs(self.select, self.bank_data);
+                }
+            }
             0x8001 => {
                 let index = usize::from(self.select & 0x07);
                 self.bank_data[index] = value;
+                if let Some(hybrid) = &self.hybrid {
+                    hybrid.borrow_mut().update_regs(self.select, self.bank_data);
+                }
             }
             0xA000 => {
                 self.mirroring = if value & 1 != 0 {
@@ -1578,12 +1821,19 @@ impl Mapper for Mmc3 {
     }
 
     fn chr_read(&self, address: u16) -> u8 {
+        if let Some(hybrid) = &self.hybrid {
+            return hybrid.borrow().read(address);
+        }
         let slot = usize::from(address) / 0x400;
         let bank = self.chr_bank(slot);
         self.chr[bank * 0x400 + usize::from(address & 0x3FF)]
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(hybrid) = &self.hybrid {
+            hybrid.borrow_mut().write(address, value);
+            return;
+        }
         let slot = usize::from(address) / 0x400;
         let bank = self.chr_bank(slot);
         let index = bank * 0x400 + usize::from(address & 0x3FF);
@@ -1610,6 +1860,10 @@ impl Mapper for Mmc3 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.prg_ram
+    }
+
+    fn hybrid_chr(&self) -> Option<Rc<RefCell<HybridChr>>> {
+        self.hybrid.clone()
     }
 
     fn irq_line(&self) -> bool {
@@ -10903,13 +11157,57 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_chr_mappers_get_a_writable_window() {
-        for mapper in [165, 195] {
-            let rom = synth_banked(mapper, 64, 64);
-            let cart = Cartridge::from_ines(&rom).expect("cart");
-            assert_eq!(cart.mapper(), mapper);
-            assert!(cart.chr_is_ram());
-        }
+    fn hybrid_chr_165_latches_between_ram_and_rom() {
+        let rom = synth_banked(165, 64, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 165);
+        assert!(!cart.chr_is_ram());
+        let hybrid = cart.hybrid_chr().expect("hybrid state");
+
+        // CHR page 0 is RAM.
+        cart.ppu_write(0x0010, 0x5A);
+        assert_eq!(cart.ppu_read(0x0010), 0x5A);
+
+        // R1 = page 4 (ROM); a $FE fetch switches latch 0 to it.
+        cart.cpu_write(0x8000, 1);
+        cart.cpu_write(0x8001, 4);
+        hybrid.borrow_mut().note_fetch(0x0FE0);
+        assert_eq!(cart.ppu_read(0x0000), 0x90);
+
+        // A $FD `$2007` read switches back to R0 (= page 0, RAM).
+        hybrid.borrow_mut().note_read(0x0FD0);
+        assert_eq!(cart.ppu_read(0x0010), 0x5A);
+
+        // R0 = page 1 (ROM) is visible while the latch is on $FD.
+        cart.cpu_write(0x8000, 0);
+        cart.cpu_write(0x8001, 1);
+        assert_eq!(cart.ppu_read(0x0000), 0x84);
+    }
+
+    #[test]
+    fn hybrid_chr_195_maps_ram_and_chrb() {
+        let rom = synth_banked(195, 64, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 195);
+        assert!(!cart.chr_is_ram());
+        let hybrid = cart.hybrid_chr().expect("hybrid state");
+
+        // Bank $28 is inside the power-on RAM window ($28-$2B).
+        cart.cpu_write(0x8000, 0);
+        cart.cpu_write(0x8001, 0x28);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+
+        // Writing through bank $82 configures CHRB; the bank itself is ROM.
+        cart.cpu_write(0x8001, 0x82);
+        cart.ppu_write(0x0000, 0x11);
+        assert_eq!(hybrid.borrow().chrb(), 0x82);
+        assert_eq!(cart.ppu_read(0x0000), 0x82);
+
+        // Bank 0 is now inside the $00-$03 RAM window.
+        cart.cpu_write(0x8001, 0x00);
+        cart.ppu_write(0x0200, 0x33);
+        assert_eq!(cart.ppu_read(0x0200), 0x33);
     }
 
     #[test]

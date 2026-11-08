@@ -3,7 +3,10 @@
 //! A2 starts with the timing and register contract used by the `vbl_nmi`
 //! suites; rendering, sprite evaluation and the odd-frame skip are added next.
 
-use crate::cart::Mirroring;
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use crate::cart::{HybridChr, Mirroring};
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -114,6 +117,8 @@ pub struct Ppu {
     pub chr: Vec<u8>,
     /// MMC2/MMC4 latch-banked CHR, when the cartridge uses it.
     mmc2: Option<Mmc2Chr>,
+    /// Shared hybrid CHR state (mappers 165/195).
+    hybrid: Option<Rc<RefCell<HybridChr>>>,
     /// Full CHR ROM used for ROM nametables (Sunsoft-4), if any.
     nt_rom: Vec<u8>,
     /// Two 1 KiB CHR nametable bank indices when ROM nametables are enabled.
@@ -269,6 +274,7 @@ impl Ppu {
             oam: [0; 256],
             chr,
             mmc2: None,
+            hybrid: None,
             nt_rom: Vec::new(),
             nt_banks: None,
             chr_ram,
@@ -348,6 +354,11 @@ impl Ppu {
         }
     }
 
+    /// Shares the mapper's hybrid CHR state (mappers 165/195).
+    pub fn set_hybrid_chr(&mut self, hybrid: Rc<RefCell<HybridChr>>) {
+        self.hybrid = Some(hybrid);
+    }
+
     /// Installs the full CHR ROM used for ROM nametables.
     pub fn set_rom_nametable_rom(&mut self, rom: Vec<u8>) {
         self.nt_rom = rom;
@@ -397,6 +408,9 @@ impl Ppu {
 
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(hybrid) = &self.hybrid {
+            return hybrid.borrow().read(address);
+        }
         match &self.mmc2 {
             Some(mmc2) => mmc2.read(address),
             None => self
@@ -409,6 +423,9 @@ impl Ppu {
 
     /// Feeds a pattern fetch to the MMC2/MMC4 latch.
     fn note_chr_fetch(&mut self, address: u16) {
+        if let Some(hybrid) = &self.hybrid {
+            hybrid.borrow_mut().note_fetch(address);
+        }
         if let Some(mmc2) = &mut self.mmc2 {
             mmc2.note_fetch(address);
         }
@@ -720,6 +737,9 @@ impl Ppu {
                     self.ale_countdown = Some(0);
                 }
                 let address = self.v & 0x3FFF;
+                if let Some(hybrid) = &self.hybrid {
+                    hybrid.borrow_mut().note_read(address);
+                }
                 self.data_read_address = address;
                 self.data_read_render = (self.scanline < 240
                     || self.scanline == self.pre_render_line())
@@ -937,7 +957,9 @@ impl Ppu {
 
     fn write_vram(&mut self, address: u16, value: u8) {
         if address < 0x2000 {
-            if self.chr_ram {
+            if let Some(hybrid) = &self.hybrid {
+                hybrid.borrow_mut().write(address, value);
+            } else if self.chr_ram {
                 let index = usize::from(address) & 0x1FFF;
                 if let Some(byte) = self.chr.get_mut(index) {
                     *byte = value;

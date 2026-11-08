@@ -135,6 +135,9 @@ impl System {
         if let (Some(rom), Some(banks)) = (cart.chr_rom(), cart.chr_banks()) {
             ppu.set_mmc2_chr(rom.to_vec(), banks);
         }
+        if let Some(hybrid) = cart.hybrid_chr() {
+            ppu.set_hybrid_chr(hybrid);
+        }
         if cart.has_rom_nametables() {
             if let Some(rom) = cart.chr_rom() {
                 ppu.set_rom_nametable_rom(rom.to_vec());
