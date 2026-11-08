@@ -28,15 +28,16 @@ The main effort is now the reference-parity accuracy core. Details in
       PRG-RAM, the MMC2/MMC3 hybrid (165), full PPU mirroring modes, the 143
       protected NROM and the 212/235/286 multicarts, `System` bus, Core ABI
       adapter and a `corpus` runner. Full-library audit: 6,614/7,101 load,
-      459 unsupported, 0 panics; 136/197 render 7/7, 159/165 7-8/8, 195 6/8
+      3,546 rendering, 459 unsupported, 0 panics; 136/197 render 7/7,
+      159/165 8/8, 195 8/8 (Tiexue needs Start on its title screen)
       (`docs/mapper-audit.md`).
-      Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, the two
-      195 crash-loop images, mapper 193 and the Datach peripheral.
+      Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, mapper
+      193, the Datach peripheral and the small six-image ASIC tail.
 - [x] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
       all 151 rows: **146 pass, 0 fail, 5 DRAW skips, 0 unrun** — every
       non-DRAW test passes. `$2007 Stress Test` was closed with the PPU data
-      state machine and per-dot fetch-buffer feed (170/170 answer-key bytes;
-      RustyNES used as the oracle). The ledger
+      state machine and per-dot fetch-buffer feed (170/170 answer-key bytes,
+      confirmed against both RustyNES and MesenCE). The ledger
       (`docs/accuracy-divergences.md`) has no open failures and the dated
       measured log is `docs/accuracy-status.md`.
 - [ ] **A6** FDS, VS, PAL/Dendy, expansion audio, peripherals, NSF.
