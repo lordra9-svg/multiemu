@@ -286,7 +286,7 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,577 loaded (92.6%), 3,503 rendering (49.3%), 3,074 blank (43.3%), 496
+6,577 loaded (92.6%), 3,550 rendering (50.0%), 3,027 blank (42.6%), 496
 unsupported (7.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. Top unsupported families are now
 195/165 (8 each), then 136/157/159/193/197 (7 each). See
@@ -301,6 +301,14 @@ the four formerly-panicking mapper-173 images now render. The VRC `number()`
 also reported every board as mapper 21 — the audit now separates 21/22/23/25.
 A new `multiemu signatures` batch harness records per-frame hashes for
 directory-level regression checks.
+
+Further A4 work: the PPU now models vertical, horizontal, single-lower,
+single-upper and four-screen mirroring (4 KiB CIRAM), Sunsoft-4 drives
+nametables from CHR ROM, and MMC3-8025 implements the FS005 submapper-2 RAM
+configuration/protection path. Sunsoft-4 reaches 6/8 images and MMC3-8025
+80/106 at 600 frames. The remaining top families were triaged as real boards
+(136/159/197 are the smallest next models; 157 needs the Datach barcode
+peripheral), not header aliases.
 
 MMC2 (9) and MMC4 (10) are implemented, including the two 4 KiB CHR fetch
 latches that switch on tile `$FD`/`$FE` during rendering and the 5-bit bank

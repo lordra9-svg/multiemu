@@ -27,16 +27,16 @@ multiemu corpus <library-dir> --mapper 68 --frames 600
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
 | Loaded (mapper implemented) | 6,577 | 92.6% |
-| Rendering | 3,503 | 49.3% |
-| Blank | 3,074 | 43.3% |
+| Rendering | 3,550 | 50.0% |
+| Blank | 3,027 | 42.6% |
 | Unsupported mapper | 496 | 7.0% |
 | Load/run failure | 28 | 0.39% |
 
 The batched totals reproduce the single-pass numbers exactly, so batching adds
-no skew. Since the previous audit: MMC2/MMC4, Sunsoft-4 and the VRC2/VRC4
-rewrite landed, and the four mapper-173 panics were fixed. Loaded rose
-6,565 → 6,577, unsupported fell 504 → 496, failures fell 32 → 28, and the
-panic count fell 4 → 0.
+no skew. Since the previous audit: Sunsoft-4 gained CHR-ROM nametables, the
+PPU gained all five mirroring modes, and the MMC3-8025/FS005 path was fixed.
+Rendering rose 3,503 → 3,550 and blank fell 3,074 → 3,027 at the same 20-frame
+window; unsupported (496) and failures (28) are unchanged, with no panics.
 
 `rendering` is a smoke signal, not a compatibility claim: a game that needs
 input, plays a static screen, or boots to a solid colour can read as blank, and
@@ -49,10 +49,20 @@ boot screen (MMC2 Punch-Out!!, Sunsoft-4, Nanjing 163, Sunsoft FME-7).
 - **MMC2/MMC4 (9/10)** — 8/16 KiB PRG banking, four CHR registers and the
   `$FD`/`$FE` fetch latches driven by the PPU mid-frame. All 15 local images
   render at 600 frames.
-- **Sunsoft-4 (68)** — 2 KiB CHR banks, 16 KiB switchable PRG, WRAM enable and
-  `$E000` mirroring. 5/8 local images render; the three blanks are the
-  combined Nantettatte!! Baseball dumps and the US After Burner prototype,
-  which rely on ROM nametables or missing sub-cartridges.
+- **Sunsoft-4 (68)** — 2 KiB CHR banks, 16 KiB switchable PRG, WRAM enable,
+  `$E000` mirroring and **CHR-ROM nametables** (`$C000`/`$D000` banks, with the
+  PPU mapping `$2000-$2FFF` through them). 6/8 local images render; the two
+  remaining blanks are the combined Nantettatte!! Baseball dumps, which need
+  the external cassette/sub-cartridge.
+- **PPU mirroring** — the PPU now models all five modes (vertical,
+  horizontal, single-lower, single-upper, four-screen) instead of a single
+  vertical flag, with 4 KiB of CIRAM. This also improved VRC one-screen
+  layouts and AxROM.
+- **MMC3-8025 (176)** — the FS005 (NES 2.0 submapper 2) RAM configuration is
+  implemented: 32 KiB banked WRAM, `$A001` configuration/protection, the
+  `$5000-$5FFF` window switching between outer registers and WRAM bank 2, and
+  WRAM enable. *Fujia Sanguo* now boots and renders; the family went from
+  10 rendering / 96 blank to **80 rendering / 26 blank** at 600 frames.
 - **VRC2/VRC4 (21/22/23/25)** — rewritten with the correct fixed PRG layout
   (`$C000` second-to-last, `$E000` last), eight 1 KiB CHR register pairs,
   per-board address-line decoding, VRC4 swap/WRAM mode and a CPU-cycle IRQ.
@@ -176,6 +186,23 @@ render in a reference emulator while staying blank here, which is a
 mapper/PPU follow-up rather than a window problem. Use
 `multiemu signatures <dir> --frames 600 --check <manifest>` to separate the
 two across a whole mapper.
+
+## Unsupported-family triage
+
+The top remaining IDs were inspected by header and title:
+
+| Mapper | Images | What it is | Effort |
+|---:|---:|---|---|
+| 195 | 8 | Waixing boards (FS303 and siblings), 256–512 KiB PRG, CHR-ROM/RAM mixing | real family; medium |
+| 165 | 8 | Waixing *Shenghuo Huizhang* series | real family; medium |
+| 136 | 7 | Sachen SA-002/3011-class boards, 32 KiB PRG/CHR | real family; small |
+| 157 | 7 | Datach Joint ROM System (barcode reader peripheral) | blocked on peripheral |
+| 159 | 7 | Bandai LZ93D50 + EEPROM (Dragon Ball Z, SD Gundam) | real family; small/medium |
+| 193 | 7 | Fighting Hero / War in the Gulf board | real family; medium |
+| 197 | 7 | MMC3-derived 512 KiB CHR boards (Fighter V) | real family; small |
+
+None are iNES-to-NES-2.0 aliases of an implemented mapper; each would be a new
+hardware model. The smallest next wins are **136**, **159** and **197**.
 
 ## Unsupported mappers
 

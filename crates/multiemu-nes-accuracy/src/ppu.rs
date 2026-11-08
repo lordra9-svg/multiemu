@@ -3,6 +3,7 @@
 //! A2 starts with the timing and register contract used by the `vbl_nmi`
 //! suites; rendering, sprite evaluation and the odd-frame skip are added next.
 
+use crate::cart::Mirroring;
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -91,8 +92,8 @@ pub struct Ppu {
     pub dot: u16,
     /// Completed frames.
     pub frames: u64,
-    /// Nametable VRAM (2 KiB).
-    pub vram: [u8; 0x800],
+    /// Nametable VRAM (4 KiB; four-screen carts use all of it).
+    pub vram: [u8; 0x1000],
     /// Palette RAM (32 bytes).
     pub palette: [u8; 32],
     /// Expanded RGB for each palette entry (rebuilt on palette writes).
@@ -103,10 +104,14 @@ pub struct Ppu {
     pub chr: Vec<u8>,
     /// MMC2/MMC4 latch-banked CHR, when the cartridge uses it.
     mmc2: Option<Mmc2Chr>,
+    /// Full CHR ROM used for ROM nametables (Sunsoft-4), if any.
+    nt_rom: Vec<u8>,
+    /// Two 1 KiB CHR nametable bank indices when ROM nametables are enabled.
+    nt_banks: Option<[u16; 2]>,
     /// Whether CHR is writable RAM.
     pub chr_ram: bool,
-    /// Nametable mirroring: true = vertical.
-    pub vertical_mirroring: bool,
+    /// Nametable mirroring.
+    pub mirroring: Mirroring,
     /// NMI output line.
     pub nmi_line: bool,
     /// Latched NMI edge waiting for the CPU.
@@ -243,14 +248,20 @@ impl Ppu {
             scanline: 0,
             dot: 40,
             frames: 0,
-            vram: [0; 0x800],
+            vram: [0; 0x1000],
             palette: [0; 32],
             palette_rgb: [[0; 3]; 32],
             oam: [0; 256],
             chr,
             mmc2: None,
+            nt_rom: Vec::new(),
+            nt_banks: None,
             chr_ram,
-            vertical_mirroring,
+            mirroring: if vertical_mirroring {
+                Mirroring::Vertical
+            } else {
+                Mirroring::Horizontal
+            },
             nmi_line: false,
             nmi_pending: false,
             nmi_suppressed: false,
@@ -322,6 +333,17 @@ impl Ppu {
         }
     }
 
+    /// Installs the full CHR ROM used for ROM nametables.
+    pub fn set_rom_nametable_rom(&mut self, rom: Vec<u8>) {
+        self.nt_rom = rom;
+    }
+
+    /// Enables ROM nametables with the two 1 KiB bank indices, or disables
+    /// them with `None` (CIRAM).
+    pub fn set_rom_nametable_banks(&mut self, banks: Option<[u16; 2]>) {
+        self.nt_banks = banks;
+    }
+
     /// Replaces the CHR window with latch-banked MMC2/MMC4 ROM.
     pub fn set_mmc2_chr(&mut self, rom: Vec<u8>, banks: [u8; 4]) {
         self.mmc2 = Some(Mmc2Chr::new(rom, banks));
@@ -350,6 +372,12 @@ impl Ppu {
     #[must_use]
     pub fn mmc2_latch(&self) -> Option<[bool; 2]> {
         self.mmc2.as_ref().map(|mmc2| mmc2.latch)
+    }
+
+    /// Test-only nametable read hook.
+    #[cfg(test)]
+    pub(crate) fn debug_read_vram(&self, address: u16) -> u8 {
+        self.read_vram(address)
     }
 
     /// Reads one byte of the active CHR window.
@@ -758,17 +786,37 @@ impl Ppu {
         let index = usize::from(address & 0x0FFF);
         let table = index / 0x0400;
         let offset = index % 0x0400;
-        let mapped = if self.vertical_mirroring {
-            table % 2
-        } else {
-            match table {
-                0 => 0,
-                1 => 0,
-                2 => 1,
-                _ => 1,
-            }
+        let mapped = match self.mirroring {
+            Mirroring::Vertical => table % 2,
+            Mirroring::Horizontal => table / 2,
+            Mirroring::SingleLower => 0,
+            Mirroring::SingleUpper => 1,
+            Mirroring::FourScreen => table,
         };
         mapped * 0x0400 + offset
+    }
+
+    /// Selects the CHR bank for a nametable address in ROM-nametable mode.
+    fn nametable_bank(&self, address: u16, banks: [u16; 2]) -> u16 {
+        let table = usize::from(address >> 10 & 3);
+        match self.mirroring {
+            Mirroring::Vertical | Mirroring::FourScreen => banks[table % 2],
+            Mirroring::Horizontal => banks[usize::from(table >= 2)],
+            Mirroring::SingleLower => banks[0],
+            Mirroring::SingleUpper => banks[1],
+        }
+    }
+
+    fn read_nametable(&self, address: u16) -> u8 {
+        if let Some(banks) = self.nt_banks {
+            if !self.nt_rom.is_empty() {
+                let bank = usize::from(self.nametable_bank(address, banks))
+                    % (self.nt_rom.len() / 0x400).max(1);
+                let offset = bank * 0x400 + usize::from(address & 0x3FF);
+                return self.nt_rom[offset];
+            }
+        }
+        self.vram[self.nametable_index(address)]
     }
 
     /// Increments `v` after a `$2007` access. During rendering this performs a
@@ -812,7 +860,7 @@ impl Ppu {
         if address < 0x2000 {
             self.chr_byte(address)
         } else if address < 0x3F00 {
-            self.vram[self.nametable_index(address)]
+            self.read_nametable(address)
         } else {
             self.read_palette(address)
         }
@@ -827,8 +875,11 @@ impl Ppu {
                 }
             }
         } else if address < 0x3F00 {
-            let index = self.nametable_index(address);
-            self.vram[index] = value;
+            // ROM nametables are read-only.
+            if self.nt_banks.is_none() {
+                let index = self.nametable_index(address);
+                self.vram[index] = value;
+            }
         } else {
             self.write_palette(address, value);
         }
@@ -1650,6 +1701,60 @@ mod tests {
 
     fn ppu() -> Ppu {
         Ppu::new(Timing::NTSC, vec![0; 0x2000], true, false)
+    }
+
+    #[test]
+    fn single_and_four_screen_mirroring() {
+        let mut ppu = ppu();
+        ppu.mirroring = Mirroring::SingleLower;
+        ppu.write_vram(0x2000, 0x11);
+        assert_eq!(ppu.read_vram(0x2400), 0x11);
+        assert_eq!(ppu.read_vram(0x2C00), 0x11);
+
+        ppu.mirroring = Mirroring::SingleUpper;
+        ppu.write_vram(0x2800, 0x22);
+        // Single-upper maps every nametable address to the second 1 KiB.
+        assert_eq!(ppu.read_vram(0x2000), 0x22);
+        assert_eq!(ppu.read_vram(0x2C00), 0x22);
+
+        ppu.mirroring = Mirroring::FourScreen;
+        for (index, address) in [0x2000u16, 0x2400, 0x2800, 0x2C00].into_iter().enumerate() {
+            ppu.write_vram(address, index as u8);
+        }
+        for (index, address) in [0x2000u16, 0x2400, 0x2800, 0x2C00].into_iter().enumerate() {
+            assert_eq!(ppu.read_vram(address), index as u8);
+        }
+    }
+
+    #[test]
+    fn rom_nametables_read_chr_banks() {
+        let mut ppu = ppu();
+        let mut rom = vec![0u8; 0x8000]; // 32 x 1 KiB banks.
+        for (bank, chunk) in rom.chunks_mut(0x400).enumerate() {
+            chunk.fill(0x80 | bank as u8);
+        }
+        ppu.set_rom_nametable_rom(rom);
+        ppu.mirroring = Mirroring::Vertical;
+        ppu.set_rom_nametable_banks(Some([5, 9]));
+        assert_eq!(ppu.read_vram(0x2000), 0x85);
+        assert_eq!(ppu.read_vram(0x2400), 0x89);
+        assert_eq!(ppu.read_vram(0x2800), 0x85);
+        assert_eq!(ppu.read_vram(0x2C00), 0x89);
+        assert_eq!(ppu.read_vram(0x23FF), 0x85);
+
+        // ROM nametables are read-only.
+        ppu.write_vram(0x2000, 0xFF);
+        assert_eq!(ppu.read_vram(0x2000), 0x85);
+
+        // Horizontal mirroring selects the two banks by half.
+        ppu.mirroring = Mirroring::Horizontal;
+        assert_eq!(ppu.read_vram(0x2400), 0x85);
+        assert_eq!(ppu.read_vram(0x2800), 0x89);
+
+        // Disabling returns to CIRAM.
+        ppu.set_rom_nametable_banks(None);
+        ppu.write_vram(0x2000, 0x42);
+        assert_eq!(ppu.read_vram(0x2000), 0x42);
     }
 
     #[test]

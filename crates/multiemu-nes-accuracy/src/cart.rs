@@ -54,6 +54,16 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Whether this mapper can drive nametables from CHR ROM.
+    fn has_rom_nametables(&self) -> bool {
+        false
+    }
+
+    /// Two 1 KiB CHR bank indices for ROM nametables, when enabled.
+    fn rom_nametable_banks(&self) -> Option<[u16; 2]> {
+        None
+    }
+
     /// Mapper IRQ output (level).
     fn irq_line(&self) -> bool {
         false
@@ -293,6 +303,18 @@ impl Cartridge {
     #[must_use]
     pub fn chr_banks(&self) -> Option<[u8; 4]> {
         self.mapper.chr_banks()
+    }
+
+    /// Whether the mapper can drive nametables from CHR ROM.
+    #[must_use]
+    pub fn has_rom_nametables(&self) -> bool {
+        self.mapper.has_rom_nametables()
+    }
+
+    /// Two 1 KiB CHR bank indices for ROM nametables, when enabled.
+    #[must_use]
+    pub fn rom_nametable_banks(&self) -> Option<[u16; 2]> {
+        self.mapper.rom_nametable_banks()
     }
 
     /// Battery-backed PRG-RAM contents.
@@ -724,6 +746,27 @@ impl Mapper for Sunsoft4 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.prg_ram
+    }
+
+    fn chr_rom(&self) -> Option<&[u8]> {
+        Some(&self.chr)
+    }
+
+    fn has_rom_nametables(&self) -> bool {
+        true
+    }
+
+    fn rom_nametable_banks(&self) -> Option<[u16; 2]> {
+        if self.rom_nametables {
+            // D7 is not connected and reads as 1, so the nametable banks live
+            // in the upper half of the CHR ROM.
+            Some([
+                0x80 | u16::from(self.nametable_banks[0] & 0x7F),
+                0x80 | u16::from(self.nametable_banks[1] & 0x7F),
+            ])
+        } else {
+            None
+        }
     }
 }
 
@@ -5227,10 +5270,16 @@ pub struct Mmc3_176 {
     irq_reload: bool,
     irq_enabled: bool,
     irq_pending: bool,
+    ram_config: bool,
+    outer_regs: bool,
+    wram_bank: usize,
+    wram_enable: bool,
 }
 
 impl Mmc3_176 {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        // FS005 (submapper 2) exposes 32 KiB of banked WRAM.
+        prg_ram.resize(0x8000, 0);
         Self {
             prg,
             chr,
@@ -5247,6 +5296,35 @@ impl Mmc3_176 {
             irq_reload: false,
             irq_enabled: false,
             irq_pending: false,
+            ram_config: false,
+            outer_regs: true,
+            wram_bank: 0,
+            wram_enable: true,
+        }
+    }
+
+    fn wram_offset(&self, address: u16) -> usize {
+        if self.ram_config {
+            (self.wram_bank * 0x2000 + usize::from(address - 0x6000)) % self.prg_ram.len()
+        } else {
+            usize::from(address - 0x6000) % self.prg_ram.len()
+        }
+    }
+
+    /// $5000-$5FFF read: outer bank registers, or the upper half of WRAM bank 2
+    /// while the FS005 configuration register has them disabled.
+    fn paged_read(&self, address: u16) -> u8 {
+        if self.outer_regs {
+            0
+        } else {
+            self.prg_ram[usize::from(address) % self.prg_ram.len()]
+        }
+    }
+
+    fn paged_write(&mut self, address: u16, value: u8) {
+        if !self.outer_regs {
+            let index = usize::from(address) % self.prg_ram.len();
+            self.prg_ram[index] = value;
         }
     }
 
@@ -5353,7 +5431,13 @@ impl Mmc3_176 {
 impl Mapper for Mmc3_176 {
     fn prg_read(&self, address: u16) -> u8 {
         match address {
-            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
+            0x5000..=0x5FFF => self.paged_read(address),
+            0x6000..=0x7FFF => {
+                if !self.wram_enable {
+                    return 0;
+                }
+                self.prg_ram[self.wram_offset(address)]
+            }
             0x8000..=0xFFFF => {
                 let banks = (self.prg.len() / 0x2000).max(1);
                 let bank = self.prg_bank(address) % banks;
@@ -5365,17 +5449,23 @@ impl Mapper for Mmc3_176 {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         if (0x5000..=0x5FFF).contains(&address) {
-            match address & 0x03 {
-                0 => self.mode = value,
-                1 => self.prg_base = value & 0x7F,
-                2 => self.chr_base = value,
-                _ => {}
+            if self.outer_regs {
+                match address & 0x03 {
+                    0 => self.mode = value,
+                    1 => self.prg_base = value & 0x7F,
+                    2 => self.chr_base = value,
+                    _ => {}
+                }
+            } else {
+                self.paged_write(address, value);
             }
             return;
         }
         if (0x6000..=0x7FFF).contains(&address) {
-            let index = usize::from(address - 0x6000) % self.prg_ram.len();
-            self.prg_ram[index] = value;
+            if self.wram_enable {
+                let index = self.wram_offset(address);
+                self.prg_ram[index] = value;
+            }
             return;
         }
         if address < 0x8000 {
@@ -5398,6 +5488,19 @@ impl Mapper for Mmc3_176 {
                     2 => Mirroring::SingleLower,
                     _ => Mirroring::SingleUpper,
                 };
+            }
+            0xA001 => {
+                // FS005 RAM Configuration Register (bit 5 enables it).
+                if value & 0x20 != 0 {
+                    self.ram_config = true;
+                    self.wram_bank = usize::from(value & 0x03);
+                    self.outer_regs = value & 0x40 != 0;
+                    self.wram_enable = value & 0x80 != 0;
+                } else {
+                    self.ram_config = false;
+                    self.outer_regs = true;
+                    self.wram_enable = true;
+                }
             }
             0xC000 => self.irq_latch = value,
             0xC001 => {
@@ -10478,6 +10581,27 @@ mod tests {
     }
 
     #[test]
+    fn mmc3_176_fs005_ram_config_banks_wram() {
+        let rom = synth_banked(176, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 176);
+
+        // $A001 = $A1: config on, outer registers off, WRAM bank 2 selected.
+        cart.cpu_write(0xA001, 0xA1);
+        cart.cpu_write(0x5000, 0x5A); // lands in WRAM, not the mode register.
+        assert_eq!(cart.cpu_read(0x5000), 0x5A);
+
+        // $A001 = $E2: outer registers on, WRAM bank 2 at $6000-$7FFF.
+        cart.cpu_write(0xA001, 0xE2);
+        assert_eq!(cart.cpu_read(0x7000), 0x5A);
+
+        // $5000 writes the mode register again; WRAM keeps its value.
+        cart.cpu_write(0x5000, 0x03);
+        cart.cpu_write(0xA001, 0xA1);
+        assert_eq!(cart.cpu_read(0x5000), 0x5A);
+    }
+
+    #[test]
     fn sunsoft4_banks_prg_chr_and_mirroring() {
         // 128 KiB PRG (16 x 8 KiB), 64 KiB CHR (64 x 1 KiB).
         let rom = synth_banked(68, 128, 64);
@@ -10509,6 +10633,16 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::SingleLower);
         cart.cpu_write(0xE000, 3);
         assert_eq!(cart.mirroring(), Mirroring::SingleUpper);
+
+        // ROM nametables: $E000.4 selects CHR banks from $C000/$D000. D7 of
+        // each register is unconnected and reads as 1.
+        assert!(cart.has_rom_nametables());
+        assert_eq!(cart.rom_nametable_banks(), None);
+        cart.cpu_write(0xE000, 0x10);
+        assert_eq!(cart.rom_nametable_banks(), Some([0x80, 0x81]));
+        cart.cpu_write(0xC000, 3);
+        cart.cpu_write(0xD000, 5);
+        assert_eq!(cart.rom_nametable_banks(), Some([0x83, 0x85]));
 
         // PRG-RAM is only visible while $F000.4 is set.
         cart.cpu_write(0x6000, 0x5A);

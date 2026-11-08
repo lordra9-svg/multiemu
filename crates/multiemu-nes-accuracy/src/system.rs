@@ -126,6 +126,7 @@ impl System {
         let mirroring = matches!(cart.mirroring(), Mirroring::Vertical);
         let chr_ram = cart.chr_is_ram();
         let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], mirroring, chr_ram);
+        ppu.mirroring = cart.mirroring();
         for address in 0..0x2000u16 {
             ppu.chr[usize::from(address)] = cart.ppu_read(address);
         }
@@ -133,6 +134,11 @@ impl System {
         // keeps the full CHR ROM and drives the latches itself.
         if let (Some(rom), Some(banks)) = (cart.chr_rom(), cart.chr_banks()) {
             ppu.set_mmc2_chr(rom.to_vec(), banks);
+        }
+        if cart.has_rom_nametables() {
+            if let Some(rom) = cart.chr_rom() {
+                ppu.set_rom_nametable_rom(rom.to_vec());
+            }
         }
         let mut system = Self {
             cart,
@@ -329,10 +335,12 @@ impl System {
                 self.ppu.chr[usize::from(address)] = self.cart.ppu_read(address);
             }
         }
-        let mirroring = matches!(self.cart.mirroring(), Mirroring::Vertical);
-        if self.ppu.vertical_mirroring != mirroring {
-            self.ppu.vertical_mirroring = mirroring;
+        let mirroring = self.cart.mirroring();
+        if self.ppu.mirroring != mirroring {
+            self.ppu.mirroring = mirroring;
         }
+        self.ppu
+            .set_rom_nametable_banks(self.cart.rom_nametable_banks());
     }
 
     /// Reads a byte from the CPU address space without side effects.
@@ -990,6 +998,36 @@ mod tests {
         assert!(system.ppu.frames > start, "no frame completed");
         assert_eq!(system.video().len(), 256 * 240 * 4);
         assert!(!system.audio().is_empty(), "no audio produced");
+    }
+
+    #[test]
+    fn sunsoft4_rom_nametables_reach_the_ppu() {
+        let prg_len = 128 * 1024;
+        let chr_len = 64 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8; // 128 KiB PRG.
+        rom[5] = 8; // 64 KiB CHR.
+        rom[6] = 0x40; // Mapper 68 low nibble.
+        rom[7] = 0x40; // Mapper 68 high nibble.
+        for (bank, chunk) in rom[16 + prg_len..].chunks_mut(0x400).enumerate() {
+            chunk.fill(bank as u8);
+        }
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 68);
+        assert!(system.cart.has_rom_nametables());
+
+        system.cart.cpu_write(0xC000, 3);
+        system.cart.cpu_write(0xD000, 5);
+        system.cart.cpu_write(0xE000, 0x10); // ROM nametables, vertical.
+        system.sync_cartridge();
+        assert_eq!(system.ppu.debug_read_vram(0x2000), 3);
+        assert_eq!(system.ppu.debug_read_vram(0x2400), 5);
+
+        system.cart.cpu_write(0xE000, 0x11); // Horizontal.
+        system.sync_cartridge();
+        assert_eq!(system.ppu.debug_read_vram(0x2400), 3);
+        assert_eq!(system.ppu.debug_read_vram(0x2800), 5);
     }
 
     #[test]
