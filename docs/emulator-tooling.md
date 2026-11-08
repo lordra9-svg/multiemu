@@ -121,6 +121,25 @@ refs/mesence    0 uninitialized
 refs/rustynes   0 uninitialized
 ```
 
+## Headless regression commands
+
+`multiemu` carries the scriptable checks used for the audit and for change
+gating:
+
+- `corpus <dir> [--frames N] [--mapper ID] [--skip N] [--limit N]` — smoke
+  audit; reports loaded/rendering/blank/unsupported/failed, ranks unsupported
+  mapper IDs and prints failing titles.
+- `signatures <dir> [--frames N] [--mapper ID] [--check FILE]` — hashes every
+  frame of every image and compares against a local manifest, reporting
+  changed/new/missing titles.
+- `trace <rom> --frames N --out trace.txt` and `diff a.trace b.trace` —
+  per-frame video/audio hashes and the first divergent frame for one image.
+- `run <rom> --dump-ppu` / `--break <hex>` — per-frame CPU/PPU/APU state and a
+  PC breakpoint.
+
+Manifests and traces are local artifacts (they derive from game content) and
+are never committed.
+
 ## Build status summary
 
 | Emulator | Status | Binary |

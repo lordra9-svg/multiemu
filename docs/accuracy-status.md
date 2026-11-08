@@ -286,12 +286,21 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,565 loaded (92.4%), 3,473 rendering (48.9%), 3,092 blank (43.5%), 504
-unsupported (191 mapper IDs, 7.1%) and 32 load/run failures (0.45%). The
-batched totals reproduce the single-pass numbers exactly. Top unsupported
-family is now 68 (Sunsoft-4) at 8 images, then 195/165 (8 each). See
+6,577 loaded (92.6%), 3,503 rendering (49.3%), 3,074 blank (43.3%), 496
+unsupported (7.0%) and 28 load/run failures (0.39%). The batched totals
+reproduce the single-pass numbers exactly. Top unsupported families are now
+195/165 (8 each), then 136/157/159/193/197 (7 each). See
 `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
 implemented-but-blank shortlist.
+
+Since the previous audit, Sunsoft-4 (68) and the VRC2/VRC4 rewrite
+(21/22/23/25) landed and the mapper-173 16 KiB-PRG panic was fixed. Sunsoft-4
+renders 5/8 local images; the VRC family went from 8 rendering / 47 blank to
+34 rendering / 21 blank at the same 20-frame window (39/55 at 600 frames);
+the four formerly-panicking mapper-173 images now render. The VRC `number()`
+also reported every board as mapper 21 — the audit now separates 21/22/23/25.
+A new `multiemu signatures` batch harness records per-frame hashes for
+directory-level regression checks.
 
 MMC2 (9) and MMC4 (10) are implemented, including the two 4 KiB CHR fetch
 latches that switch on tile `$FD`/`$FE` during rendering and the 5-bit bank

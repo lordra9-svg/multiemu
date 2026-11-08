@@ -49,6 +49,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut frames = 30u32;
             let mut limit = usize::MAX;
             let mut skip = 0usize;
+            let mut only_mapper: Option<u16> = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--frames" => {
@@ -72,10 +73,21 @@ fn run() -> Result<(), Box<dyn Error>> {
                             .parse()
                             .map_err(|_| "--skip needs a number")?;
                     }
+                    "--mapper" => {
+                        only_mapper = Some(
+                            args.next()
+                                .ok_or("--mapper needs an id")?
+                                .parse()
+                                .map_err(|_| "--mapper needs an id")?,
+                        );
+                    }
                     other => return Err(format!("unknown option {other}").into()),
                 }
             }
-            let entries = multiemu_rom::scan(Path::new(&dir));
+            let mut entries = multiemu_rom::scan(Path::new(&dir));
+            if let Some(mapper) = only_mapper {
+                entries.retain(|entry| entry.header.is_some_and(|header| header.mapper == mapper));
+            }
             let mut loaded = 0usize;
             let mut rendered = 0usize;
             let mut blank = 0usize;
@@ -87,6 +99,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 std::collections::BTreeMap::new();
             let mut failures: std::collections::BTreeMap<String, usize> =
                 std::collections::BTreeMap::new();
+            let mut panics: Vec<String> = Vec::new();
             let previous_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {}));
             for entry in entries.iter().skip(skip).take(limit) {
@@ -125,9 +138,15 @@ fn run() -> Result<(), Box<dyn Error>> {
                         failed += 1;
                         *failures.entry(err).or_default() += 1;
                     }
-                    Err(_) => {
+                    Err(payload) => {
                         failed += 1;
-                        *failures.entry("panic".into()).or_default() += 1;
+                        let message = payload
+                            .downcast_ref::<&str>()
+                            .map(|text| (*text).to_string())
+                            .or_else(|| payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "panic".into());
+                        *failures.entry(format!("panic: {message}")).or_default() += 1;
+                        panics.push(entry.title.clone());
                     }
                 }
             }
@@ -149,11 +168,144 @@ fn run() -> Result<(), Box<dyn Error>> {
             for (err, count) in failure_ranked.iter().take(20) {
                 println!("failure: {err}: {count}");
             }
+            for title in panics.iter().take(20) {
+                println!("panic input: {title}");
+            }
         }
         "cores" => {
             for registration in registry().cores_for(SystemId::Nes) {
                 let info = registration.info;
                 println!("{:<24} {:<28} {:?}", info.id, info.name, info.accuracy);
+            }
+        }
+        "signatures" => {
+            let dir = args.next().ok_or_else(usage)?;
+            let mut frames = 60u32;
+            let mut limit = usize::MAX;
+            let mut skip = 0usize;
+            let mut only_mapper: Option<u16> = None;
+            let mut check: Option<String> = None;
+            while let Some(flag) = args.next() {
+                match flag.as_str() {
+                    "--frames" => {
+                        frames = args
+                            .next()
+                            .ok_or("--frames needs a number")?
+                            .parse()
+                            .map_err(|_| "--frames needs a number")?;
+                    }
+                    "--limit" => {
+                        limit = args
+                            .next()
+                            .ok_or("--limit needs a number")?
+                            .parse()
+                            .map_err(|_| "--limit needs a number")?;
+                    }
+                    "--skip" => {
+                        skip = args
+                            .next()
+                            .ok_or("--skip needs a number")?
+                            .parse()
+                            .map_err(|_| "--skip needs a number")?;
+                    }
+                    "--mapper" => {
+                        only_mapper = Some(
+                            args.next()
+                                .ok_or("--mapper needs an id")?
+                                .parse()
+                                .map_err(|_| "--mapper needs an id")?,
+                        );
+                    }
+                    "--check" => check = Some(args.next().ok_or("--check needs a file")?),
+                    other => return Err(format!("unknown option {other}").into()),
+                }
+            }
+            let mut entries = multiemu_rom::scan(Path::new(&dir));
+            if let Some(mapper) = only_mapper {
+                entries.retain(|entry| entry.header.is_some_and(|header| header.mapper == mapper));
+            }
+            let mut results: Vec<(String, u16, u64)> = Vec::new();
+            let mut failed = 0usize;
+            let previous_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            for entry in entries.iter().skip(skip).take(limit) {
+                let Ok(rom) = multiemu_rom::load(entry) else {
+                    failed += 1;
+                    continue;
+                };
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut system = multiemu_nes_accuracy::System::from_ines(&rom)
+                        .map_err(|err| err.to_string())?;
+                    let mut hash = FNV_OFFSET;
+                    for _ in 0..frames {
+                        system.run_frame();
+                        hash = fnv1a(hash, system.video());
+                    }
+                    Ok::<_, String>((system.cart.mapper(), hash))
+                }));
+                match result {
+                    Ok(Ok((mapper, hash))) => results.push((entry.title.clone(), mapper, hash)),
+                    _ => failed += 1,
+                }
+            }
+            std::panic::set_hook(previous_hook);
+
+            if let Some(path) = check {
+                let text = fs::read_to_string(&path)?;
+                let mut expected: std::collections::BTreeMap<String, (u16, u64)> =
+                    std::collections::BTreeMap::new();
+                for line in text.lines() {
+                    if line.starts_with('#') {
+                        continue;
+                    }
+                    let mut parts = line.splitn(3, '\t');
+                    let (Some(hash), Some(mapper), Some(title)) =
+                        (parts.next(), parts.next(), parts.next())
+                    else {
+                        continue;
+                    };
+                    let (Ok(hash), Ok(mapper)) =
+                        (u64::from_str_radix(hash, 16), mapper.parse::<u16>())
+                    else {
+                        continue;
+                    };
+                    expected.insert(title.to_string(), (mapper, hash));
+                }
+                let mut changed = 0usize;
+                let mut new = 0usize;
+                for (title, mapper, hash) in &results {
+                    match expected.remove(title) {
+                        Some((old_mapper, old_hash)) => {
+                            if old_mapper != *mapper || old_hash != *hash {
+                                changed += 1;
+                                println!(
+                                    "changed {title}: mapper {old_mapper}/{mapper}, \
+                                     {old_hash:016x} -> {hash:016x}"
+                                );
+                            }
+                        }
+                        None => {
+                            new += 1;
+                            println!("new     {title}");
+                        }
+                    }
+                }
+                for title in expected.keys() {
+                    println!("missing {title}");
+                }
+                println!(
+                    "{} checked, {changed} changed, {new} new, {} missing, {failed} failed",
+                    results.len(),
+                    expected.len()
+                );
+                if changed != 0 || !expected.is_empty() {
+                    return Err("signature check failed".into());
+                }
+            } else {
+                for (title, mapper, hash) in &results {
+                    println!("{hash:016x}\t{mapper}\t{title}");
+                }
+                println!("# {} signatures, {failed} failed", results.len());
             }
         }
         "scan" => {
@@ -502,6 +654,7 @@ fn usage() -> String {
     "usage:
   multiemu info <rom|archive>
   multiemu scan <dir>
+  multiemu signatures <dir> [--frames N] [--mapper ID] [--limit N] [--check FILE]
   multiemu run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID]
   multiemu verify <rom|archive> [frames]
   multiemu trace <rom|archive> [--frames N] [--core ID] [--out trace.txt]

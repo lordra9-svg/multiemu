@@ -21,12 +21,14 @@ The main effort is now the reference-parity accuracy core. Details in
       Jaleco-SS88006/Namco-163/Namco-175-340/Action-53/J.Y.-ASIC/Waixing-FS305/
       Bandai-FCG/TXC/CoolBoy-MMC3-8025/MMC3-215/GTROM/Cony-83/RAMBO-1/VRC6/
       Taito-TC0190-TC0690/X1-005/Irem-G-101/JF-13/multicart latches/partial
-      MMC5, MMC2/MMC4 PPU-latched CHR, the 143 protected NROM and the
-      212/235/286 multicarts, `System` bus, Core ABI adapter and a `corpus`
-      runner. Full-library audit: 6,565/7,101 images load and all 15 MMC2/MMC4
-      images render at 600 frames (`docs/mapper-audit.md`).
+      MMC5, MMC2/MMC4 PPU-latched CHR, Sunsoft-4, a corrected VRC2/VRC4 core
+      (21/22/23/25), the 143 protected NROM and the 212/235/286 multicarts,
+      `System` bus, Core ABI adapter and a `corpus` runner. Full-library audit:
+      6,577/7,101 images load (`docs/mapper-audit.md`); all 15 MMC2/MMC4 images
+      and 39/55 VRC images render at 600 frames.
       Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio,
-      ROM-nametable mappers, and the remaining small ASICs.
+      Sunsoft-4 ROM nametables, ROM-nametable mappers, and the remaining small
+      ASICs.
 - [ ] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
       all 151 rows: **145 pass, 1 fail, 5 DRAW skips, 0 unrun** (146 non-DRAW).
       The single open row is `$2007 Stress Test` (159/170 stable samples); the
@@ -52,8 +54,10 @@ The main effort is now the reference-parity accuracy core. Details in
       Performance pass started: headless accuracy core ~535 -> ~640 fps
       (max-of-7, 2400 frames) via the sprite-list pixel loop, table-driven
       mixer, palette RGB cache and the 8-dot background span; profile shares
-      logged in `docs/accuracy-status.md`. Differential harness and hardware
-      captures still outstanding.
+      logged in `docs/accuracy-status.md`. Single-ROM differential traces
+      (`multiemu trace` / `diff`) and directory-level frame signatures
+      (`multiemu signatures --check`) exist. Hardware captures still
+      outstanding.
 
 ## M0 — core boundary (done)
 
