@@ -992,8 +992,12 @@ tail fetch at dots 337-340 is modelled. The raw `$0500-$0654` array now
 matches the ROM's 170-byte answer key exactly. Two independent references
 confirmed the array: RustyNES's `ppu-misc-2007-stress` sub-test and MesenCE's
 headless `--testRunner` (after installing its shipped `settings.json` and
-passing an absolute ROM path) both match **170/170** stable bytes. ares exposes
-no scriptable RAM or trace interface, so it could not be driven for a capture. The earlier
+passing an absolute ROM path) both match **170/170** stable bytes. ares has a
+GDB remote debug server (`Developer/DebugServerEnabled` / `DebugServerPort`),
+but this headless build never opened a listener with either CLI `--setting`
+overrides or a `settings.bml` enable, and the Famicom system has no GDB hooks;
+its CLI otherwise offers only save-state loading. No ares capture was possible
+in this environment. The earlier
 `wip/ppu-bus` experiment and its 159/170 plateau are superseded.
 
 AccuracyCoin v3.1.0, isolated mode:
