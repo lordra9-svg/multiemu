@@ -990,9 +990,10 @@ background/sprite fetch byte (reads span two dots), the `v` increment is
 deferred while rendering and immediate under forced blank, and the dummy
 tail fetch at dots 337-340 is modelled. The raw `$0500-$0654` array now
 matches the ROM's 170-byte answer key exactly; RustyNES's array (from its
-`ppu-misc-2007-stress` sub-test) was used as an oracle. MesenCE could not be
-driven headless without a display and ares exposes no scriptable RAM/trace
-interface, so RustyNES was the scriptable reference for this pass. The earlier
+`ppu-misc-2007-stress` sub-test) was used as an oracle. MesenCE's
+`--testRunner` path exits 255 in this environment before loading (native
+dependency/display), and ares exposes no scriptable RAM or trace interface, so
+RustyNES was the scriptable reference for this pass. The earlier
 `wip/ppu-bus` experiment and its 159/170 plateau are superseded.
 
 AccuracyCoin v3.1.0, isolated mode:
