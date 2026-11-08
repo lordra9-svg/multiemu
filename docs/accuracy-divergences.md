@@ -26,7 +26,8 @@ None. All non-DRAW AccuracyCoin rows pass.
   immediately under forced blank so DMA dummy reads still advance `v`. The
   dummy tail fetch at dots 337-340 and the first sprite slot's pre-reset
   nametable read are modelled. The raw `$0500-$0654` array matches the test's
-  170-byte answer key exactly.
+  170-byte answer key exactly, cross-checked against both the RustyNES and
+  MesenCE reference arrays.
 
 ## Intentional approximations
 
