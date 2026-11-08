@@ -23,22 +23,22 @@ The main effort is now the reference-parity accuracy core. Details in
       Taito-TC0190-TC0690/X1-005/Irem-G-101/JF-13/multicart latches/partial
       MMC5, MMC2/MMC4 PPU-latched CHR, Sunsoft-4 (including CHR-ROM
       nametables), the MMC3-8025/FS005 protection path (176), a corrected
-      VRC2/VRC4 core (21/22/23/25), full PPU mirroring modes, the 143 protected
-      NROM and the 212/235/286 multicarts, `System` bus, Core ABI adapter and a
-      `corpus` runner. Full-library audit: all 15 MMC2/MMC4 images, 6/8
-      Sunsoft-4 and 39/55 VRC images render at 600 frames; MMC3-8025 reaches
-      80/106 (`docs/mapper-audit.md`).
+      VRC2/VRC4 core (21/22/23/25), Sachen JV001 (136), Bandai LZ93D50 (159),
+      MMC3 512 KiB CHR wiring (197), Waixing FS303 (195) with its `$5000`
+      PRG-RAM, the MMC2/MMC3 hybrid (165), full PPU mirroring modes, the 143
+      protected NROM and the 212/235/286 multicarts, `System` bus, Core ABI
+      adapter and a `corpus` runner. Full-library audit: 6,614/7,101 load,
+      459 unsupported, 0 panics; 136/197 render 7/7, 159/165 7-8/8, 195 6/8
+      (`docs/mapper-audit.md`).
       Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, the
-      136/159/197/195/165/193 families and the Datach peripheral.
-- [ ] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
-      all 151 rows: **145 pass, 1 fail, 5 DRAW skips, 0 unrun** (146 non-DRAW).
-      The single open row is `$2007 Stress Test` (159/170 stable samples); the
-      ROM source, DMA wiki and local references fix its structure but not the
-      last ten samples' `v` evolution during rendering-disabled pre-render
-      dots, so the track is **plateaued at 145/151 by decision** with the
-      159/170 work kept on `wip/ppu-bus`. The open list is
-      `docs/accuracy-divergences.md`; the dated measured log is
-      `docs/accuracy-status.md`.
+      195/165 CHR ROM/RAM latches, mapper 193 and the Datach peripheral.
+- [x] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
+      all 151 rows: **146 pass, 0 fail, 5 DRAW skips, 0 unrun** — every
+      non-DRAW test passes. `$2007 Stress Test` was closed with the PPU data
+      state machine and per-dot fetch-buffer feed (170/170 answer-key bytes;
+      RustyNES used as the oracle). The ledger
+      (`docs/accuracy-divergences.md`) has no open failures and the dated
+      measured log is `docs/accuracy-status.md`.
 - [ ] **A6** FDS, VS, PAL/Dendy, expansion audio, peripherals, NSF.
       Progress: the accuracy core supports a per-port device type and the
       **NES Zapper** (`$4016`/`$4017` bit 4 trigger, bit 3 light, active-low;

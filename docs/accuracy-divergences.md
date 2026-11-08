@@ -6,8 +6,8 @@ ROM). It is required by the accuracy charter in `docs/accuracy.md`. Add a dated
 entry whenever a divergence is found, and remove it only when a test or a
 hardware capture proves the behaviour matches.
 
-Current snapshot: **2026-11-07**, AccuracyCoin v3.1.0, isolated battery
-**145/151 passed, 1 failed, 5 skipped, 0 unrun**.
+Current snapshot: **2026-11-08**, AccuracyCoin v3.1.0, isolated battery
+**146/151 passed, 0 failed, 5 skipped, 0 unrun**.
 
 The five skipped rows are the `DRAW` tests, which need a human-drawn reference
 image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
@@ -15,9 +15,18 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 
 ## Open failures
 
-| Suite | Test | CLI code | Failing sub-test | Divergence |
-|---|---|---|---|---|
-| PPU Misc. | `$2007` Stress Test | 5 | ErrorCode 2 | The `$2007` read buffer during a visible scanline does not match per dot. Feeding fetch reads into the buffer exposes attribute/pattern values, but the sequence is misaligned; the full three-cycle PPU data state machine and shared octal latch are needed. |
+None. All non-DRAW AccuracyCoin rows pass.
+
+## Recently closed (2026-11-08)
+
+- **`$2007` Stress Test.** The PPU data state machine now loads the read buffer
+  four dots after a `$2007` read, from the per-dot background/sprite fetch byte
+  (each VRAM read spans two dots). The `v` increment is deferred while
+  rendering is enabled so the fetch pipeline is not disturbed, and applied
+  immediately under forced blank so DMA dummy reads still advance `v`. The
+  dummy tail fetch at dots 337-340 and the first sprite slot's pre-reset
+  nametable read are modelled. The raw `$0500-$0654` array matches the test's
+  170-byte answer key exactly.
 
 ## Intentional approximations
 

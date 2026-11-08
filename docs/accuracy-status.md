@@ -982,26 +982,26 @@ sprite tests are unchanged. Measured ~630 → ~640 fps max-of-7 on the loaded
 desktop (small but positive; the span only applies on sprite-free background
 lines).
 
-**Plateau decision (2026-11-07):** the accuracy track is held at **145/151**.
-The only open failure is `PPU Misc. | $2007 Stress Test`; its last 10 stable
-samples depend on the PPU `v` evolution during rendering-disabled pre-render
-dots, which cannot be derived from the ROM source or the available references.
-The 159/170 work (2-dot ALE/read bus, octal latch + feedback, `$2007` state
-machine, sprite bus reads) is preserved on the local `wip/ppu-bus` branch
-(`a6f34b9`) for a future pass; `main` remains at `74a35b6`. Performance work is
-now the active track.
-
+**A5 gate met (2026-11-08):** the isolated battery is at **146/151 passed,
+0 failed, 5 skipped, 0 unrun** — every non-DRAW test passes. The former
+`$2007 Stress Test` failure was fixed with the PPU data state machine:
+the read buffer is loaded four dots after a `$2007` read from the per-dot
+background/sprite fetch byte (reads span two dots), the `v` increment is
+deferred while rendering and immediate under forced blank, and the dummy
+tail fetch at dots 337-340 is modelled. The raw `$0500-$0654` array now
+matches the ROM's 170-byte answer key exactly; RustyNES's array (from its
+`ppu-misc-2007-stress` sub-test) was used as an oracle. The earlier
+`wip/ppu-bus` experiment and its 159/170 plateau are superseded.
 
 AccuracyCoin v3.1.0, isolated mode:
 
 ```text
-AccuracyCoin: 145/151 passed, 1 failed, 5 skipped, 0 unrun (199320 frames)
+AccuracyCoin: 146/151 passed, 0 failed, 5 skipped, 0 unrun (199320 frames)
 ```
 
 All A1–A3 public suites remain green: `nestest` 0 diff, `instr_timing`,
 `instr_basics`, `vbl_nmi` 12/12, `ppu_sprites` 19/19, and all 13 blargg
-APU/DMC ROMs. The remaining open failure is catalogued with its failing
-sub-tests and suspected causes in `docs/accuracy-divergences.md`.
+APU/DMC ROMs. `docs/accuracy-divergences.md` now has no open failures.
 
 ### 2026-11-07 — DMC/OAM carry trailing cycle
 

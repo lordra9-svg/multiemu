@@ -82,6 +82,16 @@ pub struct Ppu {
     pub write_latch: bool,
     /// Read buffer for $2007.
     pub read_buffer: u8,
+    /// PPU data state-machine countdown (0 = idle).
+    data_read: u8,
+    /// `v` captured when the `$2007` access started.
+    data_read_address: u16,
+    /// Rendering state captured at the `$2007` access.
+    data_read_render: bool,
+    /// Byte most recently read by a background/sprite fetch.
+    fetch_byte: u8,
+    /// Dots the current fetch byte stays on the bus (reads span two dots).
+    fetch_hold: u8,
     /// PPU I/O bus latch: the last value written to a PPU register.
     pub io_bus: u8,
     /// Dots since the I/O bus was last driven; bits decay to zero.
@@ -243,6 +253,11 @@ impl Ppu {
             fine_x: 0,
             write_latch: false,
             read_buffer: 0,
+            data_read: 0,
+            data_read_address: 0,
+            data_read_render: false,
+            fetch_byte: 0,
+            fetch_hold: 0,
             io_bus: 0,
             io_bus_age: 0,
             scanline: 0,
@@ -455,8 +470,31 @@ impl Ppu {
                 self.fetch_addr = self.fetch_addr.wrapping_add(1);
             }
             let slot = ((self.dot - 257) / 8) as usize;
-            if (self.dot - 257) % 8 == 4 {
-                self.latch_sprite(slot);
+            let k = (self.dot - 257) % 8;
+            match k {
+                0 => {
+                    // The first sprite slot's dummy nametable read still sees
+                    // the line-end `v` plus its pending coarse-X step, before
+                    // dot 257's horizontal reset.
+                    let pending = if self.dot == 257 { 1 } else { 0 };
+                    self.fetch_byte =
+                        self.read_vram(0x2000 | (self.v.wrapping_add(pending) & 0x0FFF));
+                    self.fetch_hold = 2;
+                }
+                2 => {
+                    self.fetch_byte = self.read_vram(0x2000 | (self.v.wrapping_sub(1) & 0x0FFF));
+                    self.fetch_hold = 2;
+                }
+                4 => {
+                    self.latch_sprite(slot);
+                    self.fetch_byte = self.spr_lo[slot];
+                    self.fetch_hold = 2;
+                }
+                6 => {
+                    self.fetch_byte = self.spr_hi[slot];
+                    self.fetch_hold = 2;
+                }
+                _ => {}
             }
         }
         if matches!(self.dot, 63 | 255 | 339) && self.mask & 0x18 != 0 {
@@ -533,6 +571,13 @@ impl Ppu {
             self.shift_background();
             self.fetch_background(self.dot);
             self.load_background(self.dot);
+        } else if rendered_line && rendering && (337..=340).contains(&self.dot) {
+            // Dummy fetch: two nametable reads; the attribute slot reads the
+            // nametable as well on hardware.
+            if self.dot & 1 == 1 {
+                self.fetch_byte = self.read_vram(0x2000 | (self.v & 0x0FFF));
+                self.fetch_hold = 2;
+            }
         }
 
         // Live VRAM address updates for background fetches. These only happen
@@ -568,6 +613,21 @@ impl Ppu {
             self.nmi_suppressed = false;
             self.vblank_suppressed = false;
         }
+
+        if self.data_read > 0 {
+            self.data_read -= 1;
+            if self.data_read == 0 {
+                self.read_buffer = if self.data_read_render && self.fetch_hold > 0 {
+                    self.fetch_byte
+                } else {
+                    self.read_vram(self.data_read_address & 0x2FFF)
+                };
+                if self.data_read_render {
+                    self.increment_vram_address(true);
+                }
+            }
+        }
+        self.fetch_hold = self.fetch_hold.saturating_sub(1);
 
         self.dot += 1;
         // The pre-render line is one dot shorter on odd frames when rendering
@@ -660,6 +720,11 @@ impl Ppu {
                     self.ale_countdown = Some(0);
                 }
                 let address = self.v & 0x3FFF;
+                self.data_read_address = address;
+                self.data_read_render = (self.scanline < 240
+                    || self.scanline == self.pre_render_line())
+                    && self.mask & 0x18 != 0;
+                self.data_read = 4;
                 let value = if address >= 0x3F00 {
                     let mut palette = self.read_palette(address) & 0x3F;
                     if self.mask & 0x01 != 0 {
@@ -669,13 +734,16 @@ impl Ppu {
                     self.read_buffer = self.read_vram(address & 0x2FFF);
                     palette | (self.io_bus & 0xC0)
                 } else {
-                    let buffered = self.read_buffer;
-                    self.read_buffer = self.read_vram(address);
-                    buffered
+                    self.read_buffer
                 };
                 self.io_bus = value;
                 self.io_bus_age = 0;
-                self.increment_vram_address();
+                if !self.data_read_render {
+                    // Forced blank: nothing else is using `v`, so the increment
+                    // can land at the read. During rendering it is deferred so
+                    // the still-running fetch pipeline is not disturbed.
+                    self.increment_vram_address(false);
+                }
                 value
             }
             _ => self.io_bus,
@@ -771,7 +839,9 @@ impl Ppu {
                 }
                 let address = self.v & 0x3FFF;
                 self.write_vram(address, value);
-                self.increment_vram_address();
+                let render = (self.scanline < 240 || self.scanline == self.pre_render_line())
+                    && self.mask & 0x18 != 0;
+                self.increment_vram_address(render);
             }
             _ => {}
         }
@@ -821,9 +891,8 @@ impl Ppu {
 
     /// Increments `v` after a `$2007` access. During rendering this performs a
     /// coarse-X and Y increment simultaneously instead of the normal +1/+32.
-    fn increment_vram_address(&mut self) {
-        if (self.scanline < 240 || self.scanline == self.pre_render_line()) && self.mask & 0x18 != 0
-        {
+    fn increment_vram_address(&mut self, render_glitch: bool) {
+        if render_glitch {
             let mut v = self.v;
             if v & 0x001F == 31 {
                 v &= !0x001F;
@@ -1388,12 +1457,16 @@ impl Ppu {
                 };
                 self.last_fetch_low = address as u8;
                 self.nt_byte = self.read_vram(address);
+                self.fetch_byte = self.nt_byte;
+                self.fetch_hold = 2;
             }
             3 => {
                 let address =
                     0x23C0 | (self.v & 0x0C00) | ((self.v >> 4) & 0x38) | ((self.v >> 2) & 0x07);
                 self.last_fetch_low = address as u8;
                 self.at_byte = self.read_vram(address);
+                self.fetch_byte = self.at_byte;
+                self.fetch_hold = 2;
             }
             5 => {
                 let address = self.pattern_address(self.nt_byte, false);
@@ -1406,20 +1479,27 @@ impl Ppu {
                     }
                     None => false,
                 };
+                let clean = self.chr_byte(address);
                 if corrupt {
                     self.ale_countdown = None;
                     let bus_address = (address & 0xFF00) | 0x00FF;
                     self.pat_lo = self.chr_byte(bus_address);
                 } else {
-                    self.pat_lo = self.chr_byte(address);
+                    self.pat_lo = clean;
                 }
                 self.note_chr_fetch(address);
+                // The `$2007` state-machine buffer sees the clean plane byte
+                // even when the rendering fetch collides with the ALE.
+                self.fetch_byte = clean;
+                self.fetch_hold = 2;
             }
             7 => {
                 let address = self.pattern_address(self.nt_byte, true);
                 self.last_fetch_low = address as u8;
                 self.pat_hi = self.chr_byte(address);
                 self.note_chr_fetch(address);
+                self.fetch_byte = self.pat_hi;
+                self.fetch_hold = 2;
             }
             _ => {}
         }

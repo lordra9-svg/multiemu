@@ -129,16 +129,22 @@ impl Cartridge {
         }
         let prg_rom = bytes[offset..prg_end].to_vec();
         let chr = bytes[prg_end..chr_end].to_vec();
-        let chr_is_ram = header.chr_size == 0;
+        // Mapper 195/165 mix CHR-ROM and CHR-RAM on the board. Start with a
+        // writable 8 KiB window so the games can upload their own tiles; the
+        // ROM bank half of the hybrid is a follow-up.
+        let chr_is_ram = header.chr_size == 0 || matches!(header.mapper, 165 | 195);
         let chr = if chr_is_ram {
-            vec![
-                0;
-                match header.mapper {
-                    13 => 0x4000,
-                    28 => 0x8000,
-                    _ => 0x2000,
-                }
-            ]
+            let size = match header.mapper {
+                13 => 0x4000,
+                28 => 0x8000,
+                _ => 0x2000,
+            };
+            // Start the writable window from the ROM image where one exists
+            // (hybrid mappers 165/195); plain CHR-RAM carts have none.
+            let mut ram = vec![0; size];
+            let keep = chr.len().min(size);
+            ram[..keep].copy_from_slice(&chr[..keep]);
+            ram
         } else {
             chr
         };
@@ -152,6 +158,10 @@ impl Cartridge {
             9 => Box::new(Mmc2::new(prg_rom, chr, prg_ram, header, 9)),
             10 => Box::new(Mmc2::new(prg_rom, chr, prg_ram, header, 10)),
             68 => Box::new(Sunsoft4::new(prg_rom, chr, prg_ram, header)),
+            136 => Box::new(Sachen136::new(prg_rom, chr, header)),
+            197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
+            195 => Box::new(Waixing195::new(prg_rom, chr, header)),
+            165 => Box::new(Mmc3::new_as(prg_rom, chr, header, 165)),
             45 => Box::new(Mmc3::new_as(prg_rom, chr, header, 45)),
             116 => Box::new(Mmc3::new_as(prg_rom, chr, header, 116)),
             118 => Box::new(Mmc3::new_txsrom(prg_rom, chr, header)),
@@ -173,7 +183,8 @@ impl Cartridge {
             226 => Box::new(Multicart226::new(prg_rom, chr, header)),
             240 => Box::new(Gnrom240::new(prg_rom, chr, prg_ram, header)),
             178 => Box::new(Fs305::new(prg_rom, chr, prg_ram, header)),
-            16 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header)),
+            16 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 16)),
+            159 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 159)),
             112 => Box::new(Txc112::new(prg_rom, chr, header)),
             235 => Box::new(Multicart235::new(prg_rom, chr, header)),
             241 => Box::new(BxRomWram::new(prg_rom, chr, prg_ram, header)),
@@ -767,6 +778,283 @@ impl Mapper for Sunsoft4 {
         } else {
             None
         }
+    }
+}
+
+/// Waixing FS303 (mapper 195): MMC3 plus 4 KiB of PRG-RAM at `$5000-$5FFF`.
+///
+/// The CHR side mixes ROM and RAM banks under a latch written through the
+/// PPU; the accuracy core currently exposes a writable 8 KiB CHR window, which
+/// covers the games that upload their tiles. The ROM half is a follow-up.
+#[derive(Debug)]
+pub struct Waixing195 {
+    inner: Mmc3,
+    ram4k: [u8; 0x1000],
+}
+
+impl Waixing195 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 195),
+            ram4k: [0; 0x1000],
+        }
+    }
+}
+
+impl Mapper for Waixing195 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if (0x5000..=0x5FFF).contains(&address) {
+            return self.ram4k[usize::from(address - 0x5000)];
+        }
+        self.inner.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x5000..=0x5FFF).contains(&address) {
+            self.ram4k[usize::from(address - 0x5000)] = value;
+            return;
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        195
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        self.inner.prg_ram()
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// MMC3 clone with 512 KiB CHR wiring (mapper 197).
+///
+/// PRG, mirroring and IRQ are plain MMC3; the CHR address lines are shifted so
+/// the MMC3's 1 KiB banks become 2/4 KiB ROM banks. Each submapper wires the
+/// register selectors differently.
+#[derive(Debug)]
+pub struct Mmc3_197 {
+    inner: Mmc3,
+    sub: u8,
+}
+
+impl Mmc3_197 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        let sub = if header.submapper <= 2 {
+            header.submapper
+        } else {
+            0
+        };
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 197),
+            sub,
+        }
+    }
+
+    /// MMC3 1 KiB register value for a real PPU 1 KiB slot.
+    fn mmc3_bank(&self, slot: usize) -> usize {
+        let d = &self.inner.bank_data;
+        let bank = match (self.sub, slot) {
+            (0, 0..=1) => d[0] & 0xFE,
+            (0, 2..=3) => (d[0] & 0xFE) | 1,
+            (0, 4..=5) => d[2],
+            (0, _) => d[3],
+            (1, 0..=3) => d[1] & 0xFE,
+            (1, 4..=5) => d[4],
+            (1, _) => d[5],
+            (2, 0..=1) => d[0] & 0xFE,
+            (2, 2..=3) => d[1] | 1,
+            (2, 4..=5) => d[2],
+            (2, _) => d[5],
+            _ => 0,
+        };
+        usize::from(bank)
+    }
+
+    fn chr_offset(&self, address: u16) -> usize {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let bank = ((self.mmc3_bank(slot) << 1) | (slot & 1)) % banks;
+        bank * 0x400 + usize::from(address & 0x3FF)
+    }
+}
+
+impl Mapper for Mmc3_197 {
+    fn prg_read(&self, address: u16) -> u8 {
+        self.inner.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner
+            .chr
+            .get(self.chr_offset(address))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let offset = self.chr_offset(address);
+        if let Some(byte) = self.inner.chr.get_mut(offset) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        197
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        self.inner.prg_ram()
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// Sachen 3011 / JV001 (mapper 136): a six-bit latch with an adder and
+/// inverter, used for copy protection and CHR/PRG banking.
+///
+/// `$4100-$4103` are the latch interface; writing `$8000-$FFFF` latches the
+/// register to the output. CHR uses an 8 KiB bank from output bits 0-2 and PRG
+/// a 32 KiB bank from output bit 4.
+#[derive(Debug)]
+pub struct Sachen136 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    input: u8,
+    register: u8,
+    output: u8,
+    mode: bool,
+    invert: bool,
+    mirroring: Mirroring,
+}
+
+impl Sachen136 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            input: 0,
+            register: 0,
+            output: 0,
+            mode: false,
+            invert: false,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Sachen136 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address & 0xE100 == 0x4100 {
+            return if self.invert {
+                self.register ^ 0x30
+            } else {
+                self.register
+            };
+        }
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        let bank = usize::from((self.output >> 4) & 0x01) % banks;
+        self.prg
+            .get(bank * 0x8000 + usize::from(address & 0x7FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address & 0xE100 == 0x4100 {
+            match address & 0x0003 {
+                0 => {
+                    if self.mode {
+                        self.register =
+                            (self.register & 0x30) | (self.register.wrapping_add(1) & 0x0F);
+                    } else {
+                        let low = if self.invert {
+                            (self.input & 0x0F) ^ 0x0F
+                        } else {
+                            self.input & 0x0F
+                        };
+                        self.register = (self.input & 0x30) | low;
+                    }
+                }
+                1 => self.invert = value & 1 != 0,
+                2 => self.input = value & 0x3F,
+                _ => self.mode = value & 1 != 0,
+            }
+            return;
+        }
+        if address >= 0x8000 {
+            self.output = self.register;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.output & 0x07) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.output & 0x07) % banks;
+        let index = bank * 0x2000 + usize::from(address & 0x1FFF);
+        if let Some(byte) = self.chr.get_mut(index) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        136
     }
 }
 
@@ -4159,6 +4447,7 @@ pub struct BandaiFcg {
     prg_ram: Vec<u8>,
     chr_banks: [u8; 8],
     prg_bank: u8,
+    number: u16,
     irq_latch: u16,
     irq_counter: u16,
     irq_enabled: bool,
@@ -4167,13 +4456,14 @@ pub struct BandaiFcg {
 }
 
 impl BandaiFcg {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header, number: u16) -> Self {
         Self {
             prg,
             chr,
             prg_ram,
             chr_banks: [0; 8],
             prg_bank: 0,
+            number,
             irq_latch: 0,
             irq_counter: 0,
             irq_enabled: false,
@@ -4269,7 +4559,7 @@ impl Mapper for BandaiFcg {
     }
 
     fn number(&self) -> u16 {
-        16
+        self.number
     }
 
     fn prg_ram(&self) -> &[u8] {
@@ -10599,6 +10889,82 @@ mod tests {
         cart.cpu_write(0x5000, 0x03);
         cart.cpu_write(0xA001, 0xA1);
         assert_eq!(cart.cpu_read(0x5000), 0x5A);
+    }
+
+    #[test]
+    fn bandai_fcg_159_reports_mapper_and_banks() {
+        let rom = synth_banked(159, 64, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 159);
+        cart.cpu_write(0x8008, 3);
+        assert_eq!(cart.cpu_read(0x8000), 6);
+        cart.cpu_write(0x8000, 2);
+        assert_eq!(cart.ppu_read(0x0000), 0x82);
+    }
+
+    #[test]
+    fn hybrid_chr_mappers_get_a_writable_window() {
+        for mapper in [165, 195] {
+            let rom = synth_banked(mapper, 64, 64);
+            let cart = Cartridge::from_ines(&rom).expect("cart");
+            assert_eq!(cart.mapper(), mapper);
+            assert!(cart.chr_is_ram());
+        }
+    }
+
+    #[test]
+    fn mmc3_197_shifted_chr_wiring() {
+        let rom = synth_banked(197, 64, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 197);
+
+        // Reg 0 = $0C -> 4 KiB ROM bank 24 at PPU $0000-$0FFF.
+        cart.cpu_write(0x8000, 0);
+        cart.cpu_write(0x8001, 0x0C);
+        assert_eq!(cart.ppu_read(0x0000), 0x98);
+        assert_eq!(cart.ppu_read(0x0400), 0x99);
+        assert_eq!(cart.ppu_read(0x0C00), 0x9B);
+
+        // Reg 2 = 5 -> 2 KiB bank 10 at $1000; reg 3 = 7 -> bank 14 at $1800.
+        cart.cpu_write(0x8000, 2);
+        cart.cpu_write(0x8001, 5);
+        assert_eq!(cart.ppu_read(0x1000), 0x8A);
+        assert_eq!(cart.ppu_read(0x1400), 0x8B);
+        cart.cpu_write(0x8000, 3);
+        cart.cpu_write(0x8001, 7);
+        assert_eq!(cart.ppu_read(0x1800), 0x8E);
+        assert_eq!(cart.ppu_read(0x1C00), 0x8F);
+    }
+
+    #[test]
+    fn sachen136_latches_output_and_inverts() {
+        let rom = synth_banked(136, 64, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 136);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+
+        // Input $13 -> register -> output: CHR bank 3, PRG bank 1.
+        cart.cpu_write(0x4102, 0x13);
+        cart.cpu_write(0x4100, 0);
+        cart.cpu_write(0x8000, 0);
+        assert_eq!(cart.cpu_read(0x4100), 0x13);
+        assert_eq!(cart.ppu_read(0x0000), 0x98);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+
+        // Invert flips the read-side high bits and the write-side low nibble.
+        cart.cpu_write(0x4101, 1);
+        assert_eq!(cart.cpu_read(0x4100), 0x23);
+        cart.cpu_write(0x4100, 0);
+        assert_eq!(cart.cpu_read(0x4100), 0x2C);
+        cart.cpu_write(0x4101, 0);
+        cart.cpu_write(0x4102, 0x13);
+        cart.cpu_write(0x4100, 0);
+
+        // Mode 1 increments bits 0-3 only.
+        cart.cpu_write(0x4103, 1);
+        cart.cpu_write(0x4100, 0);
+        assert_eq!(cart.cpu_read(0x4100), 0x14);
     }
 
     #[test]

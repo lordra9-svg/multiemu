@@ -18,7 +18,7 @@ The scan is split into 2,000-entry batches, or filtered with `--mapper`:
 
 ```
 multiemu corpus <library-dir> --frames 20 --skip <n> --limit 2000
-multiemu corpus <library-dir> --mapper 68 --frames 600
+multiemu corpus <library-dir> --mapper 136 --frames 600
 ```
 
 ## Totals
@@ -26,76 +26,72 @@ multiemu corpus <library-dir> --mapper 68 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 6,577 | 92.6% |
-| Rendering | 3,550 | 50.0% |
-| Blank | 3,027 | 42.6% |
-| Unsupported mapper | 496 | 7.0% |
+| Loaded (mapper implemented) | 6,614 | 93.1% |
+| Rendering | 3,544 | 49.9% |
+| Blank | 3,070 | 43.2% |
+| Unsupported mapper | 459 | 6.5% |
 | Load/run failure | 28 | 0.39% |
 
-The batched totals reproduce the single-pass numbers exactly, so batching adds
-no skew. Since the previous audit: Sunsoft-4 gained CHR-ROM nametables, the
-PPU gained all five mirroring modes, and the MMC3-8025/FS005 path was fixed.
-Rendering rose 3,503 → 3,550 and blank fell 3,074 → 3,027 at the same 20-frame
-window; unsupported (496) and failures (28) are unchanged, with no panics.
+Batched totals reproduce the single-pass numbers exactly. Since the previous
+audit, mappers 136 (Sachen JV001), 159 (Bandai LZ93D50/EEPROM), 197
+(MMC3 512 KiB CHR wiring), 195 (Waixing FS303) and 165 (MMC2/MMC3 hybrid) were
+added, and the `$2007` PPU data state machine was corrected. Loaded rose
+6,577 → 6,614 and unsupported fell 496 → 459.
 
-`rendering` is a smoke signal, not a compatibility claim: a game that needs
-input, plays a static screen, or boots to a solid colour can read as blank, and
-a rendered frame can still be visually wrong. The 20-frame window is
-deliberately short; several families need hundreds of frames to leave their
-boot screen (MMC2 Punch-Out!!, Sunsoft-4, Nanjing 163, Sunsoft FME-7).
+`rendering` is a smoke signal, not a compatibility claim. The 20-frame window
+is deliberately short; several families need hundreds of frames to leave their
+boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
 
-## Recent mapper and PPU work
+## Mapper and PPU work
 
 - **MMC2/MMC4 (9/10)** — 8/16 KiB PRG banking, four CHR registers and the
-  `$FD`/`$FE` fetch latches driven by the PPU mid-frame. All 15 local images
+  `$FD`/`$FE` fetch latches driven by the PPU mid-frame. 15/15 local images
   render at 600 frames.
 - **Sunsoft-4 (68)** — 2 KiB CHR banks, 16 KiB switchable PRG, WRAM enable,
-  `$E000` mirroring and **CHR-ROM nametables** (`$C000`/`$D000` banks, with the
-  PPU mapping `$2000-$2FFF` through them). 6/8 local images render; the two
-  remaining blanks are the combined Nantettatte!! Baseball dumps, which need
-  the external cassette/sub-cartridge.
-- **PPU mirroring** — the PPU now models all five modes (vertical,
-  horizontal, single-lower, single-upper, four-screen) instead of a single
-  vertical flag, with 4 KiB of CIRAM. This also improved VRC one-screen
-  layouts and AxROM.
-- **MMC3-8025 (176)** — the FS005 (NES 2.0 submapper 2) RAM configuration is
-  implemented: 32 KiB banked WRAM, `$A001` configuration/protection, the
-  `$5000-$5FFF` window switching between outer registers and WRAM bank 2, and
-  WRAM enable. *Fujia Sanguo* now boots and renders; the family went from
-  10 rendering / 96 blank to **80 rendering / 26 blank** at 600 frames.
-- **VRC2/VRC4 (21/22/23/25)** — rewritten with the correct fixed PRG layout
-  (`$C000` second-to-last, `$E000` last), eight 1 KiB CHR register pairs,
-  per-board address-line decoding, VRC4 swap/WRAM mode and a CPU-cycle IRQ.
-  At the same 20-frame window the family went from 8 rendering / 47 blank to
-  34 rendering / 21 blank, and at 600 frames 39/55 render. The old
-  `number()` also reported every VRC board as mapper 21; they are now
-  reported separately.
-- **Mapper 173 panic** — 32 KiB-window mappers indexed past a 16 KiB PRG
-  buffer (`len 16384, index 32764`). The index now wraps, covering the four
-  images that previously panicked; they render.
-- **PPU backdrop** — the backdrop double-indirected the palette, so
-  backdrop-only screens used palette entry 1's colour. Fixed and covered by
-  `backdrop_uses_palette_index_zero_not_double_indirection`.
+  `$E000` mirroring and CHR-ROM nametables. 6/8 images render; the two blanks
+  are combined Nantettatte!! Baseball cassette dumps.
+- **MMC3-8025 (176)** — FS005 submapper-2 RAM configuration/protection,
+  32 KiB banked WRAM and the `$5000-$5FFF` outer-register window. 80/106
+  images render at 600 frames.
+- **VRC2/VRC4 (21/22/23/25)** — corrected fixed PRG banks, eight 1 KiB CHR
+  register pairs, per-board address decoding, swap/WRAM mode and CPU-cycle
+  IRQ. 39/55 images render at 600 frames.
+- **Sachen JV001 (136)** — six-bit latch with adder/inverter; CHR from output
+  bits 0-2, 32 KiB PRG from bit 4. **7/7** images render at 60 frames.
+- **Bandai LZ93D50 (159)** — mapper 16 register set with the 128-byte EEPROM
+  window; **7/7** render at 600 frames (EEPROM persistence is a follow-up).
+- **MMC3 512 KiB CHR (197)** — per-submapper CHR wiring translates the MMC3's
+  1 KiB banks into 2/4 KiB ROM banks; **7/7** render at 60 frames.
+- **Waixing FS303 (195)** — MMC3 plus 4 KiB PRG-RAM at `$5000` and a CHR window
+  initialized from the ROM image; 6/8 render at 600 frames. The two blanks
+  need the CHR ROM/RAM latch written through the PPU.
+- **Hybrid MMC2/MMC3 (165)** — dispatched with a writable 8 KiB CHR window;
+  8/8 render at 600 frames. The MMC2-style CHR latches and 4 KiB CHR-RAM page
+  are not modelled yet, so tiles may differ.
+- **PPU** — the backdrop no longer double-indirects the palette; all five
+  mirroring modes are modelled with 4 KiB CIRAM; the `$2007` read buffer is
+  fed by the per-dot background/sprite fetch with a four-dot data state
+  machine (see `docs/accuracy-divergences.md`).
 
 ## Implemented mappers by volume
 
-84 mapper IDs loaded at least one image. Sorted by total images.
+95 mapper IDs loaded at least one image. Sorted by total images.
 
 | Mapper | Rendering | Blank | Total | Render% |
 |---:|---:|---:|---:|---:|
-| 4 | 604 | 721 | 1325 | 46% |
-| 0 | 857 | 208 | 1065 | 80% |
-| 1 | 568 | 488 | 1056 | 54% |
+| 4 | 596 | 729 | 1325 | 45% |
+| 0 | 843 | 222 | 1065 | 79% |
+| 1 | 567 | 489 | 1056 | 54% |
 | 2 | 356 | 287 | 643 | 55% |
 | 30 | 128 | 239 | 367 | 35% |
-| 3 | 236 | 109 | 345 | 68% |
-| 176 | 10 | 96 | 106 | 9% |
+| 3 | 231 | 114 | 345 | 67% |
+| 176 | 39 | 67 | 106 | 37% |
 | 206 | 60 | 34 | 94 | 64% |
-| 7 | 44 | 44 | 88 | 50% |
-| 79 | 58 | 26 | 84 | 69% |
+| 7 | 51 | 37 | 88 | 58% |
+| 79 | 56 | 28 | 84 | 67% |
 | 268 | 18 | 57 | 75 | 24% |
 | 163 | 0 | 71 | 71 | 0% |
-| 11 | 27 | 43 | 70 | 39% |
+| 11 | 28 | 42 | 70 | 40% |
 | 224 | 6 | 52 | 58 | 10% |
 | 90 | 25 | 22 | 47 | 53% |
 | 71 | 9 | 33 | 42 | 21% |
@@ -105,17 +101,17 @@ boot screen (MMC2 Punch-Out!!, Sunsoft-4, Nanjing 163, Sunsoft FME-7).
 | 28 | 11 | 24 | 35 | 31% |
 | 19 | 14 | 20 | 34 | 41% |
 | 34 | 23 | 10 | 33 | 70% |
-| 23 | 18 | 12 | 30 | 60% |
+| 23 | 24 | 6 | 30 | 80% |
 | 66 | 16 | 10 | 26 | 62% |
 | 69 | 6 | 20 | 26 | 23% |
 | 148 | 26 | 0 | 26 | 100% |
 | 18 | 9 | 12 | 21 | 43% |
-| 87 | 13 | 8 | 21 | 62% |
+| 87 | 15 | 6 | 21 | 71% |
 | 215 | 4 | 17 | 21 | 19% |
 | 91 | 4 | 16 | 20 | 20% |
 | 121 | 0 | 20 | 20 | 0% |
 | 241 | 10 | 9 | 19 | 53% |
-| 16 | 3 | 15 | 18 | 17% |
+| 16 | 4 | 14 | 18 | 22% |
 | 25 | 9 | 9 | 18 | 50% |
 | 141 | 18 | 0 | 18 | 100% |
 | 83 | 12 | 5 | 17 | 71% |
@@ -156,13 +152,18 @@ boot screen (MMC2 Punch-Out!!, Sunsoft-4, Nanjing 163, Sunsoft FME-7).
 | 226 | 6 | 3 | 9 | 67% |
 | 32 | 4 | 4 | 8 | 50% |
 | 48 | 2 | 6 | 8 | 25% |
-| 68 | 0 | 8 | 8 | 0% |
+| 68 | 3 | 5 | 8 | 38% |
 | 113 | 8 | 0 | 8 | 100% |
 | 139 | 6 | 2 | 8 | 75% |
 | 142 | 0 | 8 | 8 | 0% |
 | 152 | 6 | 2 | 8 | 75% |
+| 165 | 5 | 3 | 8 | 62% |
+| 195 | 3 | 5 | 8 | 38% |
 | 235 | 0 | 8 | 8 | 0% |
 | 240 | 3 | 5 | 8 | 38% |
+| 136 | 7 | 0 | 7 | 100% |
+| 159 | 2 | 5 | 7 | 29% |
+| 197 | 5 | 2 | 7 | 71% |
 | 212 | 5 | 2 | 7 | 71% |
 | 10 | 2 | 3 | 5 | 40% |
 | 21 | 5 | 0 | 5 | 100% |
@@ -174,93 +175,24 @@ boot screen (MMC2 Punch-Out!!, Sunsoft-4, Nanjing 163, Sunsoft FME-7).
 | 158 | 1 | 0 | 1 | 100% |
 | 207 | 0 | 1 | 1 | 0% |
 
-The core nodes are healthy where volume is highest: NROM (80%), CNROM (68%),
-UxROM (55%), MMC1 (54%) and MMC3 (47%). MMC3's blank share is the largest
-absolute block, consistent with titles waiting on input, but it remains the
-first place to look for timing/IRQ regressions.
-
-Rows at 0% in the 20-frame window (163, 178, 121, 185, 112, 42, 162, 235, 138,
-26, 207) load and run without errors. Some simply need a longer boot window
-(mapper 163 renders at 600 frames); a sampled mapper 176 and mapper 21 title
-render in a reference emulator while staying blank here, which is a
-mapper/PPU follow-up rather than a window problem. Use
-`multiemu signatures <dir> --frames 600 --check <manifest>` to separate the
-two across a whole mapper.
-
-## Unsupported-family triage
-
-The top remaining IDs were inspected by header and title:
-
-| Mapper | Images | What it is | Effort |
-|---:|---:|---|---|
-| 195 | 8 | Waixing boards (FS303 and siblings), 256–512 KiB PRG, CHR-ROM/RAM mixing | real family; medium |
-| 165 | 8 | Waixing *Shenghuo Huizhang* series | real family; medium |
-| 136 | 7 | Sachen SA-002/3011-class boards, 32 KiB PRG/CHR | real family; small |
-| 157 | 7 | Datach Joint ROM System (barcode reader peripheral) | blocked on peripheral |
-| 159 | 7 | Bandai LZ93D50 + EEPROM (Dragon Ball Z, SD Gundam) | real family; small/medium |
-| 193 | 7 | Fighting Hero / War in the Gulf board | real family; medium |
-| 197 | 7 | MMC3-derived 512 KiB CHR boards (Fighter V) | real family; small |
-
-None are iNES-to-NES-2.0 aliases of an implemented mapper; each would be a new
-hardware model. The smallest next wins are **136**, **159** and **197**.
+The core nodes are healthy where volume is highest: NROM (79%), CNROM (68%),
+UxROM (55%), MMC1 (54%) and MMC3 (46%).
 
 ## Unsupported mappers
 
-496 images (7.0%) name a mapper with no implementation. The table lists the
-top 25; the printed ranked list is capped at 80 IDs and covers 342 of the 496.
-Five-image tail: 256, 332, 40, 515, 551, 70, 74, 117, 123, 140, 149, 192, 228, 250, 263, 264, 313, 355, 446, 519, 529, 547, 552, 57, 594, 93, 144, 147, 15, 188, 194, 198, 208, 246, 284, 29, 31, 394, 396, 534, 65, 67, 72, 78, 103, 107, 12, 120, 125, 134, 137, 14, 145, 155, 169.
+459 images (6.5%) name a mapper with no implementation. The printed ranked
+list is capped at 80 IDs and covers 315 of the 459. Top families: **157
+(Datach, needs the barcode peripheral)**, **193 (Fighting Hero)** and a tail of
+six-image boards (156/164/168/172/199/216/222/234/249/253/27/60/85/303).
 
-| Mapper | Images | Family (where known) |
-|---:|---:|---|
-| 165 | 8 | — |
-| 195 | 8 | — |
-| 136 | 7 | — |
-| 157 | 7 | — |
-| 159 | 7 | — |
-| 193 | 7 | — |
-| 197 | 7 | — |
-| 156 | 6 | — |
-| 164 | 6 | — |
-| 168 | 6 | — |
-| 172 | 6 | — |
-| 199 | 6 | — |
-| 216 | 6 | — |
-| 222 | 6 | — |
-| 234 | 6 | — |
-| 249 | 6 | — |
-| 253 | 6 | — |
-| 27 | 6 | — |
-| 303 | 6 | — |
-| 60 | 6 | — |
-| 85 | 6 | — |
-| 119 | 5 | — |
-| 133 | 5 | — |
-| 187 | 5 | — |
-| 225 | 5 | — |
-
-Priority for the next mapper work, by volume:
-
-1. **Mappers 195/165 (8 each)** then **136/157/159/193/197 (7 each)** — check
-   whether these are iNES-header assignment quirks (NES 2.0 submapper or
-   database aliases) before writing new hardware models.
-2. **Sunsoft-4 ROM nametables** — three remaining Sunsoft-4 images use CHR ROM
-   as nametables; the mapper records the mode but the PPU still renders CIRAM.
-3. The NES 2.0 high-bit aliases (**521/522/266**) around the MMC2/MMC4 family
-   are header variants, not new hardware; they are left unsupported
-   deliberately rather than guessed at.
+The remaining work is a set of real hardware models, not header aliases. The
+largest reusable next steps are the FDS/VS boards and the expansion-audio
+mappers; the small ASICs need individual documentation.
 
 ## Load/run failures
 
-| Count | Cause |
-|---:|---|
-| 20 | image truncated: expected 40,976 bytes, got 16,400 |
-| 4 | image truncated: expected 172,048 bytes, got 49,168 |
-| 3 | image truncated: expected 32,784 bytes, got 8,208 |
-| 1 | image truncated: expected 81,936 bytes, got 18,448 |
-
-All remaining failures are containers whose declared PRG+CHR size exceeds the
-payload — an archive/ROM extraction issue, not an emulation issue. The four
-mapper-173 panics are gone.
+All 28 remaining failures are truncated containers (declared PRG+CHR exceeds
+the payload), not emulation issues. The four mapper-173 panics remain fixed.
 
 ## Regression tooling
 
@@ -268,14 +200,8 @@ mapper-173 panics are gone.
   video/audio hashes and the final state.
 - `multiemu diff <a.trace> <b.trace>` reports the first divergent frame.
 - `multiemu signatures <dir> [--frames N] [--mapper ID] [--check file]`
-  hashes every frame of every ROM in a directory and compares against a
-  manifest, reporting changed/new/missing titles. Manifests are local-only
-  (they derive from game content and are never committed).
+  hashes every frame of every ROM in a directory and compares a manifest.
+- `cargo run -p multiemu-nes-accuracy --example dump2007` dumps the `$2007`
+  stress test's raw `$0500-$0654` array for answer-key comparison.
 
-## Follow-ups
-
-- Add Sunsoft-4 ROM-nametable support in the PPU (three images).
-- Investigate the sampled mapper 176/21 titles that render in a reference
-  emulator but stay blank here.
-- Re-run the full audit at 600 frames for the always-blank shortlist; the
-  20-frame window cannot distinguish a slow boot from a broken mapper.
+Manifests and traces are local-only and are never committed.

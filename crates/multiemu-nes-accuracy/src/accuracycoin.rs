@@ -183,6 +183,58 @@ pub fn run_accuracycoin(
     report
 }
 
+/// Boots a fresh console, navigates to `entry`, starts it, and returns the
+/// machine after `test_frames` frames. Intended for debug tooling that needs
+/// the test's own scratch RAM.
+#[must_use]
+pub fn run_accuracycoin_one(
+    rom: &[u8],
+    entry: &CatalogEntry,
+    boot_frames: u32,
+    test_frames: u32,
+) -> Option<System> {
+    let mut system = System::from_ines(rom).ok()?;
+    for _ in 0..boot_frames {
+        system.set_controller(0, 0);
+        system.run_frame();
+    }
+    // Closed-loop navigation using the ROM's own cursor variables.
+    // $14 = page index, $16 = row (0 = page header, 1.. = tests).
+    for _ in 0..8 {
+        if system.read_ram(0x16) == 0 {
+            break;
+        }
+        press(&mut system, UP, 1);
+    }
+    for _ in 0..80 {
+        let current = usize::from(system.read_ram(0x14));
+        if current == entry.page {
+            break;
+        }
+        press(
+            &mut system,
+            if current < entry.page { RIGHT } else { LEFT },
+            1,
+        );
+    }
+    for _ in 0..24 {
+        // $16 = $FF is the page header; the first test is row 0.
+        let raw = system.read_ram(0x16);
+        let cursor = if raw == 0xFF { -1i32 } else { i32::from(raw) };
+        let target = entry.row as i32;
+        if cursor == target {
+            break;
+        }
+        press(&mut system, if cursor < target { DOWN } else { UP }, 1);
+    }
+    press(&mut system, A, 1);
+    for _ in 0..test_frames {
+        system.set_controller(0, 0);
+        system.run_frame();
+    }
+    Some(system)
+}
+
 /// Runs every catalog row in isolation.
 ///
 /// The full-battery loop can lose its place when a failing test corrupts the
@@ -199,47 +251,9 @@ pub fn run_accuracycoin_isolated(
 ) -> AccuracyCoinReport {
     let mut report = AccuracyCoinReport::default();
     for entry in entries {
-        let Ok(mut system) = System::from_ines(rom) else {
+        let Some(system) = run_accuracycoin_one(rom, entry, boot_frames, test_frames) else {
             continue;
         };
-        for _ in 0..boot_frames {
-            system.set_controller(0, 0);
-            system.run_frame();
-        }
-        // Closed-loop navigation using the ROM's own cursor variables.
-        // $14 = page index, $16 = row (0 = page header, 1.. = tests).
-        for _ in 0..8 {
-            if system.read_ram(0x16) == 0 {
-                break;
-            }
-            press(&mut system, UP, 1);
-        }
-        for _ in 0..80 {
-            let current = usize::from(system.read_ram(0x14));
-            if current == entry.page {
-                break;
-            }
-            press(
-                &mut system,
-                if current < entry.page { RIGHT } else { LEFT },
-                1,
-            );
-        }
-        for _ in 0..24 {
-            // $16 = $FF is the page header; the first test is row 0.
-            let raw = system.read_ram(0x16);
-            let cursor = if raw == 0xFF { -1i32 } else { i32::from(raw) };
-            let target = entry.row as i32;
-            if cursor == target {
-                break;
-            }
-            press(&mut system, if cursor < target { DOWN } else { UP }, 1);
-        }
-        press(&mut system, A, 1);
-        for _ in 0..test_frames {
-            system.set_controller(0, 0);
-            system.run_frame();
-        }
         report.frames += boot_frames + test_frames;
 
         let value = if entry.address < 0x0400 {
