@@ -27,8 +27,8 @@ multiemu corpus <library-dir> --mapper 136 --frames 600
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
 | Loaded (mapper implemented) | 6,614 | 93.1% |
-| Rendering | 3,544 | 49.9% |
-| Blank | 3,070 | 43.2% |
+| Rendering | 3,546 | 49.9% |
+| Blank | 3,068 | 43.2% |
 | Unsupported mapper | 459 | 6.5% |
 | Load/run failure | 28 | 0.39% |
 
@@ -65,9 +65,11 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
 - **Waixing FS303 (195)** — MMC3 plus 4 KiB PRG-RAM at `$5000`, and a shared
   hybrid CHR map: PPU `$2007` writes are forwarded to the mapper, the CHR-RAM
   window is addressed raw, and the CHRB value written through CHR bank numbers
-  adds the remapped ROM-bank ranges. 6/8 render at 600 frames; the two
-  remaining images (Tianshen Zhi Jian, Tiexue Lianmeng) crash into a CPU loop
-  at `$F433` before enabling rendering, which is a separate CPU/PRG issue.
+  adds the remapped ROM-bank ranges. The System bus now exposes the mapper's
+  `$5000-$5FFF` PRG-RAM window to the CPU, which was the last piece: the
+  protection code these games copy there executed as open-bus zeroes before.
+  **8/8 render**; Tiexue Lianmeng sits on a black title screen at 600 frames
+  without input and renders as soon as Start is pressed.
 - **Hybrid MMC2/MMC3 (165)** — 4 KiB CHR pages selected by the MMC2-style
   latches (page 0 is CHR-RAM), toggled by `$FD`/`$FE` pattern fetches and by
   `$2007` reads. The PPU reads and writes through the shared map. 8/8 render at
@@ -162,7 +164,7 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
 | 142 | 0 | 8 | 8 | 0% |
 | 152 | 6 | 2 | 8 | 75% |
 | 165 | 5 | 3 | 8 | 62% |
-| 195 | 3 | 5 | 8 | 38% |
+| 195 | 5 | 3 | 8 | 63% |
 | 235 | 0 | 8 | 8 | 0% |
 | 240 | 3 | 5 | 8 | 38% |
 | 136 | 7 | 0 | 7 | 100% |

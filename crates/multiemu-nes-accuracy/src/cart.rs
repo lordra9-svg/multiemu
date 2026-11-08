@@ -271,6 +271,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Cartridge-backed CPU window inside `$4020-$5FFF` (PRG-RAM boards).
+    fn low_window(&self) -> Option<(u16, u16)> {
+        None
+    }
+
     /// Mapper IRQ output (level).
     fn irq_line(&self) -> bool {
         false
@@ -542,6 +547,12 @@ impl Cartridge {
     #[must_use]
     pub fn hybrid_chr(&self) -> Option<Rc<RefCell<HybridChr>>> {
         self.mapper.hybrid_chr()
+    }
+
+    /// Cartridge-backed CPU window inside `$4020-$5FFF`.
+    #[must_use]
+    pub fn low_window(&self) -> Option<(u16, u16)> {
+        self.mapper.low_window()
     }
 
     /// Battery-backed PRG-RAM contents.
@@ -1055,6 +1066,10 @@ impl Mapper for Waixing195 {
 
     fn hybrid_chr(&self) -> Option<Rc<RefCell<HybridChr>>> {
         self.inner.hybrid_chr()
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
     }
 
     fn irq_line(&self) -> bool {
@@ -1787,6 +1802,9 @@ impl Mapper for Mmc3 {
         match address & 0xE001 {
             0x8000 => {
                 self.select = value;
+                if std::env::var("PRGLOG").is_ok() && self.mapper == 195 {
+                    eprintln!("select={value:02X}");
+                }
                 if let Some(hybrid) = &self.hybrid {
                     hybrid.borrow_mut().update_regs(self.select, self.bank_data);
                 }
@@ -1794,6 +1812,9 @@ impl Mapper for Mmc3 {
             0x8001 => {
                 let index = usize::from(self.select & 0x07);
                 self.bank_data[index] = value;
+                if std::env::var("PRGLOG").is_ok() && self.mapper == 195 {
+                    eprintln!("bank[{index}]={value:02X}");
+                }
                 if let Some(hybrid) = &self.hybrid {
                     hybrid.borrow_mut().update_regs(self.select, self.bank_data);
                 }

@@ -838,6 +838,13 @@ impl CpuBus for System {
                     let value = self.cart.cpu_read(address);
                     self.cart.acknowledge_irq();
                     value
+                } else if self
+                    .cart
+                    .low_window()
+                    .is_some_and(|(lo, hi)| (lo..=hi).contains(&address))
+                {
+                    // A mapper PRG-RAM board (e.g. Waixing FS303 at $5000).
+                    self.cart.cpu_read(address)
                 } else {
                     drives_bus = false;
                     self.open_bus
@@ -1001,6 +1008,23 @@ mod tests {
         assert!(system.ppu.frames > start, "no frame completed");
         assert_eq!(system.video().len(), 256 * 240 * 4);
         assert!(!system.audio().is_empty(), "no audio produced");
+    }
+
+    #[test]
+    fn waixing195_low_ram_is_cpu_visible() {
+        let prg_len = 128 * 1024;
+        let chr_len = 64 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 8;
+        rom[6] = 0x30; // Mapper 195 low nibble 3.
+        rom[7] = 0xC0; // Mapper 195 high nibble 12.
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 195);
+        assert_eq!(system.cart.low_window(), Some((0x5000, 0x5FFF)));
+        CpuBus::write(&mut system, 0x5B00, 0xEA);
+        assert_eq!(CpuBus::read(&mut system, 0x5B00), 0xEA);
     }
 
     #[test]
