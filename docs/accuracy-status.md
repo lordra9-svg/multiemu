@@ -877,6 +877,27 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 
 ## Current status (2026-11-07)
 
+### Performance track (started 2026-11-07)
+
+Baseline for the accuracy core, headless (`multiemu run <rom> --frames 1200
+--core multiemu-nes-accuracy` on AccuracyCoin, release build): **~535 fps**
+(about 9x real-time). The default `multiemu-nes` core runs at ~1200 fps, so the
+accuracy core has clear headroom.
+
+Profiling by subsystem (temporary A/B builds): the per-pixel background/sprite
+composition was ~27% of frame time, the APU mixer ~4%, and the rest is the
+CPU/PPU/APU dot loop.
+
+First optimization: the pixel composition looped over all eight sprite slots
+every pixel. It now keeps a per-line bitmask of the slots that hold a sprite
+(`spr_active`, rebuilt at dot 0) and walks only those with
+`trailing_zeros`/`clear-lowest`, with the win/lose pick kept in plain locals
+instead of an `Option`. The shift-register advance and counter semantics are
+unchanged (the sprite-mask-off case still shifts the registers).
+
+Measured effect (5 runs, 1200 frames): **~535 → ~620-640 fps (+16-18%)**. All
+A1-A3 suites and the isolated AccuracyCoin battery are unchanged.
+
 **Plateau decision (2026-11-07):** the accuracy track is held at **145/151**.
 The only open failure is `PPU Misc. | $2007 Stress Test`; its last 10 stable
 samples depend on the PPU `v` evolution during rendering-disabled pre-render

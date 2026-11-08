@@ -144,6 +144,8 @@ pub struct Ppu {
     pat_hi: u8,
     /// Latched sprite state for the next scanline.
     spr_id: [u8; 8],
+    /// Bitmask of sprite slots holding a sprite for the current line.
+    spr_active: u8,
     spr_x: [u8; 8],
     spr_counting: [bool; 8],
     spr_lo: [u8; 8],
@@ -245,6 +247,7 @@ impl Ppu {
             pat_lo: 0,
             pat_hi: 0,
             spr_id: [64; 8],
+            spr_active: 0,
             spr_x: [0; 8],
             spr_counting: [false; 8],
             spr_lo: [0; 8],
@@ -295,6 +298,13 @@ impl Ppu {
         // Secondary OAM is filled from the previous line's evaluation at the
         // start of the line.
         if self.dot == 0 {
+            let mut mask = 0u8;
+            for slot in 0..8 {
+                if self.spr_id[slot] != 64 {
+                    mask |= 1 << slot;
+                }
+            }
+            self.spr_active = mask;
             self.sprites = self.next_sprites;
             self.sprite_count = self.next_count;
             if self.scanline < 240 || self.scanline == 261 {
@@ -1266,11 +1276,14 @@ impl Ppu {
         }
         let mut color_index = bg;
         let rendering = self.mask & 0x18 != 0;
-        let mut picked: Option<(u8, u8)> = None;
-        for slot in 0..8 {
-            if self.spr_id[slot] == 64 {
-                continue;
-            }
+        let mut picked_bit = 0u8;
+        let mut picked_attr = 0u8;
+        let mut picked = false;
+        let sprite_mask_on = self.mask & 0x10 != 0 && !(x < 8 && self.mask & 0x04 == 0);
+        let mut slots = self.spr_active;
+        while slots != 0 {
+            let slot = slots.trailing_zeros() as usize;
+            slots &= slots - 1;
             if self.spr_x[slot] == 0 {
                 self.spr_counting[slot] = false;
             }
@@ -1284,20 +1297,22 @@ impl Ppu {
             let sbit = ((self.spr_lo[slot] >> 7) & 1) | (((self.spr_hi[slot] >> 7) & 1) << 1);
             self.spr_lo[slot] <<= 1;
             self.spr_hi[slot] <<= 1;
-            if self.mask & 0x10 == 0 || (x < 8 && self.mask & 0x04 == 0) || sbit == 0 {
+            if !sprite_mask_on || sbit == 0 {
                 continue;
             }
-            if picked.is_none() {
-                picked = Some((sbit, self.spr_attr[slot]));
+            if !picked {
+                picked = true;
+                picked_bit = sbit;
+                picked_attr = self.spr_attr[slot];
                 if self.spr_id[slot] == 0 && bg != 0 && x != 255 {
                     self.status |= STATUS_SPRITE0;
                 }
             }
         }
-        if let Some((sbit, attr)) = picked {
-            let behind = attr & 0x20 != 0;
+        if picked {
+            let behind = picked_attr & 0x20 != 0;
             if bg == 0 || !behind {
-                color_index = 0x10 + (attr & 0x03) * 4 + sbit;
+                color_index = 0x10 + (picked_attr & 0x03) * 4 + picked_bit;
             }
         }
         if color_index == 0 {

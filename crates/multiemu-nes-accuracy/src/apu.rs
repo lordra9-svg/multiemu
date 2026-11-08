@@ -29,6 +29,38 @@ const DMC_PERIODS: [u16; 16] = [
     428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54,
 ];
 
+/// Mixer output for each possible pulse sum (0..=30).
+const PULSE_MIX: [f32; 31] = {
+    let mut table = [0.0f32; 31];
+    let mut i = 0;
+    while i < 31 {
+        let pulse = i as f32;
+        table[i] = if pulse > 0.0 {
+            95.88 / (8128.0 / pulse + 100.0)
+        } else {
+            0.0
+        };
+        i += 1;
+    }
+    table
+};
+
+/// Mixer output for each possible triangle+noise+DMC sum (0..=157).
+const TND_MIX: [f32; 158] = {
+    let mut table = [0.0f32; 158];
+    let mut i = 0;
+    while i < 158 {
+        let tnd = i as f32;
+        table[i] = if tnd > 0.0 {
+            159.79 / (1.0 / (tnd / 8227.0) + 100.0)
+        } else {
+            0.0
+        };
+        i += 1;
+    }
+    table
+};
+
 /// One pulse channel.
 #[derive(Debug, Clone, Default)]
 pub struct Pulse {
@@ -1023,19 +1055,14 @@ impl Apu {
     /// Mixed output in the range `0..~100`.
     #[must_use]
     pub fn mix(&self) -> f32 {
+        // Exact lookup of the two non-linear mixer curves; the sums are
+        // integer-valued channel outputs so the tables reproduce the formula
+        // bit-for-bit without the per-cycle divisions.
         let pulse = self.pulse1.output() + self.pulse2.output();
         let tnd = self.triangle.output() + self.noise.output() + self.dmc.output();
-        let pulse_out = if pulse > 0.0 {
-            95.88 / (8128.0 / pulse + 100.0)
-        } else {
-            0.0
-        };
-        let tnd_out = if tnd > 0.0 {
-            159.79 / (1.0 / (tnd / 8227.0) + 100.0)
-        } else {
-            0.0
-        };
-        pulse_out + tnd_out
+        let pulse_index = (pulse as usize).min(PULSE_MIX.len() - 1);
+        let tnd_index = (tnd as usize).min(TND_MIX.len() - 1);
+        PULSE_MIX[pulse_index] + TND_MIX[tnd_index]
     }
 
     /// Current frame-counter position `(step, cycle)`.
