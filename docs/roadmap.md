@@ -27,15 +27,25 @@ The main effort is now the reference-parity accuracy core. Details in
       Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, MMC2/MMC4
       PPU-latched CHR, ROM-nametable mappers, and the remaining small ASICs.
 - [ ] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
-      all 151 rows: **139 pass, 7 fail, 5 DRAW skips, 0 unrun** (146 non-DRAW).
-      All A1–A3 public suites remain green. Remaining clusters: DMA/abort timing
-      (`DMA + $2002 Read`, `DMC DMA + OAM DMA`, `Explicit DMA Abort`,
-      `DMA Landing on Write`), NMI/BRK hijack, the `$2007` read buffer, and the
-      scanline-0 stale-sprite path. The open list is
+      all 151 rows: **145 pass, 1 fail, 5 DRAW skips, 0 unrun** (146 non-DRAW).
+      The single open row is `$2007 Stress Test` (159/170 stable samples); the
+      ROM source, DMA wiki and local references fix its structure but not the
+      last ten samples' `v` evolution during rendering-disabled pre-render
+      dots, so the track is **plateaued at 145/151 by decision** with the
+      159/170 work kept on `wip/ppu-bus`. The open list is
       `docs/accuracy-divergences.md`; the dated measured log is
       `docs/accuracy-status.md`.
 - [ ] **A6** FDS, VS, PAL/Dendy, expansion audio, peripherals, NSF.
+      Needs external artifacts (FDS BIOS, PAL/Dendy captures, a peripheral
+      test ROM) that are not in this workspace; implementable headless pieces
+      are PAL/Dendy timing tables and NSF parsing, verifiable only by unit
+      tests here.
 - [ ] **A7** differential harness, hardware captures, performance pass.
+      Performance pass started: headless accuracy core ~535 -> ~640 fps
+      (max-of-7, 2400 frames) via the sprite-list pixel loop, table-driven
+      mixer, palette RGB cache and the 8-dot background span; profile shares
+      logged in `docs/accuracy-status.md`. Differential harness and hardware
+      captures still outstanding.
 
 ## M0 — core boundary (done)
 
@@ -66,8 +76,9 @@ The main effort is now the reference-parity accuracy core. Details in
 - [ ] Frame advance, fast-forward and rewind ring in the host.
 - [x] CLI regression mode: hash frames/audio, fresh-run vs state-resume, assert
       byte-identical tails (`multiemu verify`).
-- [ ] Test-ROM harness: `nestest`, blargg CPU/PPU/APU, `ppu_vbl_nmi`, MMC3 A12,
-      and any freely licensed suites. Record pass counts in `docs/accuracy-status.md`.
+- [x] Test-ROM harness: `nestest`, blargg CPU/PPU/APU, `ppu_vbl_nmi`, MMC3 A12,
+      and the AccuracyCoin isolated battery. Pass counts are recorded in
+      `docs/accuracy-status.md`; the suites run in `crates/multiemu-nes-accuracy/tests/`.
 - [ ] Mapper audit against a licensed ROM library: log unsupported mapper IDs and
       boot failures; rank the gaps by prevalence.
 
