@@ -426,6 +426,25 @@ impl Ppu {
         self.chr_byte(address)
     }
 
+    /// Test-only framebuffer pixel hook.
+    #[cfg(test)]
+    pub(crate) fn debug_pixel(&self, x: usize, y: usize) -> [u8; 4] {
+        let i = (y * 256 + x) * 4;
+        [
+            self.frame[i],
+            self.frame[i + 1],
+            self.frame[i + 2],
+            self.frame[i + 3],
+        ]
+    }
+
+    /// Test-only expanded palette hook.
+    #[cfg(test)]
+    pub(crate) fn debug_palette(&self, index: usize) -> [u8; 4] {
+        let [r, g, b] = self.palette_rgb[index];
+        [r, g, b, 255]
+    }
+
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
         if let Some(aux) = &self.mmc5_aux {
@@ -1506,8 +1525,21 @@ impl Ppu {
         self.bg_attr_hi <<= 1;
     }
 
+    /// Background fetch-group index for a dot on a rendered line.
+    ///
+    /// Groups 0-31 are the visible tiles; 32-33 are the two prefetched tiles
+    /// that are displayed at the start of the next line.
+    fn background_group(dot: u16) -> u16 {
+        if dot <= 256 {
+            dot.saturating_sub(1) / 8
+        } else {
+            32 + dot.saturating_sub(321) / 8
+        }
+    }
+
     /// Fetches one byte of the current background tile.
     fn fetch_background(&mut self, dot: u16) {
+        let group = Self::background_group(dot);
         match dot & 7 {
             1 => {
                 let full = 0x2000 | (self.v & 0x0FFF);
@@ -1518,7 +1550,11 @@ impl Ppu {
                     full
                 };
                 self.last_fetch_low = address as u8;
-                self.nt_byte = self.read_vram(address);
+                self.nt_byte = self
+                    .mmc5_aux
+                    .as_ref()
+                    .and_then(|aux| aux.borrow().split_tile(group, self.scanline))
+                    .unwrap_or_else(|| self.read_vram(address));
                 self.fetch_byte = self.nt_byte;
                 self.fetch_hold = 2;
             }
@@ -1526,12 +1562,17 @@ impl Ppu {
                 let address =
                     0x23C0 | (self.v & 0x0C00) | ((self.v >> 4) & 0x38) | ((self.v >> 2) & 0x07);
                 self.last_fetch_low = address as u8;
-                self.at_byte = self.read_vram(address);
+                self.at_byte = self
+                    .mmc5_aux
+                    .as_ref()
+                    .and_then(|aux| aux.borrow().split_attr(group, self.scanline))
+                    .unwrap_or_else(|| self.read_vram(address));
                 self.fetch_byte = self.at_byte;
                 self.fetch_hold = 2;
             }
             5 => {
-                let address = self.pattern_address(self.nt_byte, false);
+                let split = self.split_pattern_address(group, false);
+                let address = split.unwrap_or_else(|| self.pattern_address(self.nt_byte, false));
                 self.last_fetch_low = address as u8;
                 let corrupt = match self.ale_countdown {
                     Some(0) => true,
@@ -1541,11 +1582,19 @@ impl Ppu {
                     }
                     None => false,
                 };
-                let clean = self.chr_byte(address);
+                let clean = if split.is_some() {
+                    self.split_chr_byte(address)
+                } else {
+                    self.chr_byte(address)
+                };
                 if corrupt {
                     self.ale_countdown = None;
                     let bus_address = (address & 0xFF00) | 0x00FF;
-                    self.pat_lo = self.chr_byte(bus_address);
+                    self.pat_lo = if split.is_some() {
+                        self.split_chr_byte(bus_address)
+                    } else {
+                        self.chr_byte(bus_address)
+                    };
                 } else {
                     self.pat_lo = clean;
                 }
@@ -1556,14 +1605,37 @@ impl Ppu {
                 self.fetch_hold = 2;
             }
             7 => {
-                let address = self.pattern_address(self.nt_byte, true);
+                let split = self.split_pattern_address(group, true);
+                let address = split.unwrap_or_else(|| self.pattern_address(self.nt_byte, true));
                 self.last_fetch_low = address as u8;
-                self.pat_hi = self.chr_byte(address);
+                self.pat_hi = if split.is_some() {
+                    self.split_chr_byte(address)
+                } else {
+                    self.chr_byte(address)
+                };
                 self.note_chr_fetch(address);
                 self.fetch_byte = self.pat_hi;
                 self.fetch_hold = 2;
             }
             _ => {}
+        }
+    }
+
+    /// CHR address for a pattern fetch, using the split bank/fine Y when the
+    /// current fetch group is inside the split region.
+    fn split_pattern_address(&self, group: u16, high: bool) -> Option<u16> {
+        self.mmc5_aux.as_ref().and_then(|aux| {
+            aux.borrow()
+                .split_pattern(group, self.scanline, self.nt_byte, high)
+        })
+    }
+
+    /// CHR byte for a split fetch, where `address` is already the physical
+    /// (banked) CHR address rather than a PPU-space address.
+    fn split_chr_byte(&self, address: u16) -> u8 {
+        match &self.mmc5_aux {
+            Some(aux) => aux.borrow().chr_physical(address, &self.chr),
+            None => self.chr_byte(address),
         }
     }
 
@@ -1582,8 +1654,13 @@ impl Ppu {
         }
         self.bg_lo = (self.bg_lo & 0xFF00) | u16::from(self.pat_lo);
         self.bg_hi = (self.bg_hi & 0xFF00) | u16::from(self.pat_hi);
+        let group = Self::background_group(dot);
+        let split_attr = self
+            .mmc5_aux
+            .as_ref()
+            .and_then(|aux| aux.borrow().split_attr_field(group, self.scanline));
         let shift = ((self.v >> 4) & 4) | (self.v & 2);
-        let attr = (self.at_byte >> shift) & 0x03;
+        let attr = split_attr.unwrap_or_else(|| (self.at_byte >> shift) & 0x03);
         let low: u8 = if attr & 1 != 0 { 0xFF } else { 0 };
         let high: u8 = if attr & 2 != 0 { 0xFF } else { 0 };
         self.bg_attr_lo = (self.bg_attr_lo & 0xFF00) | u16::from(low);

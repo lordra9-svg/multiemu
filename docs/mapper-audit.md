@@ -89,8 +89,10 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   ExRAM-backed nametables (modes 2/3) and fill mode are rendered, and the
   1 KiB CHR bank map is consulted per fetch so mid-frame `$5120` writes take
   effect (plain CIRAM nametables keep the working vertical/horizontal
-  approximation). 12/37 render at 20 frames, 16/37 at 600. Still missing:
-  split-screen and extended attributes, accurate per-page CIRAM mapping, and
+  approximation). Vertical split-screen (`$5200-$5202`) substitutes ExRAM
+  nametable/attribute data and the `$5202` 4 KiB CHR bank per fetch group, with
+  the split fine Y driving CHR A0-A2. 12/37 render at 20 frames, 17/37 at 600.
+  Still missing: extended attributes, accurate per-page CIRAM mapping, and
   expansion audio.
 - **PPU** — the backdrop no longer double-indirects the palette; all five
   mirroring modes are modelled with 4 KiB CIRAM; the `$2007` read buffer is

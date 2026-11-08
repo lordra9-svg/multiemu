@@ -40,6 +40,11 @@ pub struct Mmc5Aux {
     rom: Vec<u8>,
     ram: bool,
     slots: [u16; 8],
+    split_enabled: bool,
+    split_right: bool,
+    split_threshold: u8,
+    split_scroll: u8,
+    split_bank: u8,
 }
 
 impl Mmc5Aux {
@@ -53,6 +58,11 @@ impl Mmc5Aux {
             rom,
             ram,
             slots: [0, 1, 2, 3, 4, 5, 6, 7],
+            split_enabled: false,
+            split_right: false,
+            split_threshold: 0,
+            split_scroll: 0,
+            split_bank: 0,
         }
     }
 
@@ -65,6 +75,81 @@ impl Mmc5Aux {
 
     fn set_slots(&mut self, slots: [u16; 8]) {
         self.slots = slots;
+    }
+
+    fn set_split(&mut self, enabled: bool, right: bool, threshold: u8, scroll: u8, bank: u8) {
+        self.split_enabled = enabled;
+        self.split_right = right;
+        self.split_threshold = threshold;
+        self.split_scroll = scroll;
+        self.split_bank = bank;
+    }
+
+    /// Split-screen column for a background fetch-group index, if the group
+    /// belongs to the split region.
+    ///
+    /// Left splits are left-aligned (column = group); right splits are
+    /// right-aligned over the 34 fetch groups, so column = group - 2.
+    fn split_column(&self, group: u16) -> Option<u16> {
+        if !self.split_enabled || self.mode > 1 {
+            return None;
+        }
+        let threshold = u16::from(self.split_threshold);
+        if self.split_right {
+            (group >= threshold).then(|| group.wrapping_sub(2) & 0x1F)
+        } else {
+            (group < threshold).then_some(group & 0x1F)
+        }
+    }
+
+    /// (row, column, fine Y) inside the split ExRAM nametable.
+    fn split_position(&self, group: u16, scanline: u16) -> Option<(usize, u16, u8)> {
+        let column = self.split_column(group)?;
+        // The pre-render line prefetches the first two tiles of line 0.
+        let y = if scanline >= 240 { 0 } else { scanline };
+        let total = u16::from(self.split_scroll) + y;
+        let row = usize::from((total >> 3) % 30);
+        let fine_y = (total & 7) as u8;
+        Some((row, column, fine_y))
+    }
+
+    /// Nametable tile byte from the split ExRAM nametable.
+    pub(crate) fn split_tile(&self, group: u16, scanline: u16) -> Option<u8> {
+        let (row, column, _) = self.split_position(group, scanline)?;
+        Some(self.exram[row * 32 + usize::from(column)])
+    }
+
+    /// Attribute byte from the split ExRAM nametable.
+    pub(crate) fn split_attr(&self, group: u16, scanline: u16) -> Option<u8> {
+        let (row, column, _) = self.split_position(group, scanline)?;
+        let offset = 0x3C0 + (row >> 2) * 8 + usize::from(column) / 4;
+        Some(self.exram[offset])
+    }
+
+    /// The 2-bit palette field the PPU should use for the split tile.
+    pub(crate) fn split_attr_field(&self, group: u16, scanline: u16) -> Option<u8> {
+        let (row, column, _) = self.split_position(group, scanline)?;
+        let attr = self.split_attr(group, scanline)?;
+        let shift = ((row & 2) << 1) | (usize::from(column) & 2);
+        Some((attr >> shift) & 0x03)
+    }
+
+    /// CHR address for a split-region pattern fetch.
+    ///
+    /// $5202 supplies A12-A19, the tile index supplies A4-A11 (which carries
+    /// the PPU's A10/A11), and the split fine Y supplies A0-A2.
+    pub(crate) fn split_pattern(
+        &self,
+        group: u16,
+        scanline: u16,
+        tile: u8,
+        high: bool,
+    ) -> Option<u16> {
+        let (_, _, fine_y) = self.split_position(group, scanline)?;
+        let address = (u16::from(self.split_bank) << 12)
+            | ((u16::from(tile) << 4) & 0x0FF8)
+            | u16::from(fine_y);
+        Some(address | if high { 8 } else { 0 })
     }
 
     /// Nametable byte supplied by ExRAM or fill mode, if this slot uses one.
@@ -113,6 +198,15 @@ impl Mmc5Aux {
             local.get(offset).copied().unwrap_or(0)
         } else {
             self.rom.get(offset).copied().unwrap_or(0)
+        }
+    }
+
+    /// Read a physical CHR address (already banked by the split registers).
+    pub(crate) fn chr_physical(&self, address: u16, local: &[u8]) -> u8 {
+        if self.ram {
+            local.get(usize::from(address)).copied().unwrap_or(0)
+        } else {
+            self.rom.get(usize::from(address)).copied().unwrap_or(0)
         }
     }
 
@@ -2476,6 +2570,11 @@ pub struct Mmc5 {
     exram_mode: u8,
     prg_ram_bank: u8,
     chr_upper: u8,
+    split_enabled: bool,
+    split_right: bool,
+    split_threshold: u8,
+    split_scroll: u8,
+    split_bank: u8,
     irq_latch: u8,
     irq_counter: u8,
     irq_enabled: bool,
@@ -2511,6 +2610,11 @@ impl Mmc5 {
             exram_mode: 0x03,
             prg_ram_bank: 0,
             chr_upper: 0,
+            split_enabled: false,
+            split_right: false,
+            split_threshold: 0,
+            split_scroll: 0,
+            split_bank: 0,
             irq_latch: 0,
             irq_counter: 0,
             irq_enabled: false,
@@ -2526,6 +2630,13 @@ impl Mmc5 {
         };
         let mut aux = aux.borrow_mut();
         aux.set_registers(self.exram_mode, self.nt_map, self.fill_tile, self.fill_attr);
+        aux.set_split(
+            self.split_enabled,
+            self.split_right,
+            self.split_threshold,
+            self.split_scroll,
+            self.split_bank,
+        );
         let mut slots = [0u16; 8];
         for (slot, value) in slots.iter_mut().enumerate() {
             *value = self.chr_bank(slot) as u16;
@@ -2639,6 +2750,20 @@ impl Mmc5 {
                 self.refresh_aux();
             }
             0x5113 => self.prg_ram_bank = value & 0x07,
+            0x5200 => {
+                self.split_enabled = value & 0x80 != 0;
+                self.split_right = value & 0x40 != 0;
+                self.split_threshold = value & 0x1F;
+                self.refresh_aux();
+            }
+            0x5201 => {
+                self.split_scroll = value;
+                self.refresh_aux();
+            }
+            0x5202 => {
+                self.split_bank = value;
+                self.refresh_aux();
+            }
             0x5114..=0x5117 => {
                 let index = usize::from(address - 0x5114);
                 self.prg_banks[index] = value;
@@ -11630,6 +11755,65 @@ mod tests {
         cart.cpu_write(0x8001, 0x00);
         cart.ppu_write(0x0200, 0x33);
         assert_eq!(cart.ppu_read(0x0200), 0x33);
+    }
+
+    #[test]
+    fn mmc5_split_screen_register_and_addressing() {
+        let rom = synth_banked(5, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        let aux = cart.mmc5_aux().expect("aux");
+
+        // Left split, 8-tile threshold, scroll 3, 4 KiB bank 2.
+        cart.cpu_write(0x5104, 0);
+        cart.cpu_write(0x5200, 0x80 | 0x08);
+        cart.cpu_write(0x5201, 3);
+        cart.cpu_write(0x5202, 2);
+        {
+            let mut aux = aux.borrow_mut();
+            // Row 0 starts at ExRAM 0.
+            aux.exram[0] = 0x10;
+            aux.exram[9] = 0x11;
+            aux.exram[0x3C0] = 0x1B;
+        }
+        {
+            let aux = aux.borrow();
+            assert_eq!(aux.split_tile(0, 0), Some(0x10));
+            assert_eq!(aux.split_tile(9, 0), None);
+            // Fine Y = (scroll + y) & 7 = 3; bank 2; tile 0 -> $2003.
+            assert_eq!(aux.split_pattern(0, 0, 0x10, false), Some(0x2103));
+            assert_eq!(aux.split_pattern(0, 0, 0x10, true), Some(0x210B));
+            // Attribute field for row 0/column 0 is bits 0-1 of the byte.
+            assert_eq!(aux.split_attr_field(0, 0), Some(0x03));
+        }
+
+        // Right split is right-aligned: group 0 wraps to column 30.
+        cart.cpu_write(0x5200, 0x80 | 0x40 | 0x02);
+        {
+            let aux = aux.borrow();
+            assert_eq!(aux.split_tile(0, 0), None);
+            assert_eq!(aux.split_tile(1, 0), None);
+            // The split region is right-aligned over the 34 fetch groups:
+            // group 2 is column 0 and group 33 is the final column 31.
+            assert_eq!(aux.split_tile(2, 0), Some(aux.exram[0]));
+            assert_eq!(aux.split_tile(33, 0), Some(aux.exram[31]));
+        }
+
+        // ExRAM modes 2/3 disable split.
+        cart.cpu_write(0x5104, 2);
+        {
+            let aux = aux.borrow();
+            assert_eq!(aux.split_tile(2, 0), None);
+        }
+        // Vertical scroll selects the row and fine Y (40 + 0 -> row 5).
+        cart.cpu_write(0x5104, 0);
+        cart.cpu_write(0x5200, 0x80 | 0x08);
+        cart.cpu_write(0x5201, 40);
+        {
+            let mut aux = aux.borrow_mut();
+            aux.exram[5 * 32] = 0x22;
+            assert_eq!(aux.split_tile(0, 0), Some(0x22));
+            assert_eq!(aux.split_pattern(0, 0, 0, false), Some(0x2000));
+        }
     }
 
     #[test]
