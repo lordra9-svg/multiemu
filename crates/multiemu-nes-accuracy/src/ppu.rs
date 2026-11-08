@@ -148,6 +148,10 @@ pub struct Ppu {
     spr_id: [u8; 8],
     /// Bitmask of sprite slots holding a sprite for the current line.
     spr_active: u8,
+    /// Precomputed RGB for the rest of the current background span.
+    span_px: [[u8; 3]; 8],
+    /// Dots remaining in the precomputed span (0 = use the per-dot path).
+    span_len: u8,
     spr_x: [u8; 8],
     spr_counting: [bool; 8],
     spr_lo: [u8; 8],
@@ -251,6 +255,8 @@ impl Ppu {
             pat_hi: 0,
             spr_id: [64; 8],
             spr_active: 0,
+            span_px: [[0; 3]; 8],
+            span_len: 0,
             spr_x: [0; 8],
             spr_counting: [false; 8],
             spr_lo: [0; 8],
@@ -388,7 +394,7 @@ impl Ppu {
         let rendering = self.mask & 0x18 != 0;
         if rendered_line && (1..=256).contains(&self.dot) {
             if self.scanline < 240 {
-                self.render_pixel_dot(self.dot - 1);
+                self.render_span_dot(self.dot);
             }
             if rendering {
                 self.shift_background();
@@ -564,6 +570,7 @@ impl Ppu {
                 }
             }
             1 => {
+                self.span_len = 0;
                 // PPU register writes reach their destination a couple of dots
                 // after the bus write; model the smallest delay. Pre-render
                 // writes stay immediate because the odd-frame skip decision is
@@ -726,6 +733,7 @@ impl Ppu {
         let index = Self::palette_index(address);
         self.palette[index] = value & 0x3F;
         self.palette_rgb[index] = NES_PALETTE[usize::from(value & 0x3F)];
+        self.span_len = 0;
     }
 
     fn sprite_height(&self) -> u16 {
@@ -1270,6 +1278,77 @@ impl Ppu {
 
     /// Returns the CHR byte for `tile` at the current fine Y.
     /// Composes one pixel from the current shift-register state.
+    /// Composes a dot, precomputing a whole 8-dot background span at each
+    /// fetch-group boundary when no sprite is present and the mask is stable.
+    fn render_span_dot(&mut self, dot: u16) {
+        if self.mask & 0x18 == 0 {
+            self.span_len = 0;
+            self.render_backdrop_dot(dot - 1);
+            return;
+        }
+        if dot & 7 == 1 {
+            if self.spr_active == 0 && dot + 7 <= 256 && self.mask & 0x08 != 0 {
+                let base_x = dot - 1;
+                let shift0 = 15 - u16::from(self.fine_x);
+                for (j, px) in self.span_px.iter_mut().enumerate() {
+                    let shift = shift0 - j as u16;
+                    let bit = ((self.bg_lo >> shift) & 1) | (((self.bg_hi >> shift) & 1) << 1);
+                    let pal =
+                        ((self.bg_attr_lo >> shift) & 1) | (((self.bg_attr_hi >> shift) & 1) << 1);
+                    let x = base_x + j as u16;
+                    let mut color_index = 0u8;
+                    if bit as u8 != 0 && !(x < 8 && self.mask & 0x02 == 0) {
+                        color_index = (pal as u8) * 4 + bit as u8;
+                    }
+                    *px = if color_index == 0 {
+                        self.palette_rgb[usize::from(self.palette[0] & 0x1F)]
+                    } else {
+                        self.palette_rgb[usize::from(color_index & 0x1F)]
+                    };
+                }
+                self.span_len = 8;
+            } else {
+                self.span_len = 0;
+            }
+        }
+        let x = dot - 1;
+        if self.span_len > 0 {
+            let [r, g, b] = self.span_px[(x & 7) as usize];
+            let i = (usize::from(self.scanline) * 256 + usize::from(x)) * 4;
+            self.frame[i] = r;
+            self.frame[i + 1] = g;
+            self.frame[i + 2] = b;
+            self.frame[i + 3] = 255;
+            self.span_len -= 1;
+        } else {
+            self.render_pixel_dot(x);
+        }
+    }
+
+    /// Composes a pixel on a line whose rendering is disabled: the output is
+    /// the backdrop colour, but the sprite X counters keep running.
+    fn render_backdrop_dot(&mut self, x: u16) {
+        let mut slots = self.spr_active;
+        while slots != 0 {
+            let slot = slots.trailing_zeros() as usize;
+            slots &= slots - 1;
+            if self.spr_x[slot] == 0 {
+                self.spr_counting[slot] = false;
+            }
+            if self.spr_counting[slot] {
+                self.spr_x[slot] = self.spr_x[slot].saturating_sub(1);
+            }
+        }
+        let color_index = self.palette[0];
+        let [r, g, b] =
+            NES_PALETTE[usize::from(self.palette[usize::from(color_index & 0x1F)] & 0x3F)];
+        let i = (usize::from(self.scanline) * 256 + usize::from(x)) * 4;
+        self.frame[i] = r;
+        self.frame[i + 1] = g;
+        self.frame[i + 2] = b;
+        self.frame[i + 3] = 255;
+    }
+
     fn render_pixel_dot(&mut self, x: u16) {
         let shift = 15 - u16::from(self.fine_x);
         let bit = ((self.bg_lo >> shift) & 1) | (((self.bg_hi >> shift) & 1) << 1);

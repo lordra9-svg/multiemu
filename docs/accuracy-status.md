@@ -905,8 +905,17 @@ evaluated: a backdrop fast path for rendering-disabled lines (no measurable
 gain on this ROM, reverted) and a palette RGB cache (`palette_rgb`, rebuilt on
 palette writes, one lookup per pixel instead of two). The cache is kept as a
 strict reduction in per-pixel work (gain within run-to-run noise on a loaded
-desktop). The remaining structural win is an 8-pixel span composer for the
-background/sprite shifters.
+desktop).
+
+Next optimization: an 8-dot background span composer. At each fetch-group
+boundary the eight background pixels of the group are precomputed from the
+shift registers into RGB (`span_px`) and the per-dot path only writes them,
+falling back to the full per-dot composer when any sprite is active, when BG
+rendering is off, or after a `$2001`/palette write invalidates the span. The
+shift registers and fetch cadence are untouched, so sprite-zero timing and all
+sprite tests are unchanged. Measured ~630 → ~640 fps max-of-7 on the loaded
+desktop (small but positive; the span only applies on sprite-free background
+lines).
 
 **Plateau decision (2026-11-07):** the accuracy track is held at **145/151**.
 The only open failure is `PPU Misc. | $2007 Stress Test`; its last 10 stable
