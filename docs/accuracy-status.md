@@ -877,6 +877,16 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 
 ## Current status (2026-11-07)
 
+**Plateau decision (2026-11-07):** the accuracy track is held at **145/151**.
+The only open failure is `PPU Misc. | $2007 Stress Test`; its last 10 stable
+samples depend on the PPU `v` evolution during rendering-disabled pre-render
+dots, which cannot be derived from the ROM source or the available references.
+The 159/170 work (2-dot ALE/read bus, octal latch + feedback, `$2007` state
+machine, sprite bus reads) is preserved on the local `wip/ppu-bus` branch
+(`a6f34b9`) for a future pass; `main` remains at `74a35b6`. Performance work is
+now the active track.
+
+
 AccuracyCoin v3.1.0, isolated mode:
 
 ```text
