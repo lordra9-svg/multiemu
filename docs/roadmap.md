@@ -30,8 +30,8 @@ The main effort is now the reference-parity accuracy core. Details in
       adapter and a `corpus` runner. Full-library audit: 6,614/7,101 load,
       459 unsupported, 0 panics; 136/197 render 7/7, 159/165 7-8/8, 195 6/8
       (`docs/mapper-audit.md`).
-      Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, the
-      195/165 CHR ROM/RAM latches, mapper 193 and the Datach peripheral.
+      Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, the two
+      195 crash-loop images, mapper 193 and the Datach peripheral.
 - [x] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
       all 151 rows: **146 pass, 0 fail, 5 DRAW skips, 0 unrun** — every
       non-DRAW test passes. `$2007 Stress Test` was closed with the PPU data

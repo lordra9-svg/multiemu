@@ -62,12 +62,16 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   window; **7/7** render at 600 frames (EEPROM persistence is a follow-up).
 - **MMC3 512 KiB CHR (197)** — per-submapper CHR wiring translates the MMC3's
   1 KiB banks into 2/4 KiB ROM banks; **7/7** render at 60 frames.
-- **Waixing FS303 (195)** — MMC3 plus 4 KiB PRG-RAM at `$5000` and a CHR window
-  initialized from the ROM image; 6/8 render at 600 frames. The two blanks
-  need the CHR ROM/RAM latch written through the PPU.
-- **Hybrid MMC2/MMC3 (165)** — dispatched with a writable 8 KiB CHR window;
-  8/8 render at 600 frames. The MMC2-style CHR latches and 4 KiB CHR-RAM page
-  are not modelled yet, so tiles may differ.
+- **Waixing FS303 (195)** — MMC3 plus 4 KiB PRG-RAM at `$5000`, and a shared
+  hybrid CHR map: PPU `$2007` writes are forwarded to the mapper, the CHR-RAM
+  window is addressed raw, and the CHRB value written through CHR bank numbers
+  adds the remapped ROM-bank ranges. 6/8 render at 600 frames; the two
+  remaining images (Tianshen Zhi Jian, Tiexue Lianmeng) crash into a CPU loop
+  at `$F433` before enabling rendering, which is a separate CPU/PRG issue.
+- **Hybrid MMC2/MMC3 (165)** — 4 KiB CHR pages selected by the MMC2-style
+  latches (page 0 is CHR-RAM), toggled by `$FD`/`$FE` pattern fetches and by
+  `$2007` reads. The PPU reads and writes through the shared map. 8/8 render at
+  600 frames.
 - **PPU** — the backdrop no longer double-indirects the palette; all five
   mirroring modes are modelled with 4 KiB CIRAM; the `$2007` read buffer is
   fed by the per-dot background/sprite fetch with a four-dot data state
