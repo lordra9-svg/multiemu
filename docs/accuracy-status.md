@@ -286,12 +286,22 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,550 loaded (92.2%), 3,586 rendering (50.5%), 2,964 blank (41.7%), 519
-unsupported (193 mapper IDs, 7.3%) and 32 load/run failures (0.45%). The
+6,565 loaded (92.4%), 3,473 rendering (48.9%), 3,092 blank (43.5%), 504
+unsupported (191 mapper IDs, 7.1%) and 32 load/run failures (0.45%). The
 batched totals reproduce the single-pass numbers exactly. Top unsupported
-families are mapper 9 (MMC2) and 10 (MMC4), then 68 (Sunsoft-4). See
+family is now 68 (Sunsoft-4) at 8 images, then 195/165 (8 each). See
 `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
 implemented-but-blank shortlist.
+
+MMC2 (9) and MMC4 (10) are implemented, including the two 4 KiB CHR fetch
+latches that switch on tile `$FD`/`$FE` during rendering and the 5-bit bank
+register wrap for smaller CHR ROMs. MMC2's top 24 KiB is fixed to the last
+three 8 KiB banks (a real Punch-Out!! image caught the initial `N-2` mapping
+error). All 15 mapper-9/10 images in the local library render at 600 frames;
+the 20-frame audit window still shows them as blank because they are booting.
+The audit also exposed two display bugs now fixed and unit-tested: the
+backdrop path double-indirected the palette, and CHR bank registers were not
+wrapped to the ROM size.
 
 The PPU now powers on at dot 40 instead of dot 0. The power-on dot is
 undefined on hardware; dot 0 made some Nanjing titles lock onto the `$2002`

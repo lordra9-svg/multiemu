@@ -12,6 +12,54 @@ pub const STATUS_SPRITE0: u8 = 0x40;
 /// Sprite overflow.
 pub const STATUS_OVERFLOW: u8 = 0x20;
 
+/// CHR latch state for MMC2/MMC4 (mappers 9 and 10).
+///
+/// The four registers select a 4 KiB bank per pattern table and latch:
+/// `[latch0 $FD, latch0 $FE, latch1 $FD, latch1 $FE]`. A pattern fetch whose
+/// tile low byte is `$FD` or `$FE` selects the matching bank for the rest of
+/// the table, which is how Punch-Out!! swaps background and sprite tiles
+/// mid-frame.
+#[derive(Debug, Clone)]
+pub struct Mmc2Chr {
+    rom: Vec<u8>,
+    banks: [u8; 4],
+    latch: [bool; 2],
+}
+
+impl Mmc2Chr {
+    fn new(rom: Vec<u8>, banks: [u8; 4]) -> Self {
+        Self {
+            rom,
+            banks,
+            latch: [false; 2],
+        }
+    }
+
+    fn read(&self, address: u16) -> u8 {
+        let table = usize::from(address & 0x1000 != 0);
+        let register = if self.latch[table] {
+            self.banks[table * 2 + 1]
+        } else {
+            self.banks[table * 2]
+        };
+        // The register is 5 bits wide; the ROM may carry fewer banks, so the
+        // unconnected high address lines wrap (e.g. 64 KiB CHR = 16 banks).
+        let banks = (self.rom.len() / 0x1000).max(1);
+        let bank = usize::from(register) % banks;
+        let index = bank * 0x1000 + usize::from(address & 0x0FFF);
+        self.rom.get(index).copied().unwrap_or(0)
+    }
+
+    fn note_fetch(&mut self, address: u16) {
+        // The tile number low byte occupies bits 4..=11 of the pattern address.
+        let tile = (address >> 4) as u8;
+        if tile == 0xFD || tile == 0xFE {
+            let table = usize::from(address & 0x1000 != 0);
+            self.latch[table] = tile == 0xFE;
+        }
+    }
+}
+
 /// 2C02 state.
 #[derive(Debug, Clone)]
 pub struct Ppu {
@@ -53,6 +101,8 @@ pub struct Ppu {
     pub oam: [u8; 256],
     /// CHR memory (8 KiB window; mappers can replace this later).
     pub chr: Vec<u8>,
+    /// MMC2/MMC4 latch-banked CHR, when the cartridge uses it.
+    mmc2: Option<Mmc2Chr>,
     /// Whether CHR is writable RAM.
     pub chr_ram: bool,
     /// Nametable mirroring: true = vertical.
@@ -198,6 +248,7 @@ impl Ppu {
             palette_rgb: [[0; 3]; 32],
             oam: [0; 256],
             chr,
+            mmc2: None,
             chr_ram,
             vertical_mirroring,
             nmi_line: false,
@@ -268,6 +319,55 @@ impl Ppu {
             hybrid_fetch: false,
             pending_mask: None,
             mask_delay: 0,
+        }
+    }
+
+    /// Replaces the CHR window with latch-banked MMC2/MMC4 ROM.
+    pub fn set_mmc2_chr(&mut self, rom: Vec<u8>, banks: [u8; 4]) {
+        self.mmc2 = Some(Mmc2Chr::new(rom, banks));
+    }
+
+    /// Updates the four MMC2/MMC4 bank registers without touching the latches.
+    pub fn set_mmc2_banks(&mut self, banks: [u8; 4]) {
+        if let Some(mmc2) = &mut self.mmc2 {
+            mmc2.banks = banks;
+        }
+    }
+
+    /// Whether latch-banked CHR is active.
+    #[must_use]
+    pub const fn has_mmc2_chr(&self) -> bool {
+        self.mmc2.is_some()
+    }
+
+    /// Current MMC2/MMC4 bank registers, if active.
+    #[must_use]
+    pub fn mmc2_banks(&self) -> Option<[u8; 4]> {
+        self.mmc2.as_ref().map(|mmc2| mmc2.banks)
+    }
+
+    /// Current MMC2/MMC4 latch selection (`false` = `$FD` bank).
+    #[must_use]
+    pub fn mmc2_latch(&self) -> Option<[bool; 2]> {
+        self.mmc2.as_ref().map(|mmc2| mmc2.latch)
+    }
+
+    /// Reads one byte of the active CHR window.
+    fn chr_byte(&self, address: u16) -> u8 {
+        match &self.mmc2 {
+            Some(mmc2) => mmc2.read(address),
+            None => self
+                .chr
+                .get(usize::from(address) % self.chr.len().max(1))
+                .copied()
+                .unwrap_or(0),
+        }
+    }
+
+    /// Feeds a pattern fetch to the MMC2/MMC4 latch.
+    fn note_chr_fetch(&mut self, address: u16) {
+        if let Some(mmc2) = &mut self.mmc2 {
+            mmc2.note_fetch(address);
         }
     }
 
@@ -710,8 +810,7 @@ impl Ppu {
 
     fn read_vram(&self, address: u16) -> u8 {
         if address < 0x2000 {
-            let index = usize::from(address) % self.chr.len().max(1);
-            self.chr.get(index).copied().unwrap_or(0)
+            self.chr_byte(address)
         } else if address < 0x3F00 {
             self.vram[self.nametable_index(address)]
         } else {
@@ -1203,8 +1302,10 @@ impl Ppu {
             row -= 8;
         }
         let address = bank + u16::from(tile) * 16 + row;
-        let mut low = self.chr.get(usize::from(address)).copied().unwrap_or(0);
-        let mut high = self.chr.get(usize::from(address) + 8).copied().unwrap_or(0);
+        let mut low = self.chr_byte(address);
+        let mut high = self.chr_byte(address + 8);
+        self.note_chr_fetch(address);
+        self.note_chr_fetch(address + 8);
         if attr & 0x40 != 0 {
             low = low.reverse_bits();
             high = high.reverse_bits();
@@ -1257,15 +1358,17 @@ impl Ppu {
                 if corrupt {
                     self.ale_countdown = None;
                     let bus_address = (address & 0xFF00) | 0x00FF;
-                    self.pat_lo = self.chr.get(usize::from(bus_address)).copied().unwrap_or(0);
+                    self.pat_lo = self.chr_byte(bus_address);
                 } else {
-                    self.pat_lo = self.chr.get(usize::from(address)).copied().unwrap_or(0);
+                    self.pat_lo = self.chr_byte(address);
                 }
+                self.note_chr_fetch(address);
             }
             7 => {
                 let address = self.pattern_address(self.nt_byte, true);
                 self.last_fetch_low = address as u8;
-                self.pat_hi = self.chr.get(usize::from(address)).copied().unwrap_or(0);
+                self.pat_hi = self.chr_byte(address);
+                self.note_chr_fetch(address);
             }
             _ => {}
         }
@@ -1319,7 +1422,9 @@ impl Ppu {
                         color_index = (pal as u8) * 4 + bit as u8;
                     }
                     *px = if color_index == 0 {
-                        self.palette_rgb[usize::from(self.palette[0] & 0x1F)]
+                        // Backdrop is palette RAM index 0; palette[0] holds a
+                        // NES colour index, not a palette RAM index.
+                        self.palette_rgb[0]
                     } else {
                         self.palette_rgb[usize::from(color_index & 0x1F)]
                     };
@@ -1357,9 +1462,7 @@ impl Ppu {
                 self.spr_x[slot] = self.spr_x[slot].saturating_sub(1);
             }
         }
-        let color_index = self.palette[0];
-        let [r, g, b] =
-            NES_PALETTE[usize::from(self.palette[usize::from(color_index & 0x1F)] & 0x3F)];
+        let [r, g, b] = self.palette_rgb[0];
         let i = (usize::from(self.scanline) * 256 + usize::from(x)) * 4;
         self.frame[i] = r;
         self.frame[i + 1] = g;
@@ -1417,7 +1520,8 @@ impl Ppu {
             }
         }
         if color_index == 0 {
-            color_index = self.palette[0];
+            // Backdrop colour (palette RAM index 0).
+            color_index = 0;
         }
         let [r, g, b] = self.palette_rgb[usize::from(color_index & 0x1F)];
         let i = (usize::from(self.scanline) * 256 + usize::from(x)) * 4;
@@ -1546,6 +1650,69 @@ mod tests {
 
     fn ppu() -> Ppu {
         Ppu::new(Timing::NTSC, vec![0; 0x2000], true, false)
+    }
+
+    #[test]
+    fn backdrop_uses_palette_index_zero_not_double_indirection() {
+        let mut ppu = ppu();
+        // Backdrop $01; palette entry 1 is white ($20). A backdrop-only scanline
+        // must be the $01 colour, not the colour of palette index 1.
+        ppu.palette[0] = 0x01;
+        ppu.palette[1] = 0x20;
+        ppu.write_palette(0x3F00, 0x01);
+        ppu.write_palette(0x3F01, 0x20);
+        ppu.scanline = 0;
+        ppu.render_backdrop_dot(0);
+        assert_eq!(&ppu.frame[0..3], &NES_PALETTE[0x01]);
+        assert_ne!(&ppu.frame[0..3], &NES_PALETTE[0x20]);
+    }
+
+    #[test]
+    fn mmc2_chr_registers_wrap_to_the_rom_size() {
+        let mut ppu = ppu();
+        let mut rom = vec![0u8; 0x10000]; // 64 KiB = 16 x 4 KiB banks.
+        for (bank, chunk) in rom.chunks_mut(0x1000).enumerate() {
+            chunk.fill(bank as u8);
+        }
+        // 5-bit register values: bank 24 wraps to bank 8 of a 16-bank ROM.
+        ppu.set_mmc2_chr(rom, [24, 24, 19, 19]);
+        assert_eq!(ppu.chr_byte(0x0000), 8);
+        assert_eq!(ppu.chr_byte(0x1000), 19 % 16);
+    }
+
+    #[test]
+    fn mmc2_latch_switches_pattern_banks_on_fd_fe_fetches() {
+        let mut ppu = ppu();
+        let mut rom = vec![0u8; 0x10000]; // 64 KiB = 16 x 4 KiB banks.
+        for (bank, chunk) in rom.chunks_mut(0x1000).enumerate() {
+            chunk.fill(0x80 | bank as u8);
+        }
+        ppu.set_mmc2_chr(rom, [1, 2, 5, 6]);
+
+        // Both pattern tables start on their $FD bank.
+        assert_eq!(ppu.chr_byte(0x0000), 0x81);
+        assert_eq!(ppu.chr_byte(0x1000), 0x85);
+
+        // Tile $FD keeps latch 0 on its $FD bank; tile $FE switches it.
+        ppu.note_chr_fetch(0x0FD0);
+        assert_eq!(ppu.mmc2_latch(), Some([false, false]));
+        ppu.note_chr_fetch(0x0FE0);
+        assert_eq!(ppu.mmc2_latch(), Some([true, false]));
+        assert_eq!(ppu.chr_byte(0x0000), 0x82);
+
+        // Table 1 latches independently.
+        ppu.note_chr_fetch(0x1FE0);
+        assert_eq!(ppu.mmc2_latch(), Some([true, true]));
+        assert_eq!(ppu.chr_byte(0x1000), 0x86);
+        ppu.note_chr_fetch(0x1FD0);
+        assert_eq!(ppu.chr_byte(0x1000), 0x85);
+
+        // Bank-register updates keep the current latch selection.
+        ppu.set_mmc2_banks([7, 8, 9, 10]);
+        assert_eq!(ppu.mmc2_banks(), Some([7, 8, 9, 10]));
+        // Latch 0 is still on $FE (bank 8), latch 1 back on $FD (bank 9).
+        assert_eq!(ppu.chr_byte(0x0000), 0x88);
+        assert_eq!(ppu.chr_byte(0x1000), 0x89);
     }
 
     #[test]

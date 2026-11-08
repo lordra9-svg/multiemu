@@ -129,6 +129,11 @@ impl System {
         for address in 0..0x2000u16 {
             ppu.chr[usize::from(address)] = cart.ppu_read(address);
         }
+        // MMC2/MMC4 swap 4 KiB pattern banks during rendering, so the PPU
+        // keeps the full CHR ROM and drives the latches itself.
+        if let (Some(rom), Some(banks)) = (cart.chr_rom(), cart.chr_banks()) {
+            ppu.set_mmc2_chr(rom.to_vec(), banks);
+        }
         let mut system = Self {
             cart,
             cpu: Cpu::new(),
@@ -317,7 +322,9 @@ impl System {
         // CHR-ROM is copied once per frame; mid-frame bank switches are an A4
         // follow-up. CHR-RAM is owned by the PPU because games upload tiles to
         // it through $2007, so it must not be overwritten.
-        if !self.cart.chr_is_ram() {
+        if let Some(banks) = self.cart.chr_banks() {
+            self.ppu.set_mmc2_banks(banks);
+        } else if !self.cart.chr_is_ram() {
             for address in 0..0x2000u16 {
                 self.ppu.chr[usize::from(address)] = self.cart.ppu_read(address);
             }
@@ -983,6 +990,26 @@ mod tests {
         assert!(system.ppu.frames > start, "no frame completed");
         assert_eq!(system.video().len(), 256 * 240 * 4);
         assert!(!system.audio().is_empty(), "no audio produced");
+    }
+
+    #[test]
+    fn mmc2_chr_banks_reach_the_ppu() {
+        let prg_len = 8 * 16 * 1024;
+        let chr_len = 8 * 8 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8; // 128 KiB PRG.
+        rom[5] = 8; // 64 KiB CHR.
+        rom[6] = 9 << 4; // Mapper 9.
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 9);
+        assert!(system.ppu.has_mmc2_chr());
+        assert_eq!(system.ppu.mmc2_banks(), Some([0, 0, 0, 0]));
+
+        system.cart.cpu_write(0xB000, 3);
+        system.cart.cpu_write(0xD000, 9);
+        system.sync_cartridge();
+        assert_eq!(system.ppu.mmc2_banks(), Some([3, 0, 9, 0]));
     }
 
     #[test]

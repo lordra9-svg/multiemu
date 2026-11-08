@@ -42,6 +42,18 @@ pub trait Mapper: fmt::Debug {
         &[]
     }
 
+    /// Full CHR ROM for mappers whose pattern banks switch during rendering
+    /// (MMC2/MMC4). The PPU owns the latch state in that case.
+    fn chr_rom(&self) -> Option<&[u8]> {
+        None
+    }
+
+    /// Current 4 KiB CHR bank indices as
+    /// `[latch0 $FD, latch0 $FE, latch1 $FD, latch1 $FE]`.
+    fn chr_banks(&self) -> Option<[u8; 4]> {
+        None
+    }
+
     /// Mapper IRQ output (level).
     fn irq_line(&self) -> bool {
         false
@@ -127,6 +139,8 @@ impl Cartridge {
             2 => Box::new(UxRom::new(prg_rom, chr, header)),
             3 => Box::new(CnRom::new(prg_rom, chr, header)),
             4 => Box::new(Mmc3::new(prg_rom, chr, header)),
+            9 => Box::new(Mmc2::new(prg_rom, chr, prg_ram, header, 9)),
+            10 => Box::new(Mmc2::new(prg_rom, chr, prg_ram, header, 10)),
             45 => Box::new(Mmc3::new_as(prg_rom, chr, header, 45)),
             116 => Box::new(Mmc3::new_as(prg_rom, chr, header, 116)),
             118 => Box::new(Mmc3::new_txsrom(prg_rom, chr, header)),
@@ -266,6 +280,18 @@ impl Cartridge {
     #[must_use]
     pub fn mapper(&self) -> u16 {
         self.mapper.number()
+    }
+
+    /// Full CHR ROM for latch-banked mappers (MMC2/MMC4).
+    #[must_use]
+    pub fn chr_rom(&self) -> Option<&[u8]> {
+        self.mapper.chr_rom()
+    }
+
+    /// Current CHR latch banks for latch-banked mappers (MMC2/MMC4).
+    #[must_use]
+    pub fn chr_banks(&self) -> Option<[u8; 4]> {
+        self.mapper.chr_banks()
     }
 
     /// Battery-backed PRG-RAM contents.
@@ -564,6 +590,155 @@ impl Mapper for Mmc1 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.prg_ram
+    }
+}
+
+/// MMC2 (mapper 9) and MMC4 (mapper 10).
+///
+/// Both use two CHR latches that switch 4 KiB pattern banks when the PPU
+/// fetches tile `$FD` or `$FE`. MMC2 banks 8 KiB of PRG at `$8000` with the
+/// second-to-last and last banks fixed; MMC4 banks 16 KiB at `$8000` with the
+/// last bank fixed. Register layout:
+///
+/// | Address | Register |
+/// |---|---|
+/// | `$A000` | PRG bank (low 4 bits) |
+/// | `$B000` | CHR latch 0, `$FD` bank |
+/// | `$C000` | CHR latch 0, `$FE` bank |
+/// | `$D000` | CHR latch 1, `$FD` bank |
+/// | `$E000` | CHR latch 1, `$FE` bank |
+/// | `$F000` | mirroring (bit 0: 1 vertical, 0 horizontal) |
+#[derive(Debug)]
+pub struct Mmc2 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_bank: u8,
+    chr_banks: [u8; 4],
+    mirroring: Mirroring,
+    number: u16,
+}
+
+impl Mmc2 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header, number: u16) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            prg_bank: 0,
+            chr_banks: [0; 4],
+            mirroring: match header.mirroring {
+                Mirroring::Vertical => Mirroring::Vertical,
+                _ => Mirroring::Horizontal,
+            },
+            number,
+        }
+    }
+
+    fn prg_offset(&self, address: u16) -> usize {
+        let offset = usize::from(address - 0x8000);
+        if self.number == 9 {
+            let banks = (self.prg.len() / 0x2000).max(1);
+            let bank = if offset < 0x2000 {
+                usize::from(self.prg_bank & 0x0F) % banks
+            } else {
+                // The top 24 KiB is fixed to the last three 8 KiB banks:
+                // $A000/$C000/$E000 see banks N-3/N-2/N-1. Punch-Out!! keeps
+                // its reset code in N-3 and the vectors at the end of N-1.
+                let fixed = banks.saturating_sub(3) + (offset - 0x2000) / 0x2000;
+                fixed.min(banks - 1)
+            };
+            bank * 0x2000 + (offset & 0x1FFF)
+        } else {
+            let banks = (self.prg.len() / 0x4000).max(1);
+            let bank = if offset < 0x4000 {
+                usize::from(self.prg_bank & 0x0F) % banks
+            } else {
+                banks - 1
+            };
+            bank * 0x4000 + (offset & 0x3FFF)
+        }
+    }
+
+    fn chr_offset(&self, address: u16) -> usize {
+        // The mapper-side view has no latch history; the PPU drives the real
+        // fetch latches and reads `chr_rom` through its own window.
+        let table = usize::from(address & 0x1000 != 0);
+        let banks = (self.chr.len() / 0x1000).max(1);
+        let bank = usize::from(self.chr_banks[table * 2]) % banks;
+        bank * 0x1000 + usize::from(address & 0x0FFF)
+    }
+}
+
+impl Mapper for Mmc2 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x6000 {
+            return 0;
+        }
+        if address < 0x8000 {
+            if self.prg_ram.is_empty() {
+                return 0;
+            }
+            let offset = usize::from(address - 0x6000) % self.prg_ram.len();
+            return self.prg_ram[offset];
+        }
+        self.prg.get(self.prg_offset(address)).copied().unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address < 0x8000 {
+            if address >= 0x6000 && !self.prg_ram.is_empty() {
+                let offset = usize::from(address - 0x6000) % self.prg_ram.len();
+                self.prg_ram[offset] = value;
+            }
+            return;
+        }
+        match address & 0xF000 {
+            0xA000 => self.prg_bank = value & 0x0F,
+            0xB000 => self.chr_banks[0] = value & 0x1F,
+            0xC000 => self.chr_banks[1] = value & 0x1F,
+            0xD000 => self.chr_banks[2] = value & 0x1F,
+            0xE000 => self.chr_banks[3] = value & 0x1F,
+            0xF000 => {
+                self.mirroring = if value & 1 != 0 {
+                    Mirroring::Vertical
+                } else {
+                    Mirroring::Horizontal
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr.get(self.chr_offset(address)).copied().unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let offset = self.chr_offset(address);
+        if let Some(byte) = self.chr.get_mut(offset) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        self.number
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn chr_rom(&self) -> Option<&[u8]> {
+        Some(&self.chr)
+    }
+
+    fn chr_banks(&self) -> Option<[u8; 4]> {
+        Some(self.chr_banks)
     }
 }
 
@@ -9966,6 +10141,57 @@ mod tests {
             }
         }
         rom
+    }
+
+    #[test]
+    fn mmc2_maps_prg_and_chr_registers() {
+        // 128 KiB PRG (16 x 8 KiB banks), 64 KiB CHR (16 x 4 KiB banks).
+        let rom = synthetic(9, 8, 8);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 9);
+        assert_eq!(cart.header().mirroring, Mirroring::Horizontal);
+
+        // $8000 is switchable; the top 24 KiB is the last three 8 KiB banks.
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xA000), 13);
+        assert_eq!(cart.cpu_read(0xC000), 14);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+        cart.cpu_write(0xA000, 3);
+        assert_eq!(cart.cpu_read(0x8000), 3);
+
+        // CHR latch registers: both tables default to their $FD bank.
+        cart.cpu_write(0xB000, 2);
+        cart.cpu_write(0xC000, 4);
+        cart.cpu_write(0xD000, 6);
+        cart.cpu_write(0xE000, 8);
+        assert_eq!(cart.chr_banks(), Some([2, 4, 6, 8]));
+        assert_eq!(cart.ppu_read(0x0000), 0x81);
+        assert_eq!(cart.ppu_read(0x1000), 0x83);
+        assert_eq!(cart.chr_rom().map(<[u8]>::len), Some(64 * 1024));
+
+        cart.cpu_write(0xF000, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0xF000, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn mmc4_switches_16k_prg_banks() {
+        let rom = synthetic(10, 8, 8);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 10);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 14);
+
+        cart.cpu_write(0xA000, 3);
+        assert_eq!(cart.cpu_read(0x8000), 6);
+        assert_eq!(cart.cpu_read(0xA000), 7);
+        assert_eq!(cart.cpu_read(0xC000), 14);
+
+        // CHR latch banks are shared with MMC2.
+        cart.cpu_write(0xB000, 5);
+        assert_eq!(cart.chr_banks(), Some([5, 0, 0, 0]));
+        assert_eq!(cart.ppu_read(0x0000), 0x82);
     }
 
     #[test]
