@@ -894,11 +894,15 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
   bit 3 light (active-low), with the sensor sampling the 8x8 area as the beam
   passes. The desktop app aims/fires from the mouse and has a Controllers-tab
   toggle; a unit test covers the register layout and gamepad fallback.
-- **Composite/display filter**: `VideoFilter::Composite` now applies a
-  display-only 3-tap horizontal blend plus scanline attenuation in the core
-  adapter; the app exposes nearest/linear texture filtering and integer scaling
-  and a native folder dialog (`rfd`). Saves are keyed by a content hash (scan
-  CRC plus FNV-1a 64) and state slots write a 64x60 RGBA thumbnail.
+- **Composite/display filter**: `VideoFilter::Composite` applies a display-only
+  3-tap horizontal blend plus scanline attenuation in the core adapter. The
+  adapter test `composite_filter_changes_pixels_and_keeps_geometry` loads a ROM,
+  runs 20 frames with Raw and Composite, and asserts the frames differ on a
+  rendered screen while dimensions and alpha are unchanged, plus that a live
+  `set_video_filter` call affects the next frame. The app exposes nearest/linear
+  texture filtering, integer scaling and a native folder dialog (`rfd`). Saves
+  are keyed by a content hash (scan CRC plus FNV-1a 64) and state slots write a
+  64x60 RGBA thumbnail.
 - **CLI debugger**: `multiemu run <rom> --dump-ppu` prints one CPU/PPU/APU state
   line per frame; `--break <hex>` steps instructions until the PC matches and
   prints the state.

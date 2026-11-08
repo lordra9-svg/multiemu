@@ -130,3 +130,12 @@ refs/rustynes   0 uninitialized
 | gopher64 | built | `refs/gopher64/target/release/gopher64` |
 | MesenCE | built | `refs/mesence/bin/linux-x64/Release/linux-x64/publish/Mesen` |
 | RustyNES | built | `refs/rustynes/target/release/` |
+
+## ROM metadata and provenance
+
+The repository contains no references to third-party ROM catalog providers and
+distributes no ROM metadata. A local mapper audit may use catalog `.dat` files
+and a licensed ROM library; those live outside the repository, are never
+committed, and are not part of any build, test or published artifact. The
+audit output recorded in `docs/accuracy-status.md` describes results only
+(mapper IDs, counts), not the external paths.
