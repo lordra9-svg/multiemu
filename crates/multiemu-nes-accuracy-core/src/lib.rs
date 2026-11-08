@@ -9,8 +9,9 @@
 
 use multiemu_core::{
     Accuracy, AudioBuffer, Core, CoreError, CoreInfo, CoreRegistration, Features, FrameBuffer,
-    FrameStats, InputState, LoadOptions, PixelFormat, Region, SystemId, VideoFilter,
+    FrameStats, InputState, LoadOptions, PixelFormat, PortDevice, Region, SystemId, VideoFilter,
 };
+use multiemu_nes_accuracy::clock::Region as ClockRegion;
 use multiemu_nes_accuracy::system::System;
 use multiemu_nes_accuracy::CartError;
 
@@ -57,6 +58,7 @@ pub struct AccuracyCore {
     frame: Vec<u8>,
     audio: Vec<f32>,
     sample_rate: f32,
+    filter: VideoFilter,
 }
 
 impl AccuracyCore {
@@ -68,6 +70,7 @@ impl AccuracyCore {
             frame: vec![0; WIDTH as usize * HEIGHT as usize * 4],
             audio: Vec::new(),
             sample_rate: 48_000.0,
+            filter: VideoFilter::Raw,
         }
     }
 }
@@ -75,6 +78,33 @@ impl AccuracyCore {
 impl Default for AccuracyCore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Simple composite/NTSC display approximation: a 3-tap horizontal luma blend
+/// plus a mild scanline attenuation. Display-only; it never feeds back into
+/// emulation state.
+fn composite_filter(frame: &mut [u8]) {
+    let width = WIDTH as usize;
+    let height = HEIGHT as usize;
+    let mut row = vec![0u8; width * 4];
+    for y in 0..height {
+        let start = y * STRIDE;
+        row.copy_from_slice(&frame[start..start + STRIDE]);
+        for x in 0..width {
+            let left = x.saturating_sub(1);
+            let right = (x + 1).min(width - 1);
+            let scanline = if y & 1 == 0 { 1.0 } else { 0.82 };
+            for channel in 0..3 {
+                let blended = (f32::from(row[left * 4 + channel])
+                    + 2.0 * f32::from(row[x * 4 + channel])
+                    + f32::from(row[right * 4 + channel]))
+                    / 4.0;
+                let value = (blended * scanline).clamp(0.0, 255.0) as u8;
+                frame[start + x * 4 + channel] = value;
+            }
+            frame[start + x * 4 + 3] = row[x * 4 + 3];
+        }
     }
 }
 
@@ -88,12 +118,14 @@ impl Core for AccuracyCore {
     }
 
     fn load(&mut self, rom: &[u8], options: &LoadOptions) -> Result<(), CoreError> {
-        if options.region != Region::Auto && options.region != Region::Ntsc {
-            return Err(CoreError::Unsupported(
-                "only NTSC timing is implemented".into(),
-            ));
-        }
         let mut system = System::from_ines(rom).map_err(map_err)?;
+        let region = match options.region {
+            Region::Auto | Region::Ntsc => ClockRegion::Ntsc,
+            Region::Pal => ClockRegion::Pal,
+            Region::Dendy => ClockRegion::Dendy,
+        };
+        system.set_region(region);
+        self.filter = options.video_filter;
         let rate = if options.sample_rate > 0.0 {
             options.sample_rate
         } else {
@@ -121,6 +153,9 @@ impl Core for AccuracyCore {
         system.run_frame();
         self.frame.clear();
         self.frame.extend_from_slice(system.video());
+        if self.filter == VideoFilter::Composite {
+            composite_filter(&mut self.frame);
+        }
         self.audio.clear();
         self.audio.extend_from_slice(system.audio());
         Ok(FrameStats {
@@ -162,7 +197,25 @@ impl Core for AccuracyCore {
         }
     }
 
-    fn set_video_filter(&mut self, _filter: VideoFilter) {}
+    fn set_video_filter(&mut self, filter: VideoFilter) {
+        self.filter = filter;
+    }
+
+    fn set_port_device(&mut self, port: usize, device: PortDevice) {
+        if let Some(system) = self.system.as_mut() {
+            let device = match device {
+                PortDevice::Gamepad => multiemu_nes_accuracy::system::PortDevice::Gamepad,
+                PortDevice::Zapper => multiemu_nes_accuracy::system::PortDevice::Zapper,
+            };
+            system.set_port_device(port, device);
+        }
+    }
+
+    fn set_zapper(&mut self, port: usize, x: u8, y: u8, trigger: bool) {
+        if let Some(system) = self.system.as_mut() {
+            system.set_zapper(port, x, y, trigger);
+        }
+    }
 
     fn save_state(&mut self, _out: &mut Vec<u8>) -> Result<(), CoreError> {
         Err(CoreError::Unsupported(

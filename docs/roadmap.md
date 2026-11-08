@@ -36,14 +36,17 @@ The main effort is now the reference-parity accuracy core. Details in
       `docs/accuracy-divergences.md`; the dated measured log is
       `docs/accuracy-status.md`.
 - [ ] **A6** FDS, VS, PAL/Dendy, expansion audio, peripherals, NSF.
-      Progress: the accuracy core now supports a per-port device type and the
+      Progress: the accuracy core supports a per-port device type and the
       **NES Zapper** (`$4016`/`$4017` bit 4 trigger, bit 3 light, active-low;
       the sensor samples bright pixels in its 8x8 area as the beam passes),
-      with unit coverage. Frontend input mapping and a gamepad/peripheral
-      rebinding UI are still open. FDS/VS/PAL/Dendy/NSF and expansion audio
-      need external artifacts (FDS BIOS, PAL captures, NSF ROMs) that are not
-      in this workspace; headless-implementable pieces are the PAL/Dendy timing
-      tables and the NSF parser, verifiable here only by unit tests.
+      with unit coverage, and the desktop app maps the mouse to port 2 with a
+      Controllers-tab toggle. **PAL/Dendy timing** is wired through
+      `System::set_region` (312-line PPU, fractional 3.2-dot CPU/PPU ratio,
+      NTSC-only odd-frame skip), with unit-test verification. An **NSF/NSFE
+      parser and player** builds a synthetic NROM image with a player stub
+      (INIT once, PLAY from the NMI) and is covered by header, image-layout and
+      init/play unit tests. Remaining: FDS/VS, expansion audio, gamepad and the
+      peripheral rebinding UI, and validation against real PAL/NSF content.
 - [ ] **A7** differential harness, hardware captures, performance pass.
       Performance pass started: headless accuracy core ~535 -> ~640 fps
       (max-of-7, 2400 frames) via the sprite-list pixel loop, table-driven
@@ -71,11 +74,13 @@ The main effort is now the reference-parity accuracy core. Details in
       extracting; default folder `roms/`.
 - [x] Keyboard input (arrows, X/Z, Enter, Shift), pause/reset/stop, save/load
       state, screenshot, fullscreen, deterministic `verify`.
-- [ ] GPU scaling/shader pass and a native file dialog (the current shell uses an
-      `egui` texture and a path entry field).
+- [x] Native file dialog (`rfd`) for the ROM/save folders, integer scaling and
+      a nearest/linear texture-filter option; the composite/NTSC display filter
+      is offered through the core (`VideoFilter::Composite`).
 - [ ] Gamepad support (gilrs/SDL), rebinding UI, hot-plug, four players.
 - [ ] Audio device via `cpal`; ring buffer; sample-rate resampling; underrun policy.
-- [ ] SRAM persistence keyed by ROM hash; save-state slots with thumbnails.
+- [x] SRAM persistence keyed by ROM content hash; save-state slots with
+      thumbnails.
   - [x] Core exposes `sram()` / `load_sram`; the app writes `saves/<stem>.sav`.
 - [ ] Frame advance, fast-forward and rewind ring in the host.
 - [x] CLI regression mode: hash frames/audio, fresh-run vs state-resume, assert
@@ -88,11 +93,16 @@ The main effort is now the reference-parity accuracy core. Details in
 
 ## M2 — NES depth
 
-- [ ] Zapper and other input devices.
-- [ ] FDS (BIOS supplied by the user, never bundled), Vs. System, NSF/NSFE.
+- [x] Zapper (core sensor + app mouse aiming/trigger).
+- [ ] Other input devices (gamepad, four-score, family BASIC keyboard).
+- [ ] FDS (BIOS supplied by the user, never bundled), Vs. System.
+- [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation
+      pending).
 - [ ] Expansion audio levels and per-channel mixing.
 - [ ] NTSC/composite filter pass on the GPU, palette selection.
-- [ ] Debugger: CPU/PPU state, memory viewer, breakpoints, trace log.
+- [ ] Debugger: memory viewer and breakpoint UI. Headless pieces exist:
+      `multiemu run --dump-ppu` prints per-frame CPU/PPU/APU state and
+      `--break <hex>` stops on a PC.
 - [ ] Game Genie / cheat engine.
 
 ## M3 — prove "multi"

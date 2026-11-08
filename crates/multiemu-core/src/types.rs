@@ -209,6 +209,16 @@ pub enum Region {
     Dendy,
 }
 
+/// Device attached to a controller port.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum PortDevice {
+    /// Standard controller.
+    #[default]
+    Gamepad,
+    /// NES Zapper light gun.
+    Zapper,
+}
+
 /// Preferred video output style.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum VideoFilter {

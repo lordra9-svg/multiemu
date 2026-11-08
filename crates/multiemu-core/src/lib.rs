@@ -29,5 +29,5 @@ pub use input::{Button, InputState};
 pub use registry::{CoreRegistration, Factory, Registry};
 pub use types::{
     Accuracy, AudioBuffer, CoreInfo, Features, FrameBuffer, FrameStats, LoadOptions, PixelFormat,
-    Region, SystemId, VideoFilter,
+    PortDevice, Region, SystemId, VideoFilter,
 };

@@ -32,6 +32,10 @@ pub struct Settings {
     pub sample_rate: f32,
     /// Keep integer pixel scaling when possible.
     pub integer_scale: bool,
+    /// Use linear texture filtering (smooth scaling) instead of nearest.
+    pub linear_filter: bool,
+    /// Attach a Zapper light gun to port 2 (mouse aims and fires).
+    pub zapper_port2: bool,
     /// Colour theme.
     pub theme: Theme,
     /// Pause when the window loses focus.
@@ -57,6 +61,8 @@ impl Default for Settings {
             filter: VideoFilter::Raw,
             sample_rate: 48_000.0,
             integer_scale: true,
+            linear_filter: false,
+            zapper_port2: false,
             theme: Theme::Dark,
             pause_on_focus_loss: true,
             confirm_stop: false,
@@ -97,6 +103,8 @@ impl Settings {
                 "filter" => settings.filter = parse_filter(value),
                 "sample_rate" => settings.sample_rate = value.parse().unwrap_or(48_000.0),
                 "integer_scale" => settings.integer_scale = parse_bool(value),
+                "linear_filter" => settings.linear_filter = parse_bool(value),
+                "zapper_port2" => settings.zapper_port2 = parse_bool(value),
                 "theme" => {
                     settings.theme = if value == "light" {
                         Theme::Light
@@ -127,6 +135,8 @@ region={}
 filter={}
 sample_rate={}
 integer_scale={}
+linear_filter={}
+zapper_port2={}
 theme={}
 pause_on_focus_loss={}
 confirm_stop={}
@@ -141,6 +151,8 @@ muted={}
             filter_name(self.filter),
             self.sample_rate,
             self.integer_scale,
+            self.linear_filter,
+            self.zapper_port2,
             match self.theme {
                 Theme::Dark => "dark",
                 Theme::Light => "light",

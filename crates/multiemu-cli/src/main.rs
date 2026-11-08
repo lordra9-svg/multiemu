@@ -75,6 +75,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut failed = 0usize;
             let mut mappers: std::collections::BTreeMap<u16, (usize, usize)> =
                 std::collections::BTreeMap::new();
+            let mut unsupported_mappers: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
+            let mut failures: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
             let previous_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {}));
             for entry in entries.iter().take(limit) {
@@ -105,8 +109,18 @@ fn run() -> Result<(), Box<dyn Error>> {
                             stats.0 += 1;
                         }
                     }
-                    Ok(Err(err)) if err.contains("mapper") => unsupported += 1,
-                    _ => failed += 1,
+                    Ok(Err(err)) if err.contains("mapper") => {
+                        unsupported += 1;
+                        *unsupported_mappers.entry(err).or_default() += 1;
+                    }
+                    Ok(Err(err)) => {
+                        failed += 1;
+                        *failures.entry(err).or_default() += 1;
+                    }
+                    Err(_) => {
+                        failed += 1;
+                        *failures.entry("panic".into()).or_default() += 1;
+                    }
                 }
             }
             std::panic::set_hook(previous_hook);
@@ -116,6 +130,16 @@ fn run() -> Result<(), Box<dyn Error>> {
             );
             for (mapper, (ok, blank)) in mappers {
                 println!("mapper {mapper:>3}: {ok} rendering, {blank} blank");
+            }
+            let mut unsupported_ranked: Vec<_> = unsupported_mappers.into_iter().collect();
+            unsupported_ranked.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+            for (err, count) in unsupported_ranked.iter().take(80) {
+                println!("unsupported: {err}: {count}");
+            }
+            let mut failure_ranked: Vec<_> = failures.into_iter().collect();
+            failure_ranked.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+            for (err, count) in failure_ranked.iter().take(20) {
+                println!("failure: {err}: {count}");
             }
         }
         "cores" => {
@@ -155,6 +179,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut sram_path: Option<String> = None;
             let mut input = false;
             let mut core_id: Option<String> = None;
+            let mut dump_ppu = false;
+            let mut break_pc: Option<u16> = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--frames" => {
@@ -168,11 +194,44 @@ fn run() -> Result<(), Box<dyn Error>> {
                     "--sram" => sram_path = Some(args.next().ok_or("--sram needs a path")?),
                     "--press-start" => input = true,
                     "--core" => core_id = Some(args.next().ok_or("--core needs an id")?),
+                    "--dump-ppu" => dump_ppu = true,
+                    "--break" => {
+                        let pc = args.next().ok_or("--break needs an address")?;
+                        let pc = pc.trim_start_matches("0x").trim_start_matches('$');
+                        break_pc = Some(
+                            u16::from_str_radix(pc, 16)
+                                .map_err(|_| "--break needs a hex address")?,
+                        );
+                    }
                     other => return Err(format!("unknown option {other}").into()),
                 }
             }
 
             let (_, rom) = load_arg(&path)?;
+            if dump_ppu || break_pc.is_some() {
+                let mut system =
+                    multiemu_nes_accuracy::System::from_ines(&rom).map_err(|e| e.to_string())?;
+                if let Some(pc) = break_pc {
+                    let limit = 2_000_000u32;
+                    for _ in 0..limit {
+                        if system.cpu.registers.pc == pc {
+                            println!("{} (break at {:04X})", system.debug_state(), pc);
+                            return Ok(());
+                        }
+                        system.step_instruction();
+                    }
+                    return Err(format!(
+                        "breakpoint {:04X} not reached in {limit} instructions",
+                        pc
+                    )
+                    .into());
+                }
+                for _ in 0..frames {
+                    system.run_frame();
+                    println!("{}", system.debug_state());
+                }
+                return Ok(());
+            }
             let registry = registry();
             let mut core = create_core(&registry, core_id.as_deref())?;
             core.load(&rom, &LoadOptions::default())?;

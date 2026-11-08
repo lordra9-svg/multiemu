@@ -877,6 +877,32 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 
 ## Current status (2026-11-07)
 
+### 2026-11-07 — A6/M2 depth: PAL/Dendy, NSF, Zapper, composite filter
+
+- **PAL/Dendy timing** is wired: `System::set_region(Region)` selects the
+  region's 312-line PPU geometry, the fractional CPU/PPU dot ratio (3.0 NTSC,
+  3.2 PAL/Dendy) through a master-clock credit, and suppresses the NTSC
+  odd-frame dot skip. `clock.rs` already carried the tables; verification is
+  unit-test math (`region_selects_timing_geometry`), since no PAL capture is
+  available here.
+- **NSF/NSFE**: `nsf.rs` parses the `NESM\x1A` fixed header and the NSFE
+  `INFO`/`DATA` chunks, maps the payload into a synthetic 32 KiB NROM image
+  with a player stub, and returns a running `System`; INIT runs once and PLAY
+  from the NMI handler. Unit tests cover header fields, image/vector layout,
+  NSFE chunks and an end-to-end player run (INIT write, PLAY counter, audio).
+- **Zapper**: per-port device type plus `$4016`/`$4017` bit 4 trigger and
+  bit 3 light (active-low), with the sensor sampling the 8x8 area as the beam
+  passes. The desktop app aims/fires from the mouse and has a Controllers-tab
+  toggle; a unit test covers the register layout and gamepad fallback.
+- **Composite/display filter**: `VideoFilter::Composite` now applies a
+  display-only 3-tap horizontal blend plus scanline attenuation in the core
+  adapter; the app exposes nearest/linear texture filtering and integer scaling
+  and a native folder dialog (`rfd`). Saves are keyed by a content hash (scan
+  CRC plus FNV-1a 64) and state slots write a 64x60 RGBA thumbnail.
+- **CLI debugger**: `multiemu run <rom> --dump-ppu` prints one CPU/PPU/APU state
+  line per frame; `--break <hex>` steps instructions until the PC matches and
+  prints the state.
+
 ### Performance track (started 2026-11-07)
 
 Baseline for the accuracy core, headless (`multiemu run <rom> --frames 1200

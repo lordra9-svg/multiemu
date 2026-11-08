@@ -33,6 +33,10 @@ pub struct System {
     /// PPU frame number of the last Zapper light reset.
     zapper_frame: u64,
     strobe: bool,
+    /// Regional timing (NTSC/PAL/Dendy).
+    timing: Timing,
+    /// Master-clock credit for fractional PPU dots per CPU cycle.
+    ppu_credit: u32,
     /// Global CPU cycle phase (get/put).
     phase: bool,
     shift: [u8; 2],
@@ -136,6 +140,8 @@ impl System {
             zapper: [Zapper::default(); 2],
             zapper_frame: 0,
             strobe: false,
+            timing: Timing::NTSC,
+            ppu_credit: 0,
             phase: false,
             shift: [0; 2],
             frame: vec![0; 256 * 240 * 4],
@@ -174,7 +180,6 @@ impl System {
     pub fn set_port_device(&mut self, port: usize, device: PortDevice) {
         if port < 2 {
             self.devices[port] = device;
-            self.zapper[port].light = false;
         }
     }
 
@@ -198,8 +203,71 @@ impl System {
     pub fn set_sample_rate(&mut self, rate: f32) {
         if rate > 0.0 {
             self.audio_rate = rate;
-            self.sample_cycle = (CPU_HZ / f64::from(rate)).round() as u32;
+            self.sample_cycle = (self.timing.cpu_hz() as f64 / f64::from(rate)).round() as u32;
         }
+    }
+
+    /// Selects the regional timing model (NTSC, PAL or Dendy).
+    ///
+    /// The PPU scanline count and the CPU/PPU clock ratio follow the region.
+    /// PAL/Dendy run without the NTSC odd-frame dot skip.
+    pub fn set_region(&mut self, region: crate::clock::Region) {
+        self.timing = Timing::for_region(region);
+        self.ppu.timing = self.timing;
+        self.ppu_credit = 0;
+        self.set_sample_rate(self.audio_rate);
+    }
+
+    /// Regional timing in use.
+    #[must_use]
+    pub const fn timing(&self) -> Timing {
+        self.timing
+    }
+
+    /// PPU dots for the current CPU cycle, spreading the fractional remainder.
+    fn next_cpu_dots(&mut self) -> u32 {
+        self.ppu_credit += self.timing.cpu_divider;
+        let mut dots = 0u32;
+        while self.ppu_credit >= self.timing.ppu_divider {
+            self.ppu_credit -= self.timing.ppu_divider;
+            dots += 1;
+        }
+        dots
+    }
+
+    /// Executes one CPU instruction (including any DMA stalls it triggers)
+    /// and returns the cycles consumed.
+    ///
+    /// Intended for debuggers and single-step tracing; ordinary use should
+    /// call [`System::run_frame`].
+    pub fn step_instruction(&mut self) -> u32 {
+        let mut cpu = self.cpu;
+        let cycles = cpu.step(self);
+        self.cpu = cpu;
+        cycles.max(1)
+    }
+
+    /// A one-line CPU/PPU/APU state summary for debugger output.
+    #[must_use]
+    pub fn debug_state(&self) -> String {
+        let r = &self.cpu.registers;
+        format!(
+            "frame={} pc={:04X} a={:02X} x={:02X} y={:02X} sp={:02X} p={:02X} | ppu sl={} dot={} ctrl={:02X} mask={:02X} v={:04X} t={:04X} | apu cyc={}",
+            self.ppu.frames,
+            r.pc,
+            r.a,
+            r.x,
+            r.y,
+            r.sp,
+            r.p.bits(),
+            self.ppu.scanline,
+            self.ppu.dot,
+            self.ppu.ctrl,
+            self.ppu.mask,
+            self.ppu.v,
+            self.ppu.t,
+            self.apu.cycles(),
+        )
     }
 
     /// Runs one full display frame.
@@ -333,8 +401,9 @@ impl System {
 
     fn clock(&mut self) {
         self.end_dots = 0;
+        let dots = self.next_cpu_dots();
         let before = self.ppu.scanline;
-        self.ppu.step_dots(3);
+        self.ppu.step_dots(dots);
         self.sample_zapper();
         let after = self.ppu.scanline;
         if before != after {
@@ -481,7 +550,8 @@ impl System {
                     self.open_bus = value;
                 }
             }
-            self.advance_ppu_cycle(3);
+            let halt_dots = self.next_cpu_dots();
+            self.advance_ppu_cycle(halt_dots);
             let mut dummy = false;
             let mut extra = 0u32;
             loop {
@@ -534,9 +604,12 @@ impl System {
             return;
         }
 
-        // Normal CPU cycle: two PPU dots before the bus access, one after.
-        self.advance_ppu_cycle(2);
-        self.end_dots = 1;
+        // Normal CPU cycle: two PPU dots before the bus access, the remainder
+        // after it (one NTSC, one or two PAL/Dendy).
+        let dots = self.next_cpu_dots();
+        let before = dots.min(2);
+        self.advance_ppu_cycle(before);
+        self.end_dots = (dots - before) as u8;
     }
 
     /// Advances the PPU by `dots` and clocks scanline-based mappers.
@@ -910,6 +983,35 @@ mod tests {
         assert!(system.ppu.frames > start, "no frame completed");
         assert_eq!(system.video().len(), 256 * 240 * 4);
         assert!(!system.audio().is_empty(), "no audio produced");
+    }
+
+    #[test]
+    fn region_selects_timing_geometry() {
+        use crate::clock::{Region, Timing};
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-roms");
+        let path = root.join("nestest.nes");
+        if !path.exists() {
+            eprintln!("skipping: test-roms/nestest.nes missing");
+            return;
+        }
+        let rom = fs::read(path).expect("rom");
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.timing(), Timing::NTSC);
+        assert_eq!(system.ppu.timing.scanlines, 262);
+
+        system.set_region(Region::Pal);
+        assert_eq!(system.timing(), Timing::PAL);
+        assert_eq!(system.ppu.timing.scanlines, 312);
+        assert_eq!(system.ppu.timing.dots_per_line, 341);
+        assert!((system.timing().frame_rate() - 50.007).abs() < 0.01);
+
+        system.set_region(Region::Dendy);
+        assert_eq!(system.timing(), Timing::DENDY);
+        assert_eq!(system.ppu.timing.scanlines, 312);
+        assert_eq!(system.timing().cpu_hz(), 1_773_447);
+
+        system.set_region(Region::Ntsc);
+        assert_eq!(system.ppu.timing.scanlines, 262);
     }
 
     #[test]

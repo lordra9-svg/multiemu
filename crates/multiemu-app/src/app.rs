@@ -288,21 +288,46 @@ impl App {
                         }
                         ui.close_menu();
                     }
+                    let thumbs: Vec<Option<Vec<u8>>> = (0..10u8)
+                        .map(|slot| self.player.as_ref().and_then(|p| p.thumbnail(slot)))
+                        .collect();
+                    let thumb_stem = self
+                        .player
+                        .as_ref()
+                        .map(|p| p.stem.clone())
+                        .unwrap_or_default();
                     ui.menu_button("State slot", |ui| {
                         for slot in 0..10u8 {
-                            let selected = self.player.as_ref().is_some_and(|p| p.slot == slot);
-                            if ui
-                                .add_enabled(
-                                    has_game,
-                                    egui::Button::new(format!("Slot {slot}")).selected(selected),
-                                )
-                                .clicked()
-                            {
-                                if let Some(player) = &mut self.player {
-                                    player.slot = slot;
+                            ui.horizontal(|ui| {
+                                if let Some(bytes) = &thumbs[slot as usize] {
+                                    if bytes.len() == 64 * 60 * 4 {
+                                        let image = egui::ColorImage::from_rgba_unmultiplied(
+                                            [64, 60],
+                                            bytes,
+                                        );
+                                        let texture = ui.ctx().load_texture(
+                                            format!("{thumb_stem}-thumb-{slot}"),
+                                            image,
+                                            egui::TextureOptions::NEAREST,
+                                        );
+                                        ui.image((texture.id(), egui::vec2(48.0, 45.0)));
+                                    }
                                 }
-                                ui.close_menu();
-                            }
+                                let selected = self.player.as_ref().is_some_and(|p| p.slot == slot);
+                                if ui
+                                    .add_enabled(
+                                        has_game,
+                                        egui::Button::new(format!("Slot {slot}"))
+                                            .selected(selected),
+                                    )
+                                    .clicked()
+                                {
+                                    if let Some(player) = &mut self.player {
+                                        player.slot = slot;
+                                    }
+                                    ui.close_menu();
+                                }
+                            });
                         }
                     });
                     ui.separator();
@@ -776,7 +801,7 @@ impl App {
                             Tab::Interface => interface_tab(ui, &mut settings),
                             Tab::Graphics => graphics_tab(ui, &mut settings),
                             Tab::Audio => audio_tab(ui, &mut settings),
-                            Tab::Controllers => controllers_tab(ui),
+                            Tab::Controllers => controllers_tab(ui, &mut settings),
                             Tab::Paths => paths_tab(ui, &mut settings),
                             Tab::Nes => nes_tab(ui, &mut settings, selected_entry.as_ref()),
                             Tab::Advanced => advanced_tab(ui),
@@ -870,7 +895,21 @@ impl eframe::App for App {
         }
 
         if let Some(player) = &mut self.player {
-            viewport(ctx, player, self.settings.integer_scale);
+            player.set_port_device(
+                1,
+                if self.settings.zapper_port2 {
+                    multiemu_core::PortDevice::Zapper
+                } else {
+                    multiemu_core::PortDevice::Gamepad
+                },
+            );
+            viewport(
+                ctx,
+                player,
+                self.settings.integer_scale,
+                self.settings.linear_filter,
+                self.settings.zapper_port2,
+            );
         } else {
             self.library(ctx);
         }
@@ -953,7 +992,13 @@ fn fit_aspect(available: Rect, aspect: f32) -> Rect {
     Rect::from_center_size(available.center(), Vec2::new(width, height))
 }
 
-fn viewport(ctx: &egui::Context, player: &mut Player, integer_scale: bool) {
+fn viewport(
+    ctx: &egui::Context,
+    player: &mut Player,
+    integer_scale: bool,
+    linear_filter: bool,
+    zapper: bool,
+) {
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.fill(Color32::BLACK))
         .show(ctx, |ui| {
@@ -964,9 +1009,30 @@ fn viewport(ctx: &egui::Context, player: &mut Player, integer_scale: bool) {
                 let size = Vec2::new(240.0 * scale * 4.0 / 3.0, 240.0 * scale);
                 target = Rect::from_center_size(available.center(), size);
             }
+            if zapper {
+                // Mouse aims and fires the Zapper attached to port 2. The
+                // pointer is mapped into the 256x240 frame inside the scaled
+                // viewport rect; leaving the rect keeps the trigger released.
+                let position = ctx.pointer_latest_pos();
+                let trigger = ctx.input(|input| input.pointer.primary_down());
+                if let Some(position) = position.filter(|position| target.contains(*position)) {
+                    let relative = (position - target.min) / target.size();
+                    let x = (relative.x * 256.0).clamp(0.0, 255.0) as u8;
+                    let y = (relative.y * 240.0).clamp(0.0, 239.0) as u8;
+                    player.set_zapper(1, x, y, trigger);
+                } else if trigger {
+                    player.set_zapper(1, 0, 0, false);
+                }
+            }
+            player.set_texture_options(if linear_filter {
+                egui::TextureOptions::LINEAR
+            } else {
+                egui::TextureOptions::NEAREST
+            });
             if let Some(texture) = player.texture() {
+                let id = texture.id();
                 ui.painter().image(
-                    texture.id(),
+                    id,
                     target,
                     Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                     Color32::WHITE,
@@ -1054,6 +1120,10 @@ fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     );
     ui.add_space(8.0);
     ui.checkbox(&mut settings.integer_scale, "Integer scaling when possible");
+    ui.checkbox(
+        &mut settings.linear_filter,
+        "Smooth (linear) texture filtering",
+    );
     ui.add_space(8.0);
     ui.label(
         RichText::new("Filter changes apply to the running game immediately.")
@@ -1084,8 +1154,20 @@ fn audio_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     );
 }
 
-fn controllers_tab(ui: &mut egui::Ui) {
+fn controllers_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.heading("Controllers");
+    ui.add_space(8.0);
+    ui.checkbox(
+        &mut settings.zapper_port2,
+        "Port 2: NES Zapper (mouse aims, left button fires)",
+    );
+    ui.label(
+        RichText::new(
+            "Zapper changes apply to the next game started; the crosshair follows the mouse inside the viewport.",
+        )
+        .weak()
+        .small(),
+    );
     ui.add_space(8.0);
     ui.label("NES port 1 (keyboard)");
     ui.add_space(4.0);
@@ -1117,15 +1199,35 @@ fn paths_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.heading("Paths");
     ui.add_space(8.0);
     ui.label("ROM folder");
-    let mut rom_dir = settings.rom_dir.display().to_string();
-    if ui.text_edit_singleline(&mut rom_dir).changed() {
-        settings.rom_dir = PathBuf::from(rom_dir);
-    }
+    ui.horizontal(|ui| {
+        let mut rom_dir = settings.rom_dir.display().to_string();
+        if ui.text_edit_singleline(&mut rom_dir).changed() {
+            settings.rom_dir = PathBuf::from(rom_dir);
+        }
+        if ui.button("Browse…").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_directory(&settings.rom_dir)
+                .pick_folder()
+            {
+                settings.rom_dir = path;
+            }
+        }
+    });
     ui.label("Save/state folder");
-    let mut save_dir = settings.save_dir.display().to_string();
-    if ui.text_edit_singleline(&mut save_dir).changed() {
-        settings.save_dir = PathBuf::from(save_dir);
-    }
+    ui.horizontal(|ui| {
+        let mut save_dir = settings.save_dir.display().to_string();
+        if ui.text_edit_singleline(&mut save_dir).changed() {
+            settings.save_dir = PathBuf::from(save_dir);
+        }
+        if ui.button("Browse…").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_directory(&settings.save_dir)
+                .pick_folder()
+            {
+                settings.save_dir = path;
+            }
+        }
+    });
     ui.add_space(8.0);
     ui.label(
         RichText::new("Changing the ROM folder rescans the library when you close Settings.")

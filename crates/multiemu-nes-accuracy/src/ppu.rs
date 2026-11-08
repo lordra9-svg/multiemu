@@ -288,7 +288,7 @@ impl Ppu {
         // OAM corruption: disabling rendering during a rendered line seeds a
         // row; the next rendered dot copies OAM row 0 into that row.
         let rendering = self.mask & 0x18 != 0;
-        let rendered_line = self.scanline < 240 || self.scanline == 261;
+        let rendered_line = self.scanline < 240 || self.scanline == self.pre_render_line();
         if self.prev_rendering && !rendering && rendered_line {
             self.corruption_seed = self.secondary_oamaddr & 0x1F;
             self.corruption_pending = true;
@@ -316,7 +316,7 @@ impl Ppu {
             self.spr_active = mask;
             self.sprites = self.next_sprites;
             self.sprite_count = self.next_count;
-            if self.scanline < 240 || self.scanline == 261 {
+            if self.scanline < 240 || self.scanline == self.pre_render_line() {
                 self.oam_id = [64; 8];
             }
         }
@@ -369,7 +369,7 @@ impl Ppu {
             self.overflow_count = 0;
         }
         // OAMADDR is reset to 0 during the sprite fetch interval.
-        if self.dot == 257 && self.mask & 0x18 != 0 && self.scanline <= 261 {
+        if self.dot == 257 && self.mask & 0x18 != 0 && self.scanline <= self.pre_render_line() {
             self.oam_addr = 0;
         }
         // Sprite evaluation for the NEXT line runs during dots 65-256, one OAM
@@ -390,7 +390,7 @@ impl Ppu {
             self.update_oam_latch();
         }
         // Background fetch/shift pipeline and pixel composition.
-        let rendered_line = self.scanline < 240 || self.scanline == 261;
+        let rendered_line = self.scanline < 240 || self.scanline == self.pre_render_line();
         let rendering = self.mask & 0x18 != 0;
         if rendered_line && (1..=256).contains(&self.dot) {
             if self.scanline < 240 {
@@ -409,7 +409,8 @@ impl Ppu {
 
         // Live VRAM address updates for background fetches. These only happen
         // on visible lines and the pre-render line, never in vblank.
-        if (self.scanline < 240 || self.scanline == 261) && self.mask & 0x18 != 0 {
+        if (self.scanline < 240 || self.scanline == self.pre_render_line()) && self.mask & 0x18 != 0
+        {
             match self.dot {
                 8 | 16 | 24 | 32 | 40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120
                 | 128 | 136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224
@@ -418,7 +419,7 @@ impl Ppu {
                 257 => self.copy_horizontal(),
                 _ => {}
             }
-            if self.scanline == 261 && (280..=304).contains(&self.dot) {
+            if self.scanline == self.pre_render_line() && (280..=304).contains(&self.dot) {
                 self.copy_vertical();
             }
         }
@@ -433,7 +434,7 @@ impl Ppu {
                 self.nmi_pending = true;
             }
         }
-        if self.scanline == 261 && self.dot == self.vblank_clear_dot {
+        if self.scanline == self.pre_render_line() && self.dot == self.vblank_clear_dot {
             self.status &= !(STATUS_VBLANK | STATUS_SPRITE0 | STATUS_OVERFLOW);
             self.nmi_line = false;
             self.nmi_suppressed = false;
@@ -444,10 +445,14 @@ impl Ppu {
         // The pre-render line is one dot shorter on odd frames when rendering
         // is enabled. The decision is sampled at dot 339, the dot before the
         // skipped one.
-        if self.scanline == 261 && self.dot == 339 {
+        if self.scanline == self.pre_render_line() && self.dot == 339 {
             self.rendering_at_339 = self.mask & 0x18 != 0;
         }
-        if self.scanline == 261 && self.dot == 340 && self.frames & 1 == 1 && self.rendering_at_339
+        if self.timing.region == crate::clock::Region::Ntsc
+            && self.scanline == self.pre_render_line()
+            && self.dot == 340
+            && self.frames & 1 == 1
+            && self.rendering_at_339
         {
             self.dot = 0;
             self.scanline = 0;
@@ -490,7 +495,7 @@ impl Ppu {
                 // the read cycle. If this read ends on the pre-render clear
                 // dot they must already read as zero.
                 let mut sampled = self.status;
-                if self.scanline == 261 && self.dot == self.vblank_clear_dot {
+                if self.scanline == self.pre_render_line() && self.dot == self.vblank_clear_dot {
                     sampled &= !(STATUS_SPRITE0 | STATUS_OVERFLOW);
                 }
                 let value = (sampled & 0xE0) | (self.io_bus & 0x1F);
@@ -509,7 +514,9 @@ impl Ppu {
                         self.fetch_addr
                     };
                     self.secondary_oam[usize::from(address & 0x1F)]
-                } else if (self.scanline < 240 || self.scanline == 261) && self.mask & 0x18 != 0 {
+                } else if (self.scanline < 240 || self.scanline == self.pre_render_line())
+                    && self.mask & 0x18 != 0
+                {
                     // While rendering, $2004 exposes the internal OAM data
                     // latch rather than OAM[OAMADDR].
                     self.legacy_data
@@ -557,7 +564,8 @@ impl Ppu {
                 self.ctrl = value;
                 self.t = (self.t & !0x0C00) | (u16::from(value & 0x03) << 10);
                 if value & 0x80 != 0 && !was_enabled && self.status & STATUS_VBLANK != 0 {
-                    let on_clear_dot = self.scanline == 261 && self.dot == self.vblank_clear_dot;
+                    let on_clear_dot = self.scanline == self.pre_render_line()
+                        && self.dot == self.vblank_clear_dot;
                     if !self.nmi_suppressed && !on_clear_dot {
                         self.nmi_line = true;
                         self.nmi_pending = true;
@@ -575,7 +583,7 @@ impl Ppu {
                 // after the bus write; model the smallest delay. Pre-render
                 // writes stay immediate because the odd-frame skip decision is
                 // sampled at dot 339 with the calibrated phase.
-                if self.scanline == 261 {
+                if self.scanline == self.pre_render_line() {
                     self.mask = value;
                 } else {
                     self.pending_mask = Some(value);
@@ -586,7 +594,9 @@ impl Ppu {
             }
             3 => self.oam_addr = value,
             4 => {
-                if (self.scanline < 240 || self.scanline == 261) && self.mask & 0x18 != 0 {
+                if (self.scanline < 240 || self.scanline == self.pre_render_line())
+                    && self.mask & 0x18 != 0
+                {
                     self.oam_addr = self.oam_addr.wrapping_add(4) & 0xFC;
                 } else {
                     let mut value = value;
@@ -615,7 +625,9 @@ impl Ppu {
                     let old_low = self.v as u8;
                     self.t = (self.t & 0xFF00) | u16::from(value);
                     self.v = self.t;
-                    if (self.scanline < 240 || self.scanline == 261) && self.mask & 0x18 != 0 {
+                    if (self.scanline < 240 || self.scanline == self.pre_render_line())
+                        && self.mask & 0x18 != 0
+                    {
                         self.hybrid_low = old_low.wrapping_add(1);
                         self.hybrid_fetch = true;
                     }
@@ -635,6 +647,11 @@ impl Ppu {
             }
             _ => {}
         }
+    }
+
+    /// Pre-render scanline for the configured region (261 NTSC, 311 PAL).
+    fn pre_render_line(&self) -> u16 {
+        self.timing.scanlines - 1
     }
 
     fn nametable_index(&self, address: u16) -> usize {
@@ -657,7 +674,8 @@ impl Ppu {
     /// Increments `v` after a `$2007` access. During rendering this performs a
     /// coarse-X and Y increment simultaneously instead of the normal +1/+32.
     fn increment_vram_address(&mut self) {
-        if (self.scanline < 240 || self.scanline == 261) && self.mask & 0x18 != 0 {
+        if (self.scanline < 240 || self.scanline == self.pre_render_line()) && self.mask & 0x18 != 0
+        {
             let mut v = self.v;
             if v & 0x001F == 31 {
                 v &= !0x001F;
@@ -809,7 +827,7 @@ impl Ppu {
                     return;
                 }
                 let height = u32::from(self.sprite_height());
-                let ly = if self.scanline == 261 {
+                let ly = if self.scanline == self.pre_render_line() {
                     -1i32
                 } else {
                     i32::from(self.scanline)
@@ -853,7 +871,7 @@ impl Ppu {
                 return;
             }
             let height = u32::from(self.sprite_height());
-            let ly = if self.scanline == 261 {
+            let ly = if self.scanline == self.pre_render_line() {
                 -1i32
             } else {
                 i32::from(self.scanline)
@@ -984,7 +1002,7 @@ impl Ppu {
                 }
                 return;
             }
-            let ly = if self.scanline == 261 {
+            let ly = if self.scanline == self.pre_render_line() {
                 -1i32
             } else {
                 i32::from(self.scanline)
@@ -1151,7 +1169,7 @@ impl Ppu {
                 self.secondary_oam[base + 1],
                 self.secondary_oam[base + 2],
                 self.secondary_oam[base + 3],
-                if self.scanline == 261 {
+                if self.scanline == self.pre_render_line() {
                     // Sprite evaluation does not run on the pre-render line,
                     // so the fetch uses whatever secondary OAM still holds.
                     // The first non-empty entry is treated as sprite zero.
@@ -1551,7 +1569,7 @@ mod tests {
         let mut ppu = ppu();
         ppu.status = STATUS_VBLANK | STATUS_SPRITE0 | STATUS_OVERFLOW;
         ppu.nmi_line = true;
-        ppu.scanline = 261;
+        ppu.scanline = ppu.pre_render_line();
         ppu.dot = 0;
         ppu.step_dot();
         ppu.step_dot();

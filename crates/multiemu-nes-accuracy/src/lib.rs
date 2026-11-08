@@ -16,6 +16,7 @@ pub mod bus;
 pub mod cart;
 pub mod clock;
 pub mod cpu;
+pub mod nsf;
 pub mod ppu;
 pub mod system;
 
@@ -27,5 +28,6 @@ pub use bus::{CpuBus, RamBus};
 pub use cart::{CartError, Cartridge, Header, Mapper, Mirroring};
 pub use clock::{Region, Timing};
 pub use cpu::{Cpu, Registers, Status};
+pub use nsf::{Nsf, NsfError, NsfHeader};
 pub use ppu::Ppu;
 pub use system::System;

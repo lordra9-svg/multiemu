@@ -3,7 +3,9 @@
 use std::fmt;
 
 use crate::input::InputState;
-use crate::types::{AudioBuffer, CoreInfo, FrameBuffer, FrameStats, LoadOptions, VideoFilter};
+use crate::types::{
+    AudioBuffer, CoreInfo, FrameBuffer, FrameStats, LoadOptions, PortDevice, VideoFilter,
+};
 
 /// Errors a core may return to the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +73,12 @@ pub trait Core {
 
     /// Changes the output sample rate. May take effect on the next frame.
     fn set_sample_rate(&mut self, sample_rate: f32);
+
+    /// Attaches a device to a controller port (`Gamepad` by default).
+    fn set_port_device(&mut self, _port: usize, _device: PortDevice) {}
+
+    /// Aims the Zapper attached to `port` and reports the trigger state.
+    fn set_zapper(&mut self, _port: usize, _x: u8, _y: u8, _trigger: bool) {}
 
     /// Changes the core-side video filter.
     fn set_video_filter(&mut self, filter: VideoFilter);

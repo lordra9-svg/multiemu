@@ -4,7 +4,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use multiemu_core::{Core, InputState, LoadOptions, Region, Registry, SystemId, VideoFilter};
+use multiemu_core::{
+    Core, InputState, LoadOptions, PortDevice, Region, Registry, SystemId, VideoFilter,
+};
 
 use crate::library::GameEntry;
 use crate::settings::Settings;
@@ -31,6 +33,8 @@ pub struct Player {
     pub save_dir: PathBuf,
     /// Last operator-facing message.
     pub message: String,
+    /// Texture filtering used for the next upload.
+    texture_options: egui::TextureOptions,
     accum: f32,
     last_tick: Instant,
     sample_rate: f32,
@@ -56,9 +60,20 @@ impl Player {
         )
         .map_err(|err| err.to_string())?;
 
+        core.set_port_device(
+            1,
+            if settings.zapper_port2 {
+                PortDevice::Zapper
+            } else {
+                PortDevice::Gamepad
+            },
+        );
+
         let save_dir = settings.save_dir.clone();
         fs::create_dir_all(&save_dir).map_err(|err| format!("create save dir: {err}"))?;
-        let stem = entry.save_stem();
+        // Key saves by a content hash (FNV-1a 64) in addition to the scan CRC so
+        // renamed/colliding entries cannot share battery data.
+        let stem = format!("{}-{:016x}", entry.save_stem(), rom_fingerprint(&rom));
         let sram_path = save_dir.join(format!("{stem}.sav"));
         if let Ok(sram) = fs::read(&sram_path) {
             core.load_sram(&sram).map_err(|err| err.to_string())?;
@@ -75,6 +90,7 @@ impl Player {
             stem,
             save_dir,
             message: String::new(),
+            texture_options: egui::TextureOptions::NEAREST,
             accum: NTSC_FRAME,
             last_tick: Instant::now(),
             sample_rate: settings.sample_rate,
@@ -152,10 +168,9 @@ impl Player {
         };
         let image = egui::ColorImage::from_rgba_unmultiplied([width, height], &pixels);
         match &mut self.texture {
-            Some(texture) => texture.set(image, egui::TextureOptions::NEAREST),
+            Some(texture) => texture.set(image, self.texture_options),
             None => {
-                self.texture =
-                    Some(ctx.load_texture("nes-frame", image, egui::TextureOptions::NEAREST));
+                self.texture = Some(ctx.load_texture("nes-frame", image, self.texture_options));
             }
         }
     }
@@ -178,6 +193,21 @@ impl Player {
     pub fn core_label(&self) -> String {
         let info = self.core.info();
         format!("{} {}", info.name, info.version)
+    }
+
+    /// Attaches a device to a controller port.
+    pub fn set_port_device(&mut self, port: usize, device: PortDevice) {
+        self.core.set_port_device(port, device);
+    }
+
+    /// Aims the Zapper and reports its trigger.
+    pub fn set_zapper(&mut self, port: usize, x: u8, y: u8, trigger: bool) {
+        self.core.set_zapper(port, x, y, trigger);
+    }
+
+    /// Sets the display texture filtering (nearest vs smooth).
+    pub fn set_texture_options(&mut self, options: egui::TextureOptions) {
+        self.texture_options = options;
     }
 
     /// Applies a video filter live.
@@ -213,6 +243,8 @@ impl Player {
                 let path = self.state_path(slot);
                 match fs::write(&path, state) {
                     Ok(()) => {
+                        let thumb = self.thumbnail_bytes();
+                        let _ = fs::write(self.thumb_path(slot), thumb);
                         self.slot = slot;
                         self.message = format!("Saved state slot {slot}");
                     }
@@ -238,6 +270,42 @@ impl Player {
             },
             Err(err) => self.message = format!("state read: {err}"),
         }
+    }
+
+    /// Path of the saved thumbnail for `slot`.
+    #[must_use]
+    pub fn thumb_path(&self, slot: u8) -> PathBuf {
+        self.save_dir
+            .join(format!("{}.slot{slot}.thumb", self.stem))
+    }
+
+    /// Saved thumbnail (`64x60` RGBA) for `slot`, if one exists.
+    #[must_use]
+    pub fn thumbnail(&self, slot: u8) -> Option<Vec<u8>> {
+        fs::read(self.thumb_path(slot)).ok()
+    }
+
+    fn thumbnail_bytes(&self) -> Vec<u8> {
+        const THUMB_W: usize = 64;
+        const THUMB_H: usize = 60;
+        let video = self.core.video();
+        let mut out = Vec::with_capacity(THUMB_W * THUMB_H * 4);
+        if video.width == 0 || video.height == 0 {
+            return out;
+        }
+        for ty in 0..THUMB_H {
+            for tx in 0..THUMB_W {
+                let sx = tx * video.width as usize / THUMB_W;
+                let sy = ty * video.height as usize / THUMB_H;
+                let index = sy * video.stride + sx * 4;
+                if index + 4 <= video.data.len() {
+                    out.extend_from_slice(&video.data[index..index + 4]);
+                } else {
+                    out.extend_from_slice(&[0, 0, 0, 255]);
+                }
+            }
+        }
+        out
     }
 
     /// Writes the current frame as a PPM next to the save data.
@@ -297,4 +365,14 @@ pub fn region_label(region: Region) -> &'static str {
         Region::Pal => "PAL",
         Region::Dendy => "Dendy",
     }
+}
+
+/// Stable 64-bit content fingerprint (FNV-1a).
+fn rom_fingerprint(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
