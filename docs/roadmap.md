@@ -36,10 +36,14 @@ The main effort is now the reference-parity accuracy core. Details in
       `docs/accuracy-divergences.md`; the dated measured log is
       `docs/accuracy-status.md`.
 - [ ] **A6** FDS, VS, PAL/Dendy, expansion audio, peripherals, NSF.
-      Needs external artifacts (FDS BIOS, PAL/Dendy captures, a peripheral
-      test ROM) that are not in this workspace; implementable headless pieces
-      are PAL/Dendy timing tables and NSF parsing, verifiable only by unit
-      tests here.
+      Progress: the accuracy core now supports a per-port device type and the
+      **NES Zapper** (`$4016`/`$4017` bit 4 trigger, bit 3 light, active-low;
+      the sensor samples bright pixels in its 8x8 area as the beam passes),
+      with unit coverage. Frontend input mapping and a gamepad/peripheral
+      rebinding UI are still open. FDS/VS/PAL/Dendy/NSF and expansion audio
+      need external artifacts (FDS BIOS, PAL captures, NSF ROMs) that are not
+      in this workspace; headless-implementable pieces are the PAL/Dendy timing
+      tables and the NSF parser, verifiable here only by unit tests.
 - [ ] **A7** differential harness, hardware captures, performance pass.
       Performance pass started: headless accuracy core ~535 -> ~640 fps
       (max-of-7, 2400 frames) via the sprite-list pixel loop, table-driven

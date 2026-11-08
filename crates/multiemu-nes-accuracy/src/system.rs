@@ -26,6 +26,12 @@ pub struct System {
     pub apu: Apu,
     ram: [u8; 0x800],
     controllers: [u8; 2],
+    /// Device attached to each controller port.
+    devices: [PortDevice; 2],
+    /// NES Zapper state per port (used when the device is [`PortDevice::Zapper`]).
+    zapper: [Zapper; 2],
+    /// PPU frame number of the last Zapper light reset.
+    zapper_frame: u64,
     strobe: bool,
     /// Global CPU cycle phase (get/put).
     phase: bool,
@@ -52,6 +58,29 @@ pub struct System {
     /// PPU scanline at the start of the current split cycle.
     cycle_before_scanline: u16,
     dma: Option<Dma>,
+}
+
+/// Device attached to a controller port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PortDevice {
+    /// Standard controller.
+    #[default]
+    Gamepad,
+    /// NES Zapper light gun.
+    Zapper,
+}
+
+/// NES Zapper state.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Zapper {
+    /// Sensor X position (0..=255), top-left of the 8x8 detection area.
+    pub x: u8,
+    /// Sensor Y position (0..=239).
+    pub y: u8,
+    /// Trigger pulled (full pull).
+    pub trigger: bool,
+    /// The beam swept a bright pixel under the sensor this frame.
+    light: bool,
 }
 
 /// Which DMA engine owns the bus.
@@ -103,6 +132,9 @@ impl System {
             apu: Apu::new(),
             ram: [0; 0x800],
             controllers: [0; 2],
+            devices: [PortDevice::Gamepad; 2],
+            zapper: [Zapper::default(); 2],
+            zapper_frame: 0,
             strobe: false,
             phase: false,
             shift: [0; 2],
@@ -136,6 +168,23 @@ impl System {
         self.cpu = cpu;
         self.apu = Apu::new();
         self.ram = [0; 0x800];
+    }
+
+    /// Attaches a device to a controller port.
+    pub fn set_port_device(&mut self, port: usize, device: PortDevice) {
+        if port < 2 {
+            self.devices[port] = device;
+            self.zapper[port].light = false;
+        }
+    }
+
+    /// Sets the Zapper's aim and trigger for a port.
+    pub fn set_zapper(&mut self, port: usize, x: u8, y: u8, trigger: bool) {
+        if port < 2 {
+            self.zapper[port].x = x;
+            self.zapper[port].y = y;
+            self.zapper[port].trigger = trigger;
+        }
     }
 
     /// Sets controller input bits (`InputState` layout).
@@ -229,7 +278,51 @@ impl System {
         }
     }
 
+    /// Samples the Zapper light sensor as the PPU beam sweeps its 8x8 area.
+    fn sample_zapper(&mut self) {
+        if self.ppu.frames != self.zapper_frame {
+            self.zapper_frame = self.ppu.frames;
+            for zapper in &mut self.zapper {
+                zapper.light = false;
+            }
+        }
+        let scanline = self.ppu.scanline;
+        let dot = self.ppu.dot;
+        for port in 0..2 {
+            let zapper = self.zapper[port];
+            if self.devices[port] != PortDevice::Zapper || zapper.light {
+                continue;
+            }
+            if scanline >= u16::from(zapper.y)
+                && scanline < u16::from(zapper.y) + 8
+                && dot >= u16::from(zapper.x)
+                && dot < u16::from(zapper.x) + 8
+            {
+                let index = (usize::from(scanline) * 256 + usize::from(dot)) * 4;
+                if let Some(pixel) = self.frame.get(index..index + 3) {
+                    let luma =
+                        (u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2])) / 3;
+                    if luma > 0x60 {
+                        self.zapper[port].light = true;
+                    }
+                }
+            }
+        }
+    }
+
     fn read_controller(&mut self, port: usize) -> u8 {
+        if self.devices[port] == PortDevice::Zapper {
+            // Zapper: bit 4 = trigger (0 pulled), bit 3 = light (0 detected).
+            // The other pins float high; the shift register is unused.
+            let mut value = (self.open_bus & 0xE0) | 0x40;
+            if !self.zapper[port].trigger {
+                value |= 0x10;
+            }
+            if !self.zapper[port].light {
+                value |= 0x08;
+            }
+            return value;
+        }
         let bit = if self.shift[port] & 1 != 0 { 0x01 } else { 0 };
         let value = (self.open_bus & 0xE0) | 0x40 | bit;
         if !self.strobe {
@@ -242,6 +335,7 @@ impl System {
         self.end_dots = 0;
         let before = self.ppu.scanline;
         self.ppu.step_dots(3);
+        self.sample_zapper();
         let after = self.ppu.scanline;
         if before != after {
             // MMC3-style mappers clock once per rendered scanline on the PPU
@@ -816,5 +910,39 @@ mod tests {
         assert!(system.ppu.frames > start, "no frame completed");
         assert_eq!(system.video().len(), 256 * 240 * 4);
         assert!(!system.audio().is_empty(), "no audio produced");
+    }
+
+    #[test]
+    fn zapper_register_reports_trigger_and_light() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-roms");
+        let path = root.join("nestest.nes");
+        if !path.exists() {
+            eprintln!("skipping: test-roms/nestest.nes missing");
+            return;
+        }
+        let rom = fs::read(path).expect("rom");
+        let mut system = System::from_ines(&rom).expect("load");
+
+        system.set_port_device(1, PortDevice::Zapper);
+        system.set_zapper(1, 100, 100, false);
+        let released = CpuBus::read(&mut system, 0x4017);
+        assert_eq!(
+            released & 0x18,
+            0x18,
+            "released trigger and no light leave both bits high"
+        );
+
+        system.set_zapper(1, 100, 100, true);
+        let pulled = CpuBus::read(&mut system, 0x4017);
+        assert_eq!(pulled & 0x10, 0x00, "pulled trigger pulls bit 4 low");
+        assert_eq!(pulled & 0x08, 0x08, "no light sensed leaves bit 3 high");
+
+        // Switching the port back to a gamepad restores the shift register.
+        system.set_port_device(1, PortDevice::Gamepad);
+        system.set_controller(1, 0x01);
+        CpuBus::write(&mut system, 0x4016, 1);
+        CpuBus::write(&mut system, 0x4016, 0);
+        let pad = CpuBus::read(&mut system, 0x4017);
+        assert_eq!(pad & 0x01, 0x01, "gamepad serial bit is read from the port");
     }
 }
