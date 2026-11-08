@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::cart::{HybridChr, Mirroring};
+use crate::cart::{HybridChr, Mirroring, Mmc5Aux};
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -119,6 +119,8 @@ pub struct Ppu {
     mmc2: Option<Mmc2Chr>,
     /// Shared hybrid CHR state (mappers 165/195).
     hybrid: Option<Rc<RefCell<HybridChr>>>,
+    /// Shared MMC5 state (ExRAM/nametables/CHR map).
+    mmc5_aux: Option<Rc<RefCell<Mmc5Aux>>>,
     /// Full CHR ROM used for ROM nametables (Sunsoft-4), if any.
     nt_rom: Vec<u8>,
     /// Two 1 KiB CHR nametable bank indices when ROM nametables are enabled.
@@ -275,6 +277,7 @@ impl Ppu {
             chr,
             mmc2: None,
             hybrid: None,
+            mmc5_aux: None,
             nt_rom: Vec::new(),
             nt_banks: None,
             chr_ram,
@@ -359,6 +362,11 @@ impl Ppu {
         self.hybrid = Some(hybrid);
     }
 
+    /// Shares the mapper's MMC5 state (ExRAM/nametables/CHR map).
+    pub fn set_mmc5_aux(&mut self, aux: Rc<RefCell<Mmc5Aux>>) {
+        self.mmc5_aux = Some(aux);
+    }
+
     /// Installs the full CHR ROM used for ROM nametables.
     pub fn set_rom_nametable_rom(&mut self, rom: Vec<u8>) {
         self.nt_rom = rom;
@@ -406,8 +414,23 @@ impl Ppu {
         self.read_vram(address)
     }
 
+    /// Test-only nametable write hook.
+    #[cfg(test)]
+    pub(crate) fn debug_write_vram(&mut self, address: u16, value: u8) {
+        self.write_vram(address, value);
+    }
+
+    /// Test-only CHR read hook.
+    #[cfg(test)]
+    pub(crate) fn debug_chr_byte(&self, address: u16) -> u8 {
+        self.chr_byte(address)
+    }
+
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.mmc5_aux {
+            return aux.borrow().chr_read(address, &self.chr);
+        }
         if let Some(hybrid) = &self.hybrid {
             return hybrid.borrow().read(address);
         }
@@ -898,6 +921,11 @@ impl Ppu {
     }
 
     fn read_nametable(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.mmc5_aux {
+            if let Some(value) = aux.borrow().nametable_override(address) {
+                return value;
+            }
+        }
         if let Some(banks) = self.nt_banks {
             if !self.nt_rom.is_empty() {
                 let bank = usize::from(self.nametable_bank(address, banks))
@@ -957,7 +985,14 @@ impl Ppu {
 
     fn write_vram(&mut self, address: u16, value: u8) {
         if address < 0x2000 {
-            if let Some(hybrid) = &self.hybrid {
+            if let Some(aux) = &self.mmc5_aux {
+                if aux.borrow().is_ram() {
+                    let offset = aux.borrow().chr_offset(address);
+                    if let Some(byte) = self.chr.get_mut(offset) {
+                        *byte = value;
+                    }
+                }
+            } else if let Some(hybrid) = &self.hybrid {
                 hybrid.borrow_mut().write(address, value);
             } else if self.chr_ram {
                 let index = usize::from(address) & 0x1FFF;
@@ -966,6 +1001,11 @@ impl Ppu {
                 }
             }
         } else if address < 0x3F00 {
+            if let Some(aux) = &self.mmc5_aux {
+                if aux.borrow_mut().nametable_write(address, value) {
+                    return;
+                }
+            }
             // ROM nametables are read-only.
             if self.nt_banks.is_none() {
                 let index = self.nametable_index(address);

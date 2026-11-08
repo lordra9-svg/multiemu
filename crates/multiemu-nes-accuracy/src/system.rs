@@ -138,6 +138,9 @@ impl System {
         if let Some(hybrid) = cart.hybrid_chr() {
             ppu.set_hybrid_chr(hybrid);
         }
+        if let Some(aux) = cart.mmc5_aux() {
+            ppu.set_mmc5_aux(aux);
+        }
         if cart.has_rom_nametables() {
             if let Some(rom) = cart.chr_rom() {
                 ppu.set_rom_nametable_rom(rom.to_vec());
@@ -1008,6 +1011,44 @@ mod tests {
         assert!(system.ppu.frames > start, "no frame completed");
         assert_eq!(system.video().len(), 256 * 240 * 4);
         assert!(!system.audio().is_empty(), "no audio produced");
+    }
+
+    #[test]
+    fn mmc5_exram_nametables_fill_and_chr_map_reach_the_ppu() {
+        let prg_len = 128 * 1024;
+        let chr_len = 64 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 8;
+        rom[6] = 0x50; // Mapper 5.
+        for (bank, chunk) in rom[16 + prg_len..].chunks_mut(0x400).enumerate() {
+            chunk.fill(0x80 | bank as u8);
+        }
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 5);
+
+        // ExRAM-backed nametable in mode 2, mapped to slot 0.
+        CpuBus::write(&mut system, 0x5104, 2);
+        CpuBus::write(&mut system, 0x5105, 0x02);
+        CpuBus::write(&mut system, 0x5C00, 0x5A);
+        assert_eq!(system.ppu.debug_read_vram(0x2000), 0x5A);
+        system.ppu.debug_write_vram(0x2000, 0x33);
+        assert_eq!(system.cart.cpu_read(0x5C00), 0x33);
+
+        // Fill mode: tile bytes return $5106, attributes $5107.
+        CpuBus::write(&mut system, 0x5105, 0x03);
+        CpuBus::write(&mut system, 0x5106, 0x42);
+        CpuBus::write(&mut system, 0x5107, 0x05);
+        assert_eq!(system.ppu.debug_read_vram(0x2000), 0x42);
+        assert_eq!(system.ppu.debug_read_vram(0x23C0), 0x05);
+
+        // 1 KiB CHR map, updated mid-frame by a register write.
+        CpuBus::write(&mut system, 0x5101, 3);
+        CpuBus::write(&mut system, 0x5120, 5);
+        assert_eq!(system.ppu.debug_chr_byte(0x0000), 0x85);
+        CpuBus::write(&mut system, 0x5120, 7);
+        assert_eq!(system.ppu.debug_chr_byte(0x0000), 0x87);
     }
 
     #[test]

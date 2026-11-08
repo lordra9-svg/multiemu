@@ -25,6 +25,102 @@ pub enum Mirroring {
     SingleUpper,
 }
 
+/// Shared MMC5 state the PPU needs: ExRAM, nametable mapping/fill and the
+/// resolved 1 KiB CHR bank per PPU slot.
+///
+/// The mapper updates this on its register writes, so mid-frame CHR banking
+/// and ExRAM-backed nametables take effect immediately.
+#[derive(Debug)]
+pub struct Mmc5Aux {
+    exram: [u8; 1024],
+    mode: u8,
+    nt_map: [u8; 4],
+    fill_tile: u8,
+    fill_attr: u8,
+    rom: Vec<u8>,
+    ram: bool,
+    slots: [u16; 8],
+}
+
+impl Mmc5Aux {
+    fn new(rom: Vec<u8>, ram: bool) -> Self {
+        Self {
+            exram: [0; 1024],
+            mode: 3,
+            nt_map: [0; 4],
+            fill_tile: 0,
+            fill_attr: 0,
+            rom,
+            ram,
+            slots: [0, 1, 2, 3, 4, 5, 6, 7],
+        }
+    }
+
+    fn set_registers(&mut self, mode: u8, nt_map: [u8; 4], fill_tile: u8, fill_attr: u8) {
+        self.mode = mode;
+        self.nt_map = nt_map;
+        self.fill_tile = fill_tile;
+        self.fill_attr = fill_attr;
+    }
+
+    fn set_slots(&mut self, slots: [u16; 8]) {
+        self.slots = slots;
+    }
+
+    /// Nametable byte supplied by ExRAM or fill mode, if this slot uses one.
+    pub(crate) fn nametable_override(&self, address: u16) -> Option<u8> {
+        // In modes 0/1 ExRAM is extended-attribute data; keep the CIRAM
+        // fallback for games that map it as a nametable only incidentally.
+        if self.mode <= 1 {
+            return None;
+        }
+        let slot = usize::from(address >> 10 & 3);
+        let offset = usize::from(address & 0x3FF);
+        match self.nt_map[slot] {
+            2 => Some(self.exram[offset]),
+            3 => Some(if address & 0x03C0 == 0x03C0 {
+                self.fill_attr
+            } else {
+                self.fill_tile
+            }),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn nametable_write(&mut self, address: u16, value: u8) -> bool {
+        let slot = usize::from(address >> 10 & 3);
+        match self.nt_map[slot] {
+            2 => {
+                // ExRAM writes are ignored in read-only mode.
+                if self.mode != 3 {
+                    self.exram[usize::from(address & 0x3FF)] = value;
+                }
+                true
+            }
+            3 => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn chr_offset(&self, address: u16) -> usize {
+        let slot = usize::from(address) / 0x400;
+        usize::from(self.slots[slot]) * 0x400 + usize::from(address & 0x3FF)
+    }
+
+    pub(crate) fn chr_read(&self, address: u16, local: &[u8]) -> u8 {
+        let offset = self.chr_offset(address);
+        if self.ram {
+            local.get(offset).copied().unwrap_or(0)
+        } else {
+            self.rom.get(offset).copied().unwrap_or(0)
+        }
+    }
+
+    pub(crate) fn is_ram(&self) -> bool {
+        self.ram
+    }
+}
+
 /// Which hybrid CHR board the shared state models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HybridKind {
@@ -273,6 +369,11 @@ pub trait Mapper: fmt::Debug {
 
     /// Cartridge-backed CPU window inside `$4020-$5FFF` (PRG-RAM boards).
     fn low_window(&self) -> Option<(u16, u16)> {
+        None
+    }
+
+    /// Shared MMC5 state (ExRAM/nametables/CHR map) for the PPU.
+    fn mmc5_aux(&self) -> Option<Rc<RefCell<Mmc5Aux>>> {
         None
     }
 
@@ -555,6 +656,12 @@ impl Cartridge {
     #[must_use]
     pub fn low_window(&self) -> Option<(u16, u16)> {
         self.mapper.low_window()
+    }
+
+    /// Shared MMC5 state for the PPU.
+    #[must_use]
+    pub fn mmc5_aux(&self) -> Option<Rc<RefCell<Mmc5Aux>>> {
+        self.mapper.mmc5_aux()
     }
 
     /// Battery-backed PRG-RAM contents.
@@ -2355,6 +2462,10 @@ pub struct Mmc5 {
     exram: [u8; 1024],
     prg_mode: u8,
     chr_mode: u8,
+    nt_map: [u8; 4],
+    fill_tile: u8,
+    fill_attr: u8,
+    aux: Option<Rc<RefCell<Mmc5Aux>>>,
     mirroring: Mirroring,
     prg_banks: [u8; 4],
     chr_banks: [u8; 8],
@@ -2373,11 +2484,19 @@ pub struct Mmc5 {
 
 impl Mmc5 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
-        Self {
+        let aux = Rc::new(RefCell::new(Mmc5Aux::new(
+            chr.clone(),
+            header.chr_size == 0,
+        )));
+        let mmc5 = Self {
             prg,
             chr,
             prg_ram: vec![0; 64 * 1024],
             exram: [0; 1024],
+            nt_map: [0; 4],
+            fill_tile: 0,
+            fill_attr: 0,
+            aux: Some(aux),
             // MMC5 power-on: PRG mode 3, $5114-$5116 = 0 and $5117 = $FF,
             // so the last bank is visible at $E000 and the reset vector works.
             prg_mode: 3,
@@ -2396,7 +2515,22 @@ impl Mmc5 {
             irq_counter: 0,
             irq_enabled: false,
             irq_pending: false,
+        };
+        mmc5.refresh_aux();
+        mmc5
+    }
+
+    fn refresh_aux(&self) {
+        let Some(aux) = &self.aux else {
+            return;
+        };
+        let mut aux = aux.borrow_mut();
+        aux.set_registers(self.exram_mode, self.nt_map, self.fill_tile, self.fill_attr);
+        let mut slots = [0u16; 8];
+        for (slot, value) in slots.iter_mut().enumerate() {
+            *value = self.chr_bank(slot) as u16;
         }
+        aux.set_slots(slots);
     }
 
     fn prg_bank_count(&self) -> usize {
@@ -2471,20 +2605,38 @@ impl Mmc5 {
     fn write_register(&mut self, address: u16, value: u8) {
         match address {
             0x5100 => self.prg_mode = value & 3,
-            0x5101 => self.chr_mode = value & 3,
+            0x5101 => {
+                self.chr_mode = value & 3;
+                self.refresh_aux();
+            }
             0x5102 => self.protect1 = value & 0x03,
             0x5103 => self.protect2 = value & 0x03,
-            0x5104 => self.exram_mode = value & 0x03,
+            0x5104 => {
+                self.exram_mode = value & 0x03;
+                self.refresh_aux();
+            }
             0x5105 => {
-                let nt0 = value & 3;
-                let nt1 = (value >> 2) & 3;
-                let nt2 = (value >> 4) & 3;
-                let nt3 = (value >> 6) & 3;
-                self.mirroring = if nt0 == nt2 && nt1 == nt3 && nt0 != nt1 {
+                self.nt_map = [
+                    value & 3,
+                    (value >> 2) & 3,
+                    (value >> 4) & 3,
+                    (value >> 6) & 3,
+                ];
+                let nt = self.nt_map;
+                self.mirroring = if nt[0] == nt[2] && nt[1] == nt[3] && nt[0] != nt[1] {
                     Mirroring::Horizontal
                 } else {
                     Mirroring::Vertical
                 };
+                self.refresh_aux();
+            }
+            0x5106 => {
+                self.fill_tile = value;
+                self.refresh_aux();
+            }
+            0x5107 => {
+                self.fill_attr = value;
+                self.refresh_aux();
             }
             0x5113 => self.prg_ram_bank = value & 0x07,
             0x5114..=0x5117 => {
@@ -2494,10 +2646,14 @@ impl Mmc5 {
             0x5120..=0x5127 => {
                 let index = usize::from(address - 0x5120);
                 self.chr_banks[index] = value;
+                self.refresh_aux();
             }
             0x5205 => self.mul_a = value,
             0x5206 => self.mul_b = value,
-            0x5130 => self.chr_upper = value & 0x03,
+            0x5130 => {
+                self.chr_upper = value & 0x03;
+                self.refresh_aux();
+            }
             0x5203 => self.irq_latch = value,
             0x5204 => {
                 if value & 0x80 != 0 {
@@ -2527,7 +2683,14 @@ impl Mapper for Mmc5 {
             0x5206 => ((u16::from(self.mul_a) * u16::from(self.mul_b)) >> 8) as u8,
             0x5C00..=0x5FFF => match self.exram_mode {
                 0 | 1 => 0,
-                _ => self.exram[usize::from(address - 0x5C00)],
+                _ => {
+                    let index = usize::from(address - 0x5C00);
+                    if let Some(aux) = &self.aux {
+                        aux.borrow().exram[index]
+                    } else {
+                        self.exram[index]
+                    }
+                }
             },
             0x5000..=0x5FFF => 0,
             0x6000..=0x7FFF => {
@@ -2550,7 +2713,11 @@ impl Mapper for Mmc5 {
             0x5000..=0x5FFF => {
                 if (0x5C00..=0x5FFF).contains(&address) {
                     if self.exram_mode != 3 {
-                        self.exram[usize::from(address - 0x5C00)] = value;
+                        let index = usize::from(address - 0x5C00);
+                        self.exram[index] = value;
+                        if let Some(aux) = &self.aux {
+                            aux.borrow_mut().exram[index] = value;
+                        }
                     }
                 } else {
                     self.write_register(address, value);
@@ -2570,12 +2737,24 @@ impl Mapper for Mmc5 {
     }
 
     fn chr_read(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.aux {
+            return aux.borrow().chr_read(address, &self.chr);
+        }
         let slot = usize::from(address) / 0x400;
         let bank = self.chr_bank(slot);
         self.chr[bank * 0x400 + usize::from(address & 0x3FF)]
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(aux) = &self.aux {
+            if aux.borrow().is_ram() {
+                let offset = aux.borrow().chr_offset(address);
+                if let Some(byte) = self.chr.get_mut(offset) {
+                    *byte = value;
+                }
+            }
+            return;
+        }
         let slot = usize::from(address) / 0x400;
         let bank = self.chr_bank(slot);
         let index = bank * 0x400 + usize::from(address & 0x3FF);
@@ -2594,6 +2773,10 @@ impl Mapper for Mmc5 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.prg_ram
+    }
+
+    fn mmc5_aux(&self) -> Option<Rc<RefCell<Mmc5Aux>>> {
+        self.aux.clone()
     }
 
     fn irq_line(&self) -> bool {
