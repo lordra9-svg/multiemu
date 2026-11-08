@@ -89,8 +89,9 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] Test-ROM harness: `nestest`, blargg CPU/PPU/APU, `ppu_vbl_nmi`, MMC3 A12,
       and the AccuracyCoin isolated battery. Pass counts are recorded in
       `docs/accuracy-status.md`; the suites run in `crates/multiemu-nes-accuracy/tests/`.
-- [ ] Mapper audit against a licensed ROM library: log unsupported mapper IDs and
-      boot failures; rank the gaps by prevalence.
+- [x] Mapper audit against a licensed ROM library: 7,101 images in four
+      batches, results and ranked gaps in `docs/mapper-audit.md`. 6,565 load,
+      504 unsupported (191 IDs), 32 failures; MMC2/MMC4 followed from it.
 
 ## M2 — NES depth
 
