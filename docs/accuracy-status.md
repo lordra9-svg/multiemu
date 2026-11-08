@@ -285,6 +285,14 @@ more than the 25-frame smoke budget to draw (verified at ~600 frames: Diablo,
 Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
+Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
+6,550 loaded (92.2%), 3,586 rendering (50.5%), 2,964 blank (41.7%), 519
+unsupported (193 mapper IDs, 7.3%) and 32 load/run failures (0.45%). The
+batched totals reproduce the single-pass numbers exactly. Top unsupported
+families are mapper 9 (MMC2) and 10 (MMC4), then 68 (Sunsoft-4). See
+`docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
+implemented-but-blank shortlist.
+
 The PPU now powers on at dot 40 instead of dot 0. The power-on dot is
 undefined on hardware; dot 0 made some Nanjing titles lock onto the `$2002`
 vblank-suppression dot in their reset poll loop. After the shift both the

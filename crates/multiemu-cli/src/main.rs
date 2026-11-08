@@ -48,6 +48,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let dir = args.next().ok_or_else(usage)?;
             let mut frames = 30u32;
             let mut limit = usize::MAX;
+            let mut skip = 0usize;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--frames" => {
@@ -63,6 +64,13 @@ fn run() -> Result<(), Box<dyn Error>> {
                             .ok_or("--limit needs a number")?
                             .parse()
                             .map_err(|_| "--limit needs a number")?;
+                    }
+                    "--skip" => {
+                        skip = args
+                            .next()
+                            .ok_or("--skip needs a number")?
+                            .parse()
+                            .map_err(|_| "--skip needs a number")?;
                     }
                     other => return Err(format!("unknown option {other}").into()),
                 }
@@ -81,7 +89,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 std::collections::BTreeMap::new();
             let previous_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {}));
-            for entry in entries.iter().take(limit) {
+            for entry in entries.iter().skip(skip).take(limit) {
                 let Ok(rom) = multiemu_rom::load(entry) else {
                     failed += 1;
                     continue;
@@ -126,7 +134,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             std::panic::set_hook(previous_hook);
             println!(
                 "{loaded} loaded, {rendered} rendering, {blank} blank, {unsupported} unsupported mapper, {failed} load/run failures ({} scanned, {frames} frames each)",
-                entries.len().min(limit)
+                entries.len().saturating_sub(skip).min(limit)
             );
             for (mapper, (ok, blank)) in mappers {
                 println!("mapper {mapper:>3}: {ok} rendering, {blank} blank");
