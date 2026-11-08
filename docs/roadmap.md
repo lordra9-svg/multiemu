@@ -13,8 +13,9 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] **A2b** sprite suite 19/19: all `spr_hit_*`, all overflow ROMs,
       `oam_read`, `oam_stress` and `sprite_ram` pass.
 - [x] **A3** APU + DMC: all 13 blargg APU/DMC ROMs in the suite pass
-      (length/IRQ/jitter/reset/halt/reload, DMC basics/rates). Mixer scoring and
-      DMC DMA cycle-stealing remain as follow-ups.
+      (length/IRQ/jitter/reset/halt/reload, DMC basics/rates). The nonlinear
+      mixer curves are implemented and unit-tested; DMC DMA cycle-stealing
+      remains as a follow-up.
 - [ ] **A4** top 30 mapper families + commercial oracle corpus. Progress:
       NROM/MMC1/UxROM/CNROM/MMC3(+IRQ)/AxROM/VRC(+IRQ)/Color Dreams/CPROM/
       GxROM/Camerica/UNROM-512/NINA/DxROM/Nanjing-163/Sunsoft-FME7/Sachen/
@@ -25,11 +26,12 @@ The main effort is now the reference-parity accuracy core. Details in
       nametables), the MMC3-8025/FS005 protection path (176), a corrected
       VRC2/VRC4 core (21/22/23/25), Sachen JV001 (136), Bandai LZ93D50 (159),
       MMC3 512 KiB CHR wiring (197), Waixing FS303 (195) with its `$5000`
-      PRG-RAM, the MMC2/MMC3 hybrid (165), full PPU mirroring modes, the 143
+      PRG-RAM, the MMC2/MMC3 hybrid (165), Super Mega JV001 (172), NTDEC
+      TC-112 (193), full PPU mirroring modes, the 143
       protected NROM and the 212/235/286 multicarts, `System` bus, Core ABI
-      adapter and a `corpus` runner. Full-library audit: 6,614/7,101 load,
-      3,546 rendering, 459 unsupported, 0 panics; 136/197 render 7/7,
-      159/165 8/8, 195 8/8 (Tiexue needs Start on its title screen)
+      adapter and a `corpus` runner. Full-library audit: 6,627/7,101 load,
+      3,554 rendering, 446 unsupported, 0 panics; 136/193/197 render 7/7,
+      159/165 8/8, 172 4/6, 195 8/8 (Tiexue needs Start on its title screen)
       (`docs/mapper-audit.md`).
       Remaining: full MMC5 ExRAM/audio, VRC/VRC6/N163 expansion audio, mapper
       193, the Datach peripheral and the small six-image ASIC tail.

@@ -26,17 +26,18 @@ multiemu corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 6,614 | 93.1% |
-| Rendering | 3,546 | 49.9% |
-| Blank | 3,068 | 43.2% |
-| Unsupported mapper | 459 | 6.5% |
+| Loaded (mapper implemented) | 6,627 | 93.3% |
+| Rendering | 3,554 | 50.0% |
+| Blank | 3,073 | 43.3% |
+| Unsupported mapper | 446 | 6.3% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
 audit, mappers 136 (Sachen JV001), 159 (Bandai LZ93D50/EEPROM), 197
-(MMC3 512 KiB CHR wiring), 195 (Waixing FS303) and 165 (MMC2/MMC3 hybrid) were
-added, and the `$2007` PPU data state machine was corrected. Loaded rose
-6,577 → 6,614 and unsupported fell 496 → 459.
+(MMC3 512 KiB CHR wiring), 195 (Waixing FS303), 165 (MMC2/MMC3 hybrid),
+193 (NTDEC TC-112) and 172 (Super Mega JV001) were added, and the `$2007` PPU
+data state machine was corrected. Loaded rose 6,577 → 6,627 and unsupported
+fell 496 → 446.
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
 is deliberately short; several families need hundreds of frames to leave their
@@ -58,6 +59,12 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   IRQ. 39/55 images render at 600 frames.
 - **Sachen JV001 (136)** — six-bit latch with adder/inverter; CHR from output
   bits 0-2, 32 KiB PRG from bit 4. **7/7** images render at 60 frames.
+- **Super Mega JV001 (172)** — the same latch with reversed CPU data bits and
+  software mirroring; CHR from output bits 4-5. **4/6** render; the two
+  *1991 Du Ma Racing* images never enable rendering (game-specific follow-up).
+- **NTDEC TC-112 (193)** — 4 KiB CHR at `$6000`, two 2 KiB CHR banks at
+  `$6001`/`$6002`, 8 KiB PRG banks at `$6003` with the last three fixed.
+  **7/7** render at 60 and 600 frames.
 - **Bandai LZ93D50 (159)** — mapper 16 register set with the 128-byte EEPROM
   window; **7/7** render at 600 frames (EEPROM persistence is a follow-up).
 - **MMC3 512 KiB CHR (197)** — per-submapper CHR wiring translates the MMC3's
@@ -164,13 +171,15 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
 | 142 | 0 | 8 | 8 | 0% |
 | 152 | 6 | 2 | 8 | 75% |
 | 165 | 5 | 3 | 8 | 62% |
-| 195 | 5 | 3 | 8 | 63% |
+| 195 | 5 | 3 | 8 | 62% |
 | 235 | 0 | 8 | 8 | 0% |
 | 240 | 3 | 5 | 8 | 38% |
 | 136 | 7 | 0 | 7 | 100% |
 | 159 | 2 | 5 | 7 | 29% |
 | 197 | 5 | 2 | 7 | 71% |
 | 212 | 5 | 2 | 7 | 71% |
+| 193 | 4 | 3 | 7 | 57% |
+| 172 | 4 | 2 | 6 | 67% |
 | 10 | 2 | 3 | 5 | 40% |
 | 21 | 5 | 0 | 5 | 100% |
 | 26 | 0 | 5 | 5 | 0% |
@@ -186,14 +195,33 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 
 ## Unsupported mappers
 
-459 images (6.5%) name a mapper with no implementation. The printed ranked
-list is capped at 80 IDs and covers 315 of the 459. Top families: **157
-(Datach, needs the barcode peripheral)**, **193 (Fighting Hero)** and a tail of
-six-image boards (156/164/168/172/199/216/222/234/249/253/27/60/85/303).
+446 images (6.3%) name a mapper with no implementation. The printed ranked
+list is capped at 80 IDs and covers 302 of the 446. Top families: **157
+(Datach, needs the barcode peripheral)** and a tail of six-image boards.
 
-The remaining work is a set of real hardware models, not header aliases. The
-largest reusable next steps are the FDS/VS boards and the expansion-audio
-mappers; the small ASICs need individual documentation.
+### Tail triage (IDs at 6-7 images)
+
+| Mapper | Images | Board / notes | Next step |
+|---:|---:|---|---|
+| 157 | 7 | Datach Joint ROM (barcode reader) | blocked on the peripheral |
+| 156 | 6 | Daou DIS23C01 (Korean) | distinct board; small |
+| 164 | 6 | Dongda PEC-9588 educational computer, CHR RAM | small/medium |
+| 168 | 6 | Racermate Challenge II + exercise bike | low value; peripheral |
+| 199 | 6 | Waixing FS309, MMC3-like + CHR RAM + IRQ | medium; shares MMC3 work |
+| 216 | 6 | Bonza / Magic Jewelry II (Dendy) | small; Dendy timing |
+| 222 | 6 | Dragon Ninja (CTC-31) / Super Bros. 8 | medium; two submappers |
+| 234 | 6 | Maxi 15 multicart, discrete logic + bus conflicts | small |
+| 249 | 6 | Waixing T9552 board | medium |
+| 253 | 6 | Waixing VRC4-based (Dragon Ball Z) | medium; reuses VRC4 |
+| 27 | 6 | Mi Hun Che / Super Car (32 KiB PRG, 8 KiB CHR) | undocumented; inspect |
+| 60 | 6 | 4-in-1 multicarts | small latch |
+| 85 | 6 | **VRC7** (Lagrange Point, Tiny Toon 2 JP) | expansion audio (OPLL) |
+| 303 | 6 | Kaiser KS-7017 (Armana no Kiseki) | likely related to KS7032 |
+
+Only **172** turned out to be an alias of an implemented board (Sachen JV001
+with reversed data bits). The rest are real hardware models; the highest-value
+next targets are **85 (VRC7 + expansion audio)**, **199/253/249** (Waixing,
+MMC3/VRC4 reuse), and the small discrete-logic boards 234/60.
 
 ## Load/run failures
 

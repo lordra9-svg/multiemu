@@ -368,6 +368,8 @@ impl Cartridge {
             10 => Box::new(Mmc2::new(prg_rom, chr, prg_ram, header, 10)),
             68 => Box::new(Sunsoft4::new(prg_rom, chr, prg_ram, header)),
             136 => Box::new(Sachen136::new(prg_rom, chr, header)),
+            193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
+            172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
             195 => Box::new(Waixing195::new(prg_rom, chr, header)),
             165 => Box::new(Mmc3::new_hybrid(
@@ -1186,6 +1188,102 @@ impl Mapper for Mmc3_197 {
     }
 }
 
+/// NTDEC TC-112 (mapper 193): CHR/PRG banking through `$6000-$7FFF`.
+///
+/// `$6000` selects a 4 KiB CHR bank for `$0000-$0FFF`, `$6001`/`$6002` select
+/// 2 KiB banks for `$1000-$17FF`/`$1800-$1FFF`, `$6003` a 16 KiB PRG bank at
+/// `$8000`, and `$6004` the mirroring. There is no PRG-RAM.
+#[derive(Debug)]
+pub struct NtdTc112 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    chr_banks: [u8; 3],
+    prg_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl NtdTc112 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            chr_banks: [0; 3],
+            prg_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn chr_offset(&self, address: u16) -> usize {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let slot = usize::from(address) / 0x400;
+        let bank = match slot {
+            0..=3 => (usize::from(self.chr_banks[0]) >> 2) * 4 + (slot & 3),
+            4 | 5 => (usize::from(self.chr_banks[1]) >> 1) * 2 + (slot & 1),
+            _ => (usize::from(self.chr_banks[2]) >> 1) * 2 + (slot & 1),
+        } % banks;
+        bank * 0x400 + usize::from(address & 0x3FF)
+    }
+}
+
+impl Mapper for NtdTc112 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = match slot {
+            0 => usize::from(self.prg_bank & 0x0F),
+            1 => banks.saturating_sub(3),
+            2 => banks.saturating_sub(2),
+            _ => banks - 1,
+        } % banks;
+        self.prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if !(0x6000..=0x7FFF).contains(&address) {
+            return;
+        }
+        match address & 0x0007 {
+            0 => self.chr_banks[0] = value,
+            1 => self.chr_banks[1] = value,
+            2 => self.chr_banks[2] = value,
+            3 => self.prg_bank = value & 0x0F,
+            4 => {
+                self.mirroring = if value & 1 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr.get(self.chr_offset(address)).copied().unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let offset = self.chr_offset(address);
+        if let Some(byte) = self.chr.get_mut(offset) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        193
+    }
+}
+
 /// Sachen 3011 / JV001 (mapper 136): a six-bit latch with an adder and
 /// inverter, used for copy protection and CHR/PRG banking.
 ///
@@ -1202,10 +1300,28 @@ pub struct Sachen136 {
     mode: bool,
     invert: bool,
     mirroring: Mirroring,
+    number: u16,
+    reversed: bool,
+    mirroring_write: bool,
 }
 
 impl Sachen136 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self::new_as(prg, chr, header, 136, false, false)
+    }
+
+    fn new_172(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self::new_as(prg, chr, header, 172, true, true)
+    }
+
+    fn new_as(
+        prg: Vec<u8>,
+        chr: Vec<u8>,
+        header: Header,
+        number: u16,
+        reversed: bool,
+        mirroring_write: bool,
+    ) -> Self {
         Self {
             prg,
             chr,
@@ -1215,6 +1331,21 @@ impl Sachen136 {
             mode: false,
             invert: false,
             mirroring: header.mirroring,
+            number,
+            reversed,
+            mirroring_write,
+        }
+    }
+
+    fn reverse6(value: u8) -> u8 {
+        value.reverse_bits() >> 2
+    }
+
+    fn chr_bank(&self) -> usize {
+        if self.reversed {
+            usize::from((self.output >> 4) & 0x03)
+        } else {
+            usize::from(self.output & 0x07)
         }
     }
 }
@@ -1222,10 +1353,15 @@ impl Sachen136 {
 impl Mapper for Sachen136 {
     fn prg_read(&self, address: u16) -> u8 {
         if address & 0xE100 == 0x4100 {
-            return if self.invert {
+            let value = if self.invert {
                 self.register ^ 0x30
             } else {
                 self.register
+            };
+            return if self.reversed {
+                Self::reverse6(value)
+            } else {
+                value
             };
         }
         if address < 0x8000 {
@@ -1255,20 +1391,45 @@ impl Mapper for Sachen136 {
                         self.register = (self.input & 0x30) | low;
                     }
                 }
-                1 => self.invert = value & 1 != 0,
-                2 => self.input = value & 0x3F,
-                _ => self.mode = value & 1 != 0,
+                1 => {
+                    self.invert = if self.reversed {
+                        value & 0x20 != 0
+                    } else {
+                        value & 1 != 0
+                    }
+                }
+                2 => {
+                    self.input = if self.reversed {
+                        Self::reverse6(value)
+                    } else {
+                        value & 0x3F
+                    }
+                }
+                _ => {
+                    self.mode = if self.reversed {
+                        value & 0x20 != 0
+                    } else {
+                        value & 1 != 0
+                    }
+                }
             }
             return;
         }
         if address >= 0x8000 {
             self.output = self.register;
+            if self.mirroring_write {
+                self.mirroring = if self.invert {
+                    Mirroring::Vertical
+                } else {
+                    Mirroring::Horizontal
+                };
+            }
         }
     }
 
     fn chr_read(&self, address: u16) -> u8 {
         let banks = (self.chr.len() / 0x2000).max(1);
-        let bank = usize::from(self.output & 0x07) % banks;
+        let bank = self.chr_bank() % banks;
         self.chr
             .get(bank * 0x2000 + usize::from(address & 0x1FFF))
             .copied()
@@ -1277,7 +1438,7 @@ impl Mapper for Sachen136 {
 
     fn chr_write(&mut self, address: u16, value: u8) {
         let banks = (self.chr.len() / 0x2000).max(1);
-        let bank = usize::from(self.output & 0x07) % banks;
+        let bank = self.chr_bank() % banks;
         let index = bank * 0x2000 + usize::from(address & 0x1FFF);
         if let Some(byte) = self.chr.get_mut(index) {
             *byte = value;
@@ -1289,7 +1450,7 @@ impl Mapper for Sachen136 {
     }
 
     fn number(&self) -> u16 {
-        136
+        self.number
     }
 }
 
@@ -11229,6 +11390,56 @@ mod tests {
         cart.cpu_write(0x8001, 0x00);
         cart.ppu_write(0x0200, 0x33);
         assert_eq!(cart.ppu_read(0x0200), 0x33);
+    }
+
+    #[test]
+    fn sachen172_reverses_data_and_switches_mirroring() {
+        let rom = synth_banked(172, 32, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 172);
+
+        // Reversed input $01 -> internal $20; output selects CHR bank 2.
+        cart.cpu_write(0x4102, 0x01);
+        cart.cpu_write(0x4100, 0);
+        assert_eq!(cart.cpu_read(0x4100), 0x01);
+        cart.cpu_write(0x8000, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        assert_eq!(cart.ppu_read(0x0000), 0x90);
+
+        // Invert (CPU bit 5) turns the latch write into vertical mirroring.
+        cart.cpu_write(0x4101, 0x20);
+        cart.cpu_write(0x8000, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+    }
+
+    #[test]
+    fn ntd_tc112_banks_prg_chr_and_mirroring() {
+        let rom = synth_banked(193, 128, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 193);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+
+        // 4 KiB CHR bank 2 at $0000.
+        cart.cpu_write(0x6000, (2 << 2) | 3);
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
+        assert_eq!(cart.ppu_read(0x0C00), 0x8B);
+        // 2 KiB banks 3 and 5.
+        cart.cpu_write(0x6001, (3 << 1) | 1);
+        assert_eq!(cart.ppu_read(0x1000), 0x86);
+        cart.cpu_write(0x6002, 5 << 1);
+        assert_eq!(cart.ppu_read(0x1800), 0x8A);
+
+        // 16 KiB PRG bank 3 at $8000, last three banks fixed above it.
+        cart.cpu_write(0x6003, 3);
+        assert_eq!(cart.cpu_read(0x8000), 3);
+        assert_eq!(cart.cpu_read(0xA000), 13);
+        assert_eq!(cart.cpu_read(0xC000), 14);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+
+        cart.cpu_write(0x6004, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x6004, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
     }
 
     #[test]

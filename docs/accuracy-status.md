@@ -286,12 +286,12 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,577 loaded (92.6%), 3,550 rendering (50.0%), 3,027 blank (42.6%), 496
-unsupported (7.0%) and 28 load/run failures (0.39%). The batched totals
-reproduce the single-pass numbers exactly. Top unsupported families are now
-195/165 (8 each), then 136/157/159/193/197 (7 each). See
-`docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
-implemented-but-blank shortlist.
+6,627 loaded (93.3%), 3,554 rendering (50.0%), 3,073 blank (43.3%), 446
+unsupported (6.3%) and 28 load/run failures (0.39%). The batched totals
+reproduce the single-pass numbers exactly. Top unsupported family is now
+157 (Datach) at 7 images, then a six-image tail (156/164/168/199/216/222/234/
+249/253/27/60/85/303). See `docs/mapper-audit.md` for the per-mapper table,
+ranked gaps and the tail triage.
 
 Since the previous audit, Sunsoft-4 (68) and the VRC2/VRC4 rewrite
 (21/22/23/25) landed and the mapper-173 16 KiB-PRG panic was fixed. Sunsoft-4
@@ -306,9 +306,11 @@ Further A4 work: the PPU now models vertical, horizontal, single-lower,
 single-upper and four-screen mirroring (4 KiB CIRAM), Sunsoft-4 drives
 nametables from CHR ROM, and MMC3-8025 implements the FS005 submapper-2 RAM
 configuration/protection path. Sunsoft-4 reaches 6/8 images and MMC3-8025
-80/106 at 600 frames. The remaining top families were triaged as real boards
-(136/159/197 are the smallest next models; 157 needs the Datach barcode
-peripheral), not header aliases.
+80/106 at 600 frames. Subsequent work added Sachen JV001 (136), Bandai
+LZ93D50 (159), MMC3 512 KiB CHR wiring (197), Waixing FS303 (195), the
+MMC2/MMC3 hybrid (165), Super Mega JV001 (172) and NTDEC TC-112 (193); the
+remaining tail is triaged as real boards in `docs/mapper-audit.md` (157 needs
+the Datach peripheral; 85 is VRC7).
 
 MMC2 (9) and MMC4 (10) are implemented, including the two 4 KiB CHR fetch
 latches that switch on tile `$FD`/`$FE` during rendering and the 5-bit bank

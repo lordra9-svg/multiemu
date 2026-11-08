@@ -1083,6 +1083,18 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn mixer_uses_the_nonlinear_curves() {
+        let pulse_15 = 95.88 / (8128.0 / 15.0 + 100.0);
+        assert!((PULSE_MIX[15] - pulse_15).abs() < 1e-6);
+        let tnd_82 = 159.79 / (1.0 / (82.0 / 8227.0) + 100.0);
+        assert!((TND_MIX[82] - tnd_82).abs() < 1e-6);
+        // The curve is compressive: doubling the sum does not double the output.
+        assert!(PULSE_MIX[20] < 2.0 * PULSE_MIX[10]);
+        assert!(TND_MIX[100] < 2.0 * TND_MIX[50]);
+    }
+
+    #[test]
     fn length_table_loads_on_write() {
         let mut apu = Apu::new();
         apu.write(0x4015, 0x01);
