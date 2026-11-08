@@ -898,6 +898,16 @@ unchanged (the sprite-mask-off case still shifts the registers).
 Measured effect (5 runs, 1200 frames): **~535 → ~620-640 fps (+16-18%)**. All
 A1-A3 suites and the isolated AccuracyCoin battery are unchanged.
 
+Follow-up profiling (A/B builds, 2400 frames): after the sprite loop, the pixel
+composition is still ~15% of frame time, sprite evaluation ~3-4%, the APU tick
+and the sprite-fetch bus reads negligible. Two micro-optimizations were
+evaluated: a backdrop fast path for rendering-disabled lines (no measurable
+gain on this ROM, reverted) and a palette RGB cache (`palette_rgb`, rebuilt on
+palette writes, one lookup per pixel instead of two). The cache is kept as a
+strict reduction in per-pixel work (gain within run-to-run noise on a loaded
+desktop). The remaining structural win is an 8-pixel span composer for the
+background/sprite shifters.
+
 **Plateau decision (2026-11-07):** the accuracy track is held at **145/151**.
 The only open failure is `PPU Misc. | $2007 Stress Test`; its last 10 stable
 samples depend on the PPU `v` evolution during rendering-disabled pre-render

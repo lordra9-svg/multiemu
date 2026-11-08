@@ -47,6 +47,8 @@ pub struct Ppu {
     pub vram: [u8; 0x800],
     /// Palette RAM (32 bytes).
     pub palette: [u8; 32],
+    /// Expanded RGB for each palette entry (rebuilt on palette writes).
+    palette_rgb: [[u8; 3]; 32],
     /// Object attribute memory.
     pub oam: [u8; 256],
     /// CHR memory (8 KiB window; mappers can replace this later).
@@ -189,6 +191,7 @@ impl Ppu {
             frames: 0,
             vram: [0; 0x800],
             palette: [0; 32],
+            palette_rgb: [[0; 3]; 32],
             oam: [0; 256],
             chr,
             chr_ram,
@@ -722,6 +725,7 @@ impl Ppu {
     fn write_palette(&mut self, address: u16, value: u8) {
         let index = Self::palette_index(address);
         self.palette[index] = value & 0x3F;
+        self.palette_rgb[index] = NES_PALETTE[usize::from(value & 0x3F)];
     }
 
     fn sprite_height(&self) -> u16 {
@@ -1318,8 +1322,7 @@ impl Ppu {
         if color_index == 0 {
             color_index = self.palette[0];
         }
-        let color = self.palette[usize::from(color_index & 0x1F)];
-        let [r, g, b] = NES_PALETTE[usize::from(color & 0x3F)];
+        let [r, g, b] = self.palette_rgb[usize::from(color_index & 0x1F)];
         let i = (usize::from(self.scanline) * 256 + usize::from(x)) * 4;
         self.frame[i] = r;
         self.frame[i + 1] = g;
