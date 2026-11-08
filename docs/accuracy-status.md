@@ -1003,7 +1003,12 @@ memory reads on `hooks.read`, which only the N64 backend sets. The GUI
 state-save path is also closed here: ares has no state-save CLI, and xdotool
 input injection does not move the pointer under this Wayland session, so the
 Save State menu/hotkey cannot be triggered. ares therefore cannot supply a
-capture for this test without a manual GUI session. The earlier
+capture for this test without a manual GUI session.
+
+**Decision (2026-11-08):** RustyNES + MesenCE are accepted as the reference
+pair for this gate; ares is waived because its Famicom backend exposes no GDB
+memory hooks and no scriptable state save. Both accepted references match the
+ROM's 170-byte answer key exactly. The earlier
 `wip/ppu-bus` experiment and its 159/170 plateau are superseded.
 
 AccuracyCoin v3.1.0, isolated mode:
