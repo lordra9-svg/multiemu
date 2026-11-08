@@ -992,12 +992,18 @@ tail fetch at dots 337-340 is modelled. The raw `$0500-$0654` array now
 matches the ROM's 170-byte answer key exactly. Two independent references
 confirmed the array: RustyNES's `ppu-misc-2007-stress` sub-test and MesenCE's
 headless `--testRunner` (after installing its shipped `settings.json` and
-passing an absolute ROM path) both match **170/170** stable bytes. ares has a
-GDB remote debug server (`Developer/DebugServerEnabled` / `DebugServerPort`),
-but this headless build never opened a listener with either CLI `--setting`
-overrides or a `settings.bml` enable, and the Famicom system has no GDB hooks;
-its CLI otherwise offers only save-state loading. No ares capture was possible
-in this environment. The earlier
+passing an absolute ROM path) both match **170/170** stable bytes.
+
+ares was investigated further: it does run the sub-test headless once its
+`mia/Database` directory is linked into `~/.local/share/ares/Database`, and
+it opens its GDB server (`GDB listening 127.0.0.1:27960` in the status bar).
+However, the Famicom system registers no GDB memory hooks: `m` returns an
+empty reply even after `?` returns `T05`, and `nall::gdb/server.cpp` gates
+memory reads on `hooks.read`, which only the N64 backend sets. The GUI
+state-save path is also closed here: ares has no state-save CLI, and xdotool
+input injection does not move the pointer under this Wayland session, so the
+Save State menu/hotkey cannot be triggered. ares therefore cannot supply a
+capture for this test without a manual GUI session. The earlier
 `wip/ppu-bus` experiment and its 159/170 plateau are superseded.
 
 AccuracyCoin v3.1.0, isolated mode:
