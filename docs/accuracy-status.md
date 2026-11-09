@@ -852,6 +852,16 @@ the dots 1-64 clear phase, which provides the seed.
   audio at the exact PPU frame dot was also implemented and measured
   identical to the instruction-boundary drain, confirming the residual
   divergence is not a slice-boundary artefact.
+- Expansion-audio levels now use the documented per-chip scales instead of
+  ad-hoc normalizations, so the per-channel mixing matches the reference:
+  VRC6 is a centred linear 6-bit sum scaled so one full pulse equals a 2A03
+  pulse (`(p1+p2+saw-30) * 650 / 65536`), the Sunsoft 5B uses the YM2149
+  logarithmic DAC tables (16-step fixed volume / 32-step envelope) scaled by
+  `2549/138`, the Namco 163 sums its active wave channels, divides by the
+  channel count and scales by `261`, and MMC5 pulses use the 2A03 DAC gain
+  (`650` per pulse unit) with the 7-bit PCM at `40` per unit. Measured effect
+  on a local VRC6 title: 1/300 -> 192/300 identical audio hashes; MMC5
+  (Castlevania III) 1/300 -> 8/300.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the

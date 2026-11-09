@@ -2887,8 +2887,17 @@ impl Mmc5Audio {
 
     fn mix(&self) -> f32 {
         let pulses = u16::from(self.pulse1.output()) + u16::from(self.pulse2.output());
-        // Two APU-equivalent pulses plus the held PCM DAC level.
-        pulses as f32 * 0.0086 + f32::from(self.pcm) / 255.0 * 0.25
+        // PCM is silenced while the chip sources samples back to the CPU in
+        // read mode. The scale matches the reference: pulses share the 2A03
+        // DAC gain (650 per pulse unit), the 7-bit PCM is ~half that (40 per
+        // unit), biased to centre the AC signal.
+        let pcm = if self.pcm_read_mode {
+            0
+        } else {
+            u16::from(self.pcm & 0x7F)
+        };
+        let raw = i32::from(pulses) * 650 + i32::from(pcm) * 40 - 12_290;
+        raw as f32 / 65_536.0
     }
 }
 
@@ -4332,6 +4341,16 @@ impl YmEnvelope {
     }
 }
 
+/// YM2149 16-step logarithmic DAC for fixed volumes (hardware table).
+const SUNSOFT5B_LOG_VOL: [i32; 16] = [
+    0, 15, 21, 30, 42, 59, 84, 119, 168, 237, 335, 473, 668, 944, 1333, 1882,
+];
+/// The same DAC at the 32-step envelope resolution (`[2v+1] == LOG_VOL[v]`).
+const SUNSOFT5B_LOG_VOL32: [i32; 32] = [
+    0, 0, 13, 15, 18, 21, 25, 30, 35, 42, 50, 59, 71, 84, 100, 119, 141, 168, 199, 237, 282, 335,
+    398, 473, 562, 668, 794, 944, 1122, 1333, 1584, 1882,
+];
+
 /// Sunsoft 5B (YM2149F) expansion audio used by FME-7 boards such as Gimmick!.
 #[derive(Debug, Default, Clone)]
 struct Sunsoft5b {
@@ -4398,7 +4417,7 @@ impl Sunsoft5b {
         self.envelope.clock();
     }
 
-    fn channel_output(&self, channel: usize) -> u8 {
+    fn channel_output(&self, channel: usize) -> i32 {
         let mixer = self.registers[0x07];
         let tone_disabled = mixer & (1 << channel) != 0;
         let noise_disabled = mixer & (1 << (channel + 3)) != 0;
@@ -4411,10 +4430,12 @@ impl Sunsoft5b {
             (false, false) => tone & noise,
         };
         let control = self.registers[0x08 + channel];
+        // The YM2149 DAC is logarithmic; fixed volume indexes the 16-step
+        // table and the envelope the 32-step one (the same curve).
         let volume = if control & 0x10 != 0 {
-            self.envelope.level() >> 1
+            SUNSOFT5B_LOG_VOL32[usize::from(self.envelope.level()) & 0x1F]
         } else {
-            control & 0x0F
+            SUNSOFT5B_LOG_VOL[usize::from(control & 0x0F)]
         };
         if signal {
             volume
@@ -4424,10 +4445,10 @@ impl Sunsoft5b {
     }
 
     fn mix(&self) -> f32 {
-        let sum: u16 = (0..3)
-            .map(|channel| u16::from(self.channel_output(channel)))
-            .sum();
-        f32::from(sum) / 45.0
+        let sum: i32 = (0..3).map(|channel| self.channel_output(channel)).sum();
+        // Scale to the documented 5B level (2549/138) and normalize by the
+        // bus's /65536 external-audio contract.
+        (sum * 2549 / 138) as f32 / 65_536.0
     }
 }
 
@@ -5143,7 +5164,7 @@ pub struct Namco163 {
     sound_disabled: bool,
     audio_divider: u8,
     audio_channel: usize,
-    audio_out: i16,
+    audio_channels: [i16; 8],
 }
 
 impl Namco163 {
@@ -5170,7 +5191,7 @@ impl Namco163 {
             sound_disabled: false,
             audio_divider: 0,
             audio_channel: 0,
-            audio_out: 0,
+            audio_channels: [0; 8],
         }
     }
 
@@ -5178,7 +5199,7 @@ impl Namco163 {
     /// 15 CPU cycles.
     fn audio_update(&mut self) {
         if self.sound_disabled {
-            self.audio_out = 0;
+            self.audio_channels = [0; 8];
             return;
         }
         let control = self.chip_ram[0x7F];
@@ -5207,7 +5228,12 @@ impl Namco163 {
             byte >> 4
         };
         let volume = i16::from(self.chip_ram[base + 7] & 0x0F);
-        self.audio_out = (i16::from(sample) - 8) * volume;
+        self.audio_channels[index] = (i16::from(sample) - 8) * volume;
+    }
+
+    /// Number of active N163 wave channels (1..=8).
+    fn audio_channel_count(&self) -> usize {
+        usize::from((self.chip_ram[0x7F] >> 4) & 0x07) + 1
     }
 
     fn prg_bank_count(&self) -> usize {
@@ -5397,7 +5423,20 @@ impl Mapper for Namco163 {
     }
 
     fn audio_mix(&self) -> f32 {
-        f32::from(self.audio_out) / 256.0
+        if self.sound_disabled {
+            return 0.0;
+        }
+        let count = self.audio_channel_count();
+        // `audio_update` maps the cycled channel to `7 - (n % count)`, so the
+        // active set is the top `count` slots.
+        let sum: i32 = self.audio_channels[8 - count..]
+            .iter()
+            .map(|&value| i32::from(value))
+            .sum();
+        // Per-channel range is -120..=105; average over the channel count and
+        // scale to the documented N163 level (`NAMCO163_MIX_SCALE` = 261),
+        // normalized by the bus's /65536.
+        (sum / count as i32) as f32 * 261.0 / 65536.0
     }
 }
 
@@ -11044,11 +11083,14 @@ impl Vrc6Audio {
     }
 
     fn mix(&self) -> f32 {
-        // Linear 6-bit DAC: two 4-bit pulses plus the saw's high 5 bits.
-        let sum = u16::from(self.pulse1.output())
-            + u16::from(self.pulse2.output())
-            + u16::from(self.saw.output());
-        f32::from(sum) / 61.0
+        // Linear 6-bit DAC: two 4-bit pulses plus the saw's high 5 bits,
+        // centred on ~half the 0..=61 peak and scaled so one full-volume pulse
+        // matches a full-volume 2A03 pulse (the documented VRC6 level). This
+        // mirrors the reference's `((sum - 30) * 650) / 65536`.
+        let sum = i32::from(self.pulse1.output())
+            + i32::from(self.pulse2.output())
+            + i32::from(self.saw.output());
+        (sum - 30) as f32 * 650.0 / 65536.0
     }
 }
 
@@ -13960,29 +14002,43 @@ mod tests {
         let rom = synth_banked(5, 128, 64);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
 
-        // Pulse 1: 50% duty, length halt, constant volume 15.
+        // Pulse 1: 50% duty, length halt, constant volume 15. A full-volume
+        // pulse swings the mixer by 15 * 650 / 65536, matching a 2A03 pulse.
         cart.cpu_write(0x5000, 0xBF);
         cart.cpu_write(0x5002, 0x00);
         cart.cpu_write(0x5003, 0x00); // length index 0 -> 10
-        let mut peak = 0.0f32;
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
         for _ in 0..64 {
             cart.clock_cpu();
-            peak = peak.max(cart.audio_mix());
+            let value = cart.audio_mix();
+            lo = lo.min(value);
+            hi = hi.max(value);
         }
-        assert!((peak - 15.0 * 0.0086).abs() < 1e-4, "pulse peak {peak}");
+        let pulse_swing = 15.0 * 650.0 / 65_536.0;
+        assert!(
+            (hi - lo - pulse_swing).abs() < 1e-4,
+            "pulse swing {hi} - {lo}"
+        );
 
-        // Pulse 2 adds to the same DAC sum.
+        // Pulse 2 adds to the same DAC sum (both channels share the duty
+        // phase, so the swing doubles).
         cart.cpu_write(0x5004, 0xBF);
         cart.cpu_write(0x5006, 0x00);
         cart.cpu_write(0x5007, 0x00);
-        let mut peak = 0.0f32;
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
         for _ in 0..64 {
             cart.clock_cpu();
-            peak = peak.max(cart.audio_mix());
+            let value = cart.audio_mix();
+            lo = lo.min(value);
+            hi = hi.max(value);
         }
-        assert!((peak - 30.0 * 0.0086).abs() < 1e-4, "two-pulse {peak}");
+        assert!(
+            (hi - lo - 2.0 * pulse_swing).abs() < 1e-4,
+            "two-pulse swing {hi} - {lo}"
+        );
 
-        // Clearing the halt bit lets the length counter expire (~240 Hz).
+        // Clearing the halt bit lets the length counter expire (~240 Hz);
+        // both pulses then rest at the centred bias.
         cart.cpu_write(0x5000, 0x8F);
         cart.cpu_write(0x5003, 0x00);
         cart.cpu_write(0x5004, 0x8F);
@@ -13990,7 +14046,12 @@ mod tests {
         for _ in 0..(7424 * 11) {
             cart.clock_cpu();
         }
-        assert_eq!(cart.audio_mix(), 0.0);
+        let bias = -12_290.0 / 65_536.0;
+        assert!(
+            (cart.audio_mix() - bias).abs() < 1e-6,
+            "expired {}",
+            cart.audio_mix()
+        );
     }
 
     #[test]
@@ -14021,7 +14082,8 @@ mod tests {
             cart.clock_cpu();
         }
         let sample = cart.audio_mix();
-        assert!((sample - 105.0 / 256.0).abs() < 1e-4, "sample {sample}");
+        let expected = 105.0 * 261.0 / 65_536.0;
+        assert!((sample - expected).abs() < 1e-4, "sample {sample}");
 
         // $E000 bit 6 disables sound.
         cart.cpu_write(0xE000, 0x40);
@@ -14061,14 +14123,15 @@ mod tests {
             high = high.max(sample);
         }
         assert_eq!(low, 0.0);
-        assert!((high - 30.0 / 45.0).abs() < 1e-4, "tone peak {high}");
+        let two_tone = (2 * SUNSOFT5B_LOG_VOL[15] * 2549 / 138) as f32 / 65_536.0;
+        assert!((high - two_tone).abs() < 1e-4, "tone peak {high}");
 
         // Disabling both tone and noise holds the channel at its volume.
         write(&mut cart, 0x07, 0x3F);
         for _ in 0..64 {
             cart.clock_cpu();
         }
-        assert!((cart.audio_mix() - 30.0 / 45.0).abs() < 1e-4);
+        assert!((cart.audio_mix() - two_tone).abs() < 1e-4);
 
         // Volume 0 is silent even with a constant signal.
         write(&mut cart, 0x08, 0x00);
@@ -14079,13 +14142,14 @@ mod tests {
         write(&mut cart, 0x07, 0x07); // tone off on all channels, noise on A
         write(&mut cart, 0x08, 0x0F);
         write(&mut cart, 0x06, 0x01);
+        let one_tone = (SUNSOFT5B_LOG_VOL[15] * 2549 / 138) as f32 / 65_536.0;
         let mut saw_low = false;
         let mut saw_high = false;
         for _ in 0..2048 {
             cart.clock_cpu();
             let sample = cart.audio_mix();
             saw_low |= sample == 0.0;
-            saw_high |= (sample - 15.0 / 45.0).abs() < 1e-4;
+            saw_high |= (sample - one_tone).abs() < 1e-4;
         }
         assert!(saw_low && saw_high, "noise did not toggle");
     }
@@ -14505,28 +14569,35 @@ mod tests {
     fn vrc6_expansion_audio_pulses_and_saw() {
         let rom = synth_banked(24, 128, 64);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
-        assert_eq!(cart.audio_mix(), 0.0);
+        // Centred linear sum: value = (p1 + p2 + saw - 30) * 650 / 65536.
+        let scale = 650.0 / 65_536.0;
+        assert!((cart.audio_mix() - (-30.0 * scale)).abs() < 1e-4);
 
         // Pulse 1: volume 15, duty 0, period 0, enabled. The 16-step duty
-        // generator only outputs on step 0, so the peak is 15/61.
+        // generator only outputs on step 0, so the swing is 15 units.
         cart.cpu_write(0x9000, 0x0F);
         cart.cpu_write(0x9001, 0x00);
         cart.cpu_write(0x9002, 0x80);
-        let mut max = 0.0f32;
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
         for _ in 0..64 {
             cart.clock_cpu();
-            max = max.max(cart.audio_mix());
+            let value = cart.audio_mix();
+            lo = lo.min(value);
+            hi = hi.max(value);
         }
-        assert!((max - 15.0 / 61.0).abs() < 1e-4, "pulse peak {max}");
+        assert!(
+            (hi - lo - 15.0 * scale).abs() < 1e-4,
+            "pulse swing {hi} - {lo}"
+        );
 
         // The mode bit ignores the duty generator and holds full volume.
         cart.cpu_write(0x9000, 0x8F);
-        assert!((cart.audio_mix() - 15.0 / 61.0).abs() < 1e-4);
+        assert!((cart.audio_mix() - (15.0 - 30.0) * scale).abs() < 1e-4);
 
         // Pulse 2 is independent and adds to the DAC sum.
         cart.cpu_write(0xA000, 0x8F);
         cart.cpu_write(0xA002, 0x80);
-        assert!((cart.audio_mix() - 30.0 / 61.0).abs() < 1e-4);
+        assert!((cart.audio_mix() - (30.0 - 30.0) * scale).abs() < 1e-4);
 
         // Sawtooth: rate 42 gives six additions of 42 = 252, so the high five
         // bits reach 31 before the 14-step reset.
@@ -14534,16 +14605,19 @@ mod tests {
         saw.cpu_write(0xB000, 42);
         saw.cpu_write(0xB001, 0x00);
         saw.cpu_write(0xB002, 0x80);
-        let mut saw_max = 0.0f32;
+        let mut saw_max = f32::MIN;
         for _ in 0..64 {
             saw.clock_cpu();
             saw_max = saw_max.max(saw.audio_mix());
         }
-        assert!((saw_max - 31.0 / 61.0).abs() < 1e-4, "saw peak {saw_max}");
+        assert!(
+            (saw_max - (31.0 - 30.0) * scale).abs() < 1e-4,
+            "saw peak {saw_max}"
+        );
 
-        // Disabling the channel forces the output back to zero.
+        // Disabling the channel forces the output back to the centred bias.
         saw.cpu_write(0xB002, 0x00);
-        assert_eq!(saw.audio_mix(), 0.0);
+        assert!((saw.audio_mix() - (-30.0 * scale)).abs() < 1e-4);
     }
 
     #[test]
