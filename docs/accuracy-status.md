@@ -816,9 +816,13 @@ the dots 1-64 clear phase, which provides the seed.
   and samples pass through a 256-phase/32-tap windowed-sinc BLEP decimator to
   44.1 kHz followed by the 90 Hz/440 Hz high-pass and 14 kHz low-pass stages
   (new `resampler` module with unit tests). Audio is no longer a DC-shifted
-  box average. Sample counts align with the reference over 120 frames with a
-  one-frame drain offset; exact sample hashes still differ because per-cycle
-  APU channel timing differs slightly.
+  box average. The pulse duty sequencers now clock at the APU rate (every
+  other CPU cycle; they previously ran at the CPU rate for double pitch), so
+  pulse transition periods match the reference exactly. Sample counts align
+  over 120 frames with a one-frame drain offset and a zero-sample lag when
+  pairing frame N with the reference's N+1; the per-sample mean absolute
+  error is ~0.003, but exact audio hashes still differ because of a remaining
+  ~9-11 cycle per-channel phase offset.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the

@@ -186,10 +186,12 @@ per-CPU-cycle value goes through a 256-phase, 32-tap Blackman-windowed-sinc
 BLEP decimator to 44.1 kHz, then the NES front-loader's 90 Hz/440 Hz
 high-pass and 14 kHz low-pass sections. The trace runs at 44.1 kHz to match.
 Over 120 frames the sample counts line up with a one-frame drain offset
-(88,037 vs 87,304); the *values* still differ, so audio hashes do not match
-yet. The per-frame waveforms correlate (best-lag mean absolute error
-0.02-0.05), which points at remaining per-cycle APU channel-timing
-differences rather than the resampler.
+(88,037 vs 87,304), and pairing our frame N with the reference's frame N+1
+gives a zero-sample lag on average. The *values* are now within a mean
+absolute error of ~0.003 (max ~0.03) per frame, but only 1 of 57,220 samples
+is bit-identical, so audio hashes still do not match. The residual comes from
+a small per-channel APU phase offset (pulse transitions land ~9-11 CPU cycles
+earlier while their periods match exactly), not from the resampler.
 - `run <rom> --dump-ppu` / `--break <hex>` — per-frame CPU/PPU/APU state and a
   PC breakpoint.
 

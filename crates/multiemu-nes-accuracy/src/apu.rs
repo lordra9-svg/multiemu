@@ -840,8 +840,13 @@ impl Apu {
     pub fn tick(&mut self) {
         self.cycle += 1;
         self.dmc.clock_enable_delay();
-        self.pulse1.clock_timer();
-        self.pulse2.clock_timer();
+        // The pulse sequencers run at the APU rate (every other CPU cycle);
+        // the triangle runs at the CPU rate and the noise/DMC tables are
+        // already expressed in CPU cycles.
+        if self.cycle & 1 == 1 {
+            self.pulse1.clock_timer();
+            self.pulse2.clock_timer();
+        }
         self.triangle.clock_timer();
         self.noise.clock_timer();
         self.dmc.clock_timer();
@@ -1092,6 +1097,32 @@ mod tests {
         // The curve is compressive: doubling the sum does not double the output.
         assert!(PULSE_MIX[20] < 2.0 * PULSE_MIX[10]);
         assert!(TND_MIX[100] < 2.0 * TND_MIX[50]);
+    }
+
+    #[test]
+    fn pulse_sequencer_clocks_at_the_apu_rate() {
+        // The pulse duty sequencer runs at half the CPU rate: with timer = 4,
+        // one step is 2 * (4 + 1) = 10 CPU cycles. Clocking it every CPU
+        // cycle (the old behaviour) produced steps every 5 cycles and doubled
+        // the pitch.
+        let mut apu = Apu::new();
+        apu.write(0x4015, 0x01);
+        apu.write(0x4000, 0xBF); // duty 2, halt, constant volume 15
+        apu.write(0x4002, 0x04);
+        apu.write(0x4003, 0x08);
+        let mut last = apu.pulse1.duty_step;
+        let mut changes = Vec::new();
+        for _ in 0..120 {
+            apu.tick();
+            let step = apu.pulse1.duty_step;
+            if step != last {
+                changes.push(apu.cycle);
+                last = step;
+            }
+        }
+        assert!(changes.len() >= 3, "sequencer did not advance: {changes:?}");
+        let interval = changes[2] - changes[1];
+        assert_eq!(interval, 10, "duty step interval was {interval} cycles");
     }
 
     #[test]
