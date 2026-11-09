@@ -127,6 +127,7 @@ writes, and MMC1 bank switching.
 | Waixing educational (164) | 32 KiB PRG bank from `$5000`/`$5100` nibble writes, 8 KiB CHR-RAM (3/6 render) |
 | Dragon Ninja CTC-31 (222) | eight 1 KiB CHR banks, two switchable 8 KiB PRG banks + fixed last 16 KiB, A12-rise IRQ (6/6 render) |
 | 4-in-1 multicart (60) | soft-reset-selected 16 KiB PRG / 8 KiB CHR bank, four games (6/6 render) |
+| Bonza / Magic Jewelry II (216) | write-address-selected 32 KiB PRG / 8 KiB CHR page, `$5000` register read (4/6 render) |
 | Sachen SA-008-A (148) | mapper 79 latch moved to `$8000-$FFFF`, bus conflicts |
 | Jaleco SS88006 (18) | VRC4-like 8 KiB PRG / 1 KiB CHR nibble-pair banking, CPU-cycle IRQ |
 | NINA-03/06 (79/146) | 32 KiB PRG + 8 KiB CHR via a single control register |
@@ -871,7 +872,17 @@ the dots 1-64 clear phase, which provides the seed.
   pre-advance of 1-6 dots is worse still). The current reset phase
   (APU cycle 8, PPU line 0 dot 23) is therefore the best measured
   configuration, pinned by the `reset_phase_matches_the_reference_calibration`
-  test. Closing the gap requires a coupled master-clock CPU/PPU scheduler that
+  test.
+- A per-instruction `(pc, cycle)` comparison against the reference capture
+  finally rules out CPU bus/IRQ timing as the frame-39 cause. Over the window
+  around the seeding `$4007` write (cycle ~1,154,2xx) the PC streams are
+  identical and **every instruction is spaced identically**, with our cycle
+  exactly **+1** for the whole window. So there is no missing/misaligned bus or
+  IRQ cycle: the divergence is a constant one-cycle offset in the frame origin,
+  introduced at a frame boundary, which changes where the audio drain slices
+  fall relative to the APU write. This is consistent with the wrap-cycle
+  measurements above and confirms that further CPU-timing work cannot close the
+  gap; only exact frame-boundary phase alignment can. Closing the gap requires a coupled master-clock CPU/PPU scheduler that
   matches both the wrap cycle and the per-instruction access sub-cycle, not a
   reset-phase adjustment. The coupled master-clock scheduler was also built
   and measured directly: installing the reference's per-bus-access split

@@ -700,6 +700,7 @@ impl Cartridge {
             164 => Box::new(Waixing164::new(prg_rom, chr, header)),
             222 => Box::new(Ctc222::new(prg_rom, chr, header)),
             60 => Box::new(FourInOne60::new(prg_rom, chr, header)),
+            216 => Box::new(Mapper216::new(prg_rom, chr, header)),
             193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
             172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
@@ -2697,6 +2698,89 @@ impl Mapper for Ctc222 {
                 self.irq_counter = 0;
             }
         }
+    }
+}
+
+/// Bonza / Magic Jewelry II (mapper 216): the PRG and CHR bank are selected by
+/// the *address* of a write (bit 0 for the 32 KiB PRG page, bits 1-3 for the
+/// 8 KiB CHR page), not by the data. `$5000` reads return 0.
+#[derive(Debug)]
+pub struct Mapper216 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    chr_ram: bool,
+    prg_bank: u8,
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Mapper216 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            chr_ram: header.chr_size == 0,
+            prg_bank: 0,
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_banks(&self) -> usize {
+        (self.prg.len() / 0x8000).max(1)
+    }
+
+    fn chr_banks(&self) -> usize {
+        (self.chr.len() / 0x2000).max(1)
+    }
+
+    fn select(&mut self, address: u16) {
+        self.prg_bank = (address & 0x01) as u8;
+        self.chr_bank = ((address & 0x0E) >> 1) as u8;
+    }
+}
+
+impl Mapper for Mapper216 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let bank = usize::from(self.prg_bank) % self.prg_banks();
+        self.prg[bank * 0x8000 + usize::from(address - 0x8000)]
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if address == 0x5000 {
+            0
+        } else {
+            self.prg_read(address)
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, _value: u8) {
+        if address == 0x5000 || address >= 0x8000 {
+            self.select(address);
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let bank = usize::from(self.chr_bank) % self.chr_banks();
+        self.chr[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if self.chr_ram {
+            let bank = usize::from(self.chr_bank) % self.chr_banks();
+            self.chr[bank * 0x2000 + usize::from(address & 0x1FFF)] = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        216
     }
 }
 
@@ -14959,6 +15043,36 @@ mod tests {
         );
         cart.cpu_write(0xF008, 0x00);
         assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn mapper216_selects_by_write_address() {
+        // 64 KiB PRG (2 x 32 KiB), 64 KiB CHR (8 x 8 KiB).
+        let rom = synth_banked(216, 64, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 216);
+
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+
+        // Bit 0 of the write address selects the 32 KiB PRG page.
+        cart.cpu_write(0x8001, 0xAA);
+        assert_eq!(cart.cpu_read(0x8000), 4); // 32 KiB bank 1 -> 8 KiB 4
+
+        // Address bits 1-3 select the 8 KiB CHR page (data is ignored).
+        cart.cpu_write(0x8006, 0xFF);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | (3 * 8));
+
+        cart.cpu_write(0x800A, 0x00);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | (5 * 8));
+
+        cart.cpu_write(0x8003, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 8);
+
+        // $5000 reads return 0 (register read).
+        assert_eq!(cart.cpu_read(0x5000), 0);
     }
 
     #[test]
