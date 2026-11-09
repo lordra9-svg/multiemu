@@ -123,6 +123,9 @@ pub struct Ppu {
     mmc5_aux: Option<Rc<RefCell<Mmc5Aux>>>,
     /// Shared banked CHR-RAM state (VRC7).
     vrc7_chr: Option<Rc<RefCell<Vrc7Chr>>>,
+    /// Extended-attribute byte for the tile currently being fetched (MMC5
+    /// mode 1).
+    ext_attr: Option<u8>,
     /// Full CHR ROM used for ROM nametables (Sunsoft-4), if any.
     nt_rom: Vec<u8>,
     /// Two 1 KiB CHR nametable bank indices when ROM nametables are enabled.
@@ -283,6 +286,7 @@ impl Ppu {
             hybrid: None,
             mmc5_aux: None,
             vrc7_chr: None,
+            ext_attr: None,
             nt_rom: Vec::new(),
             nt_banks: None,
             chr_ram,
@@ -1568,11 +1572,18 @@ impl Ppu {
                     full
                 };
                 self.last_fetch_low = address as u8;
-                self.nt_byte = self
+                let split = self
                     .mmc5_aux
                     .as_ref()
-                    .and_then(|aux| aux.borrow().split_tile(group, self.scanline))
-                    .unwrap_or_else(|| self.read_vram(address));
+                    .and_then(|aux| aux.borrow().split_tile(group, self.scanline));
+                self.nt_byte = split.unwrap_or_else(|| self.read_vram(address));
+                self.ext_attr = if split.is_none() {
+                    self.mmc5_aux
+                        .as_ref()
+                        .and_then(|aux| aux.borrow().extended_attr(self.v))
+                } else {
+                    None
+                };
                 self.fetch_byte = self.nt_byte;
                 self.fetch_hold = 2;
             }
@@ -1580,17 +1591,20 @@ impl Ppu {
                 let address =
                     0x23C0 | (self.v & 0x0C00) | ((self.v >> 4) & 0x38) | ((self.v >> 2) & 0x07);
                 self.last_fetch_low = address as u8;
-                self.at_byte = self
+                let split_attr = self
                     .mmc5_aux
                     .as_ref()
-                    .and_then(|aux| aux.borrow().split_attr(group, self.scanline))
-                    .unwrap_or_else(|| self.read_vram(address));
+                    .and_then(|aux| aux.borrow().split_attr(group, self.scanline));
+                self.at_byte = if let Some(ext) = self.ext_attr {
+                    ext
+                } else {
+                    split_attr.unwrap_or_else(|| self.read_vram(address))
+                };
                 self.fetch_byte = self.at_byte;
                 self.fetch_hold = 2;
             }
             5 => {
-                let split = self.split_pattern_address(group, false);
-                let address = split.unwrap_or_else(|| self.pattern_address(self.nt_byte, false));
+                let (address, physical) = self.background_pattern_address(group, false);
                 self.last_fetch_low = address as u8;
                 let corrupt = match self.ale_countdown {
                     Some(0) => true,
@@ -1600,7 +1614,7 @@ impl Ppu {
                     }
                     None => false,
                 };
-                let clean = if split.is_some() {
+                let clean = if physical {
                     self.split_chr_byte(address)
                 } else {
                     self.chr_byte(address)
@@ -1608,7 +1622,7 @@ impl Ppu {
                 if corrupt {
                     self.ale_countdown = None;
                     let bus_address = (address & 0xFF00) | 0x00FF;
-                    self.pat_lo = if split.is_some() {
+                    self.pat_lo = if physical {
                         self.split_chr_byte(bus_address)
                     } else {
                         self.chr_byte(bus_address)
@@ -1623,10 +1637,9 @@ impl Ppu {
                 self.fetch_hold = 2;
             }
             7 => {
-                let split = self.split_pattern_address(group, true);
-                let address = split.unwrap_or_else(|| self.pattern_address(self.nt_byte, true));
+                let (address, physical) = self.background_pattern_address(group, true);
                 self.last_fetch_low = address as u8;
-                self.pat_hi = if split.is_some() {
+                self.pat_hi = if physical {
                     self.split_chr_byte(address)
                 } else {
                     self.chr_byte(address)
@@ -1648,7 +1661,23 @@ impl Ppu {
         })
     }
 
-    /// CHR byte for a split fetch, where `address` is already the physical
+    /// CHR address and physical-address flag for a background pattern fetch,
+    /// applying MMC5 extended attributes first, then split mode, then normal
+    /// CHR banking.
+    fn background_pattern_address(&self, group: u16, high: bool) -> (u16, bool) {
+        if let (Some(ext), Some(aux)) = (self.ext_attr, &self.mmc5_aux) {
+            let fine_y = ((self.v >> 12) & 0x07) as u8;
+            let address =
+                aux.borrow().extended_pattern(ext, self.nt_byte, fine_y) | if high { 8 } else { 0 };
+            return (address, true);
+        }
+        if let Some(address) = self.split_pattern_address(group, high) {
+            return (address, true);
+        }
+        (self.pattern_address(self.nt_byte, high), false)
+    }
+
+    /// CHR address for a split fetch, where `address` is already the physical
     /// (banked) CHR address rather than a PPU-space address.
     fn split_chr_byte(&self, address: u16) -> u8 {
         match &self.mmc5_aux {
@@ -1678,7 +1707,11 @@ impl Ppu {
             .as_ref()
             .and_then(|aux| aux.borrow().split_attr_field(group, self.scanline));
         let shift = ((self.v >> 4) & 4) | (self.v & 2);
-        let attr = split_attr.unwrap_or_else(|| (self.at_byte >> shift) & 0x03);
+        let attr = if let Some(pal) = self.ext_attr.map(Mmc5Aux::extended_palette) {
+            pal
+        } else {
+            split_attr.unwrap_or_else(|| (self.at_byte >> shift) & 0x03)
+        };
         let low: u8 = if attr & 1 != 0 { 0xFF } else { 0 };
         let high: u8 = if attr & 2 != 0 { 0xFF } else { 0 };
         self.bg_attr_lo = (self.bg_attr_lo & 0xFF00) | u16::from(low);

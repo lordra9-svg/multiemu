@@ -1103,6 +1103,58 @@ mod tests {
     }
 
     #[test]
+    fn mmc5_extended_attributes_select_palette_and_chr_bank() {
+        let prg_len = 128 * 1024;
+        let chr_len = 64 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 8;
+        rom[6] = 0x50; // Mapper 5.
+        for byte in &mut rom[16..16 + prg_len] {
+            *byte = 0xEA;
+        }
+        rom[16] = 0x4C;
+        rom[17] = 0x00;
+        rom[18] = 0x80;
+        let vector = 16 + prg_len - 4;
+        rom[vector] = 0x00;
+        rom[vector + 1] = 0x80;
+        // CHR: 4 KiB bank 0 blank, bank 1 solid so the ExRAM bank is visible.
+        rom[16 + prg_len..].fill(0x00);
+        let bank1 = 16 + prg_len + 0x1000;
+        rom[bank1..bank1 + 0x1000].fill(0xFF);
+
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 5);
+
+        // Extended-attribute mode; the whole first row selects bank 1 and
+        // palette 1.
+        CpuBus::write(&mut system, 0x5104, 1);
+        CpuBus::write(&mut system, 0x5105, 0);
+        for i in 0..32u16 {
+            CpuBus::write(&mut system, 0x5C00 + i, 0x41);
+        }
+        system.ppu.debug_write_vram(0x2000, 0x10);
+
+        system.ppu.ctrl = 0;
+        system.ppu.mask = 0x0A;
+        system.ppu.v = 0;
+        system.ppu.fine_x = 0;
+        system.ppu.scanline = 0;
+        system.ppu.dot = 0;
+        system.ppu.debug_write_vram(0x3F00, 0x0F);
+        system.ppu.debug_write_vram(0x3F03, 0x2D);
+        system.ppu.debug_write_vram(0x3F07, 0x30);
+        for _ in 0..256 {
+            system.ppu.step_dot();
+        }
+        let pixel = system.ppu.debug_pixel(40, 0);
+        assert_eq!(pixel, system.ppu.debug_palette(7));
+        assert_ne!(pixel, system.ppu.debug_palette(3));
+    }
+
+    #[test]
     fn mmc5_exram_nametables_fill_and_chr_map_reach_the_ppu() {
         let prg_len = 128 * 1024;
         let chr_len = 64 * 1024;

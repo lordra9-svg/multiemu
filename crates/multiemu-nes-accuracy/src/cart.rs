@@ -37,6 +37,7 @@ pub struct Mmc5Aux {
     nt_map: [u8; 4],
     fill_tile: u8,
     fill_attr: u8,
+    chr_upper: u8,
     rom: Vec<u8>,
     ram: bool,
     slots: [u16; 8],
@@ -55,6 +56,7 @@ impl Mmc5Aux {
             nt_map: [0; 4],
             fill_tile: 0,
             fill_attr: 0,
+            chr_upper: 0,
             rom,
             ram,
             slots: [0, 1, 2, 3, 4, 5, 6, 7],
@@ -66,11 +68,19 @@ impl Mmc5Aux {
         }
     }
 
-    fn set_registers(&mut self, mode: u8, nt_map: [u8; 4], fill_tile: u8, fill_attr: u8) {
+    fn set_registers(
+        &mut self,
+        mode: u8,
+        nt_map: [u8; 4],
+        fill_tile: u8,
+        fill_attr: u8,
+        chr_upper: u8,
+    ) {
         self.mode = mode;
         self.nt_map = nt_map;
         self.fill_tile = fill_tile;
         self.fill_attr = fill_attr;
+        self.chr_upper = chr_upper;
     }
 
     fn set_slots(&mut self, slots: [u16; 8]) {
@@ -150,6 +160,27 @@ impl Mmc5Aux {
             | ((u16::from(tile) << 4) & 0x0FF8)
             | u16::from(fine_y);
         Some(address | if high { 8 } else { 0 })
+    }
+
+    /// Extended-attribute byte for the tile at `address` in mode 1.
+    pub(crate) fn extended_attr(&self, address: u16) -> Option<u8> {
+        (self.mode == 1).then(|| self.exram[usize::from(address & 0x3FF)])
+    }
+
+    /// CHR address for an extended-attribute background tile: the ExRAM
+    /// byte supplies the 4 KiB bank (A12-A17) and palette (bits 6-7), while
+    /// $5130 supplies A18-A19.
+    pub(crate) fn extended_pattern(&self, attr: u8, tile: u8, fine_y: u8) -> u16 {
+        // The PPU address API is 16-bit, so the $5130 A18/A19 bits are not
+        // representable yet; boards up to 256 KiB CHR are covered.
+        (u16::from(attr & 0x3F) << 12)
+            | ((u16::from(tile) << 4) & 0x0FF8)
+            | u16::from(fine_y & 0x07)
+    }
+
+    /// Extended-attribute palette (bits 6-7 of the ExRAM byte).
+    pub(crate) fn extended_palette(attr: u8) -> u8 {
+        attr >> 6
     }
 
     /// Nametable byte supplied by ExRAM or fill mode, if this slot uses one.
@@ -2792,7 +2823,13 @@ impl Mmc5 {
             return;
         };
         let mut aux = aux.borrow_mut();
-        aux.set_registers(self.exram_mode, self.nt_map, self.fill_tile, self.fill_attr);
+        aux.set_registers(
+            self.exram_mode,
+            self.nt_map,
+            self.fill_tile,
+            self.fill_attr,
+            self.chr_upper,
+        );
         aux.set_split(
             self.split_enabled,
             self.split_right,

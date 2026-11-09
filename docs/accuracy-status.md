@@ -178,7 +178,7 @@ writes, and MMC1 bank switching.
 | Protected NROM (143) | NROM plus a `$4100-$5FFF` protection read of inverted low address bits |
 | Golden Game 235 | write-address latch: 32 KiB page, 16 KiB half, ROM chip, 1/2-screen mirroring |
 | Benshieng BMC-BS-5 (286) | address-latched 8 KiB PRG and 2 KiB CHR windows (partial; menus still blank) |
-| MMC5 (5) | partial: correct PRG modes/CHR banking/mirroring/IRQ/multiplier; ExRAM/audio missing |
+| MMC5 (5) | PRG modes/CHR banking/mirroring/IRQ, multiplier, ExRAM nametables/fill, split screen, extended attributes and two-pulse + PCM audio; per-page CIRAM and >256 KiB CHR remain |
 
 NES 2.0 PRG (16 KiB units) and CHR (8 KiB units) sizes are parsed correctly.
 
@@ -773,8 +773,10 @@ the dots 1-64 clear phase, which provides the seed.
 
 ### Known A4 gaps
 
-- MMC5 is partial: Castlevania III (US) now boots and runs its intro, but
-  ExRAM/split-screen, extended attributes and expansion audio are missing.
+- MMC5 is near-complete: Castlevania III (US) boots and runs its intro, and
+  ExRAM nametables/fill, split screen, extended attributes, the multiplier and
+  the two-pulse + PCM audio are implemented. Accurate per-page CIRAM mapping
+  and the >256 KiB CHR path remain.
 - The differential oracle harness now compares per-frame RGBA8 hashes against
   a RustyNES capture (`trace --no-state` plus `diff`). Local results: the
   AccuracyCoin test image matches 49/60 frames; a commercial NROM title
