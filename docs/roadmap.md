@@ -36,11 +36,12 @@ The main effort is now the reference-parity accuracy core. Details in
       3,554 rendering, 446 unsupported, 0 panics; 136/193/197 render 7/7,
       159/165 8/8, 172 4/6, 195 8/8 (Tiexue needs Start on its title screen)
       (`docs/mapper-audit.md`).
-      FDS wavetable/modulation audio is implemented and unit-tested; the FDS
-      board and BIOS/disk loader remain (a local 8 KiB BIOS image is available,
-      but the core loader is currently iNES-only). Remaining: the MMC5
-      >256 KiB CHR path, the Datach peripheral and the small six-image ASIC
-      tail (triage in `docs/mapper-audit.md`). VRC6 expansion audio (two
+      FDS wavetable/modulation audio is implemented and unit-tested. A raw
+      loader (`System::from_fds`) and mapper 20 board skeleton now map the
+      8 KiB BIOS, 32 KiB work RAM, `$4020-$4032` window and the audio
+      registers; disk-sector handshaking and real BIOS boot remain. Remaining:
+      the MMC5 >256 KiB CHR path, the Datach peripheral and the small six-image
+      ASIC tail (triage in `docs/mapper-audit.md`). VRC6 expansion audio (two
       pulses + sawtooth), Sunsoft 5B / YM2149 (three tones + noise + envelope)
       Namco 163 (up to eight wave channels, shared $40-$7F sound RAM), MMC5
       (two pulses + PCM DAC) and the VRC7/YM2413 two-operator FM engine are

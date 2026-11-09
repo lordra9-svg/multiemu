@@ -122,7 +122,15 @@ struct Dma {
 impl System {
     /// Builds a system from an iNES image.
     pub fn from_ines(rom: &[u8]) -> Result<Self, CartError> {
-        let cart = Cartridge::from_ines(rom)?;
+        Ok(Self::from_cartridge(Cartridge::from_ines(rom)?))
+    }
+
+    /// Builds a system from a raw FDS disk image and its 8 KiB BIOS.
+    pub fn from_fds(image: &[u8], bios: &[u8]) -> Result<Self, CartError> {
+        Ok(Self::from_cartridge(Cartridge::from_fds(image, bios)?))
+    }
+
+    fn from_cartridge(cart: Cartridge) -> Self {
         let mirroring = matches!(cart.mirroring(), Mirroring::Vertical);
         let chr_ram = cart.chr_is_ram();
         let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], mirroring, chr_ram);
@@ -184,7 +192,7 @@ impl System {
         let mut cpu = system.cpu;
         cpu.reset(&mut system);
         system.cpu = cpu;
-        Ok(system)
+        system
     }
 
     /// Resets the CPU and PPU without reloading the cartridge.
@@ -1103,6 +1111,41 @@ mod tests {
         assert_eq!(system.cart.ppu_read(0x0000), 0xCD);
         system.cart.cpu_write(0xA000, 2);
         assert_eq!(system.cart.ppu_read(0x0000), 0xAB);
+    }
+
+    #[test]
+    fn fds_bios_mapping_ram_and_audio_window() {
+        let mut bios = vec![0xEAu8; 0x2000];
+        let code = [
+            0xA9, 0x02, 0x8D, 0x23, 0x40, // LDA #2; STA $4023
+            0xA9, 0x83, 0x8D, 0x89, 0x40, // LDA #$83; STA $4089
+            0x4C, 0x08, 0xE0, // JMP $E008
+        ];
+        bios[..code.len()].copy_from_slice(&code);
+        bios[0x1FFC] = 0x00;
+        bios[0x1FFD] = 0xE0;
+        let disk = vec![0u8; 65500];
+        let mut system = System::from_fds(&disk, &bios).expect("fds");
+        assert_eq!(system.cart.mapper(), 20);
+        assert_eq!(system.cart.cpu_read(0xE000), 0xA9);
+
+        CpuBus::write(&mut system, 0x6000, 0x5A);
+        assert_eq!(system.cart.cpu_read(0x6000), 0x5A);
+
+        // Wave RAM and master volume through the board window.
+        CpuBus::write(&mut system, 0x4089, 0x83);
+        for i in 0..64u16 {
+            CpuBus::write(&mut system, 0x4040 + i, if i < 32 { 63 } else { 0 });
+        }
+        CpuBus::write(&mut system, 0x4089, 0x03);
+        CpuBus::write(&mut system, 0x4080, 0xBF);
+        CpuBus::write(&mut system, 0x4082, 0x40);
+        let mut peak = 0.0f32;
+        for _ in 0..10 {
+            system.run_frame();
+            peak = peak.max(system.cart.audio_mix().abs());
+        }
+        assert!(peak > 0.01, "FDS audio did not reach the mixer: {peak}");
     }
 
     #[test]

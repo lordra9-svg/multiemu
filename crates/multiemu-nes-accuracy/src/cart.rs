@@ -581,6 +581,31 @@ pub struct Header {
 }
 
 impl Cartridge {
+    /// Builds a cartridge from a raw FDS disk image and its 8 KiB BIOS.
+    pub fn from_fds(disk: &[u8], bios: &[u8]) -> Result<Self, CartError> {
+        if bios.len() < 0x2000 {
+            return Err(CartError::Truncated {
+                expected: 0x2000,
+                actual: bios.len(),
+            });
+        }
+        Ok(Self {
+            chr_is_ram: true,
+            mapper: Box::new(Fds::new(disk, bios)),
+            header: Header {
+                mapper: 20,
+                submapper: 0,
+                prg_size: 0,
+                chr_size: 0,
+                battery: false,
+                four_screen: false,
+                nes2: false,
+                prg_ram_size: 0,
+                mirroring: Mirroring::Horizontal,
+            },
+        })
+    }
+
     /// Parses an iNES / NES 2.0 image.
     pub fn from_ines(bytes: &[u8]) -> Result<Self, CartError> {
         let header = parse_header(bytes)?;
@@ -9631,6 +9656,102 @@ impl FdsAudio {
     #[must_use]
     pub fn mix(&self) -> f32 {
         self.output * 0.5
+    }
+}
+
+/// Famicom Disk System board (mapper 20), BIOS/disk skeleton.
+///
+/// The 8 KiB BIOS is mapped at `$E000-$FFFF`, 32 KiB of work RAM at
+/// `$6000-$DFFF`, and the `$4020-$4032` disk registers plus `$4040-$408A`
+/// audio window are routed to the board. Disk-sector handshaking is not
+/// modelled yet; `$4024` returns the image bytes sequentially so a test BIOS
+/// can exercise the loader and audio path.
+#[derive(Debug)]
+pub struct Fds {
+    bios: Vec<u8>,
+    disk: Vec<u8>,
+    ram: Vec<u8>,
+    chr: Vec<u8>,
+    disk_pos: usize,
+    mirroring: Mirroring,
+    irq: bool,
+    audio: FdsAudio,
+}
+
+impl Fds {
+    fn new(disk: &[u8], bios: &[u8]) -> Self {
+        Self {
+            bios: bios.to_vec(),
+            disk: disk.to_vec(),
+            ram: vec![0; 0x8000],
+            chr: vec![0; 0x2000],
+            disk_pos: 0,
+            mirroring: Mirroring::Horizontal,
+            irq: false,
+            audio: FdsAudio::default(),
+        }
+    }
+}
+
+impl Mapper for Fds {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x4024 => self.disk.get(self.disk_pos).copied().unwrap_or(0),
+            0x4020..=0x4032 => 0,
+            0x4090..=0x4097 => self.audio.read(address),
+            0x6000..=0xDFFF => self.ram[usize::from(address - 0x6000)],
+            0xE000..=0xFFFF => self.bios[usize::from(address - 0xE000) % self.bios.len().max(1)],
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x4020..=0x4032 => {
+                if address == 0x4023 {
+                    self.audio.write(address, value);
+                }
+            }
+            0x4040..=0x4097 => self.audio.write(address, value),
+            0x6000..=0xDFFF => self.ram[usize::from(address - 0x6000)] = value,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr[usize::from(address) & 0x1FFF]
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.chr[usize::from(address) & 0x1FFF] = value;
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        20
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x4020, 0x4097))
+    }
+
+    fn clock_cpu(&mut self) {
+        self.audio.clock();
+    }
+
+    fn audio_mix(&self) -> f32 {
+        self.audio.mix()
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq = false;
     }
 }
 

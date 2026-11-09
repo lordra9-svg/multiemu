@@ -808,8 +808,11 @@ the dots 1-64 clear phase, which provides the seed.
   its banked window with the PPU, and its local title matches the reference
   video on 296/300 frames. The FDS wavetable/modulation audio device is also
   implemented (`FdsAudio`: wave RAM, volume/mod envelopes, modulation table,
-  `$4023` enable/reset) and unit-tested; the FDS board, BIOS and disk I/O
-  loader are the remaining step.
+  `$4023` enable/reset) and unit-tested. A raw loader (`System::from_fds`)
+  and mapper 20 board map the 8 KiB BIOS at `$E000-$FFFF`, 32 KiB work RAM,
+  the `$4020-$4097` window and the audio registers; `$4024` currently returns
+  image bytes sequentially. Real disk-sector handshaking and BIOS boot are the
+  remaining FDS step.
 - IRQ counters are clocked once per rendered scanline rather than from exact
   PPU A12 rises, so fine-grained split timing is approximate.
 - AxROM titles that depend on exact PPU timing (e.g. Battletoads) do not boot yet.
