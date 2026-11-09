@@ -693,6 +693,7 @@ impl Cartridge {
             199 => Box::new(Mmc3_199::new(prg_rom, chr, header)),
             253 => Box::new(Waixing253::new(prg_rom, chr, header)),
             249 => Box::new(Mmc3_249::new(prg_rom, chr, header)),
+            234 => Box::new(Maxi15::new(prg_rom, chr, header)),
             193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
             172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
@@ -2574,6 +2575,131 @@ impl Mapper for Mmc3_199 {
 
     fn acknowledge_irq(&mut self) {
         self.inner.acknowledge_irq();
+    }
+}
+
+/// Maxi 15 multicart (mapper 234): two latches at `$FF80-$FF9F` and
+/// `$FFE8-$FFF8`, 32 KiB PRG / 8 KiB CHR pages, bus conflicts, and a
+/// CNROM/NINA-03 dual banking mode selected by bit 6 of the first latch.
+///
+/// Register reads are side-effecting (the ROM byte on the bus is latched), as
+/// the menu uses dummy reads to select a game.
+#[derive(Debug)]
+pub struct Maxi15 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    regs: [u8; 2],
+    mirroring: Mirroring,
+}
+
+impl Maxi15 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            regs: [0, 0],
+            // Power-on regs are zero, which selects vertical mirroring (Mesen
+            // calls UpdateState in InitMapper).
+            mirroring: Mirroring::Vertical,
+        }
+    }
+
+    fn prg_banks(&self) -> usize {
+        (self.prg.len() / 0x8000).max(1)
+    }
+
+    fn chr_banks(&self) -> usize {
+        (self.chr.len() / 0x2000).max(1)
+    }
+
+    fn prg_page(&self) -> usize {
+        let page = if self.regs[0] & 0x40 != 0 {
+            // NINA-03 mode.
+            usize::from((self.regs[0] & 0x0E) | (self.regs[1] & 0x01))
+        } else {
+            usize::from(self.regs[0] & 0x0F)
+        };
+        page % self.prg_banks()
+    }
+
+    fn chr_page(&self) -> usize {
+        let page = if self.regs[0] & 0x40 != 0 {
+            usize::from((self.regs[0] << 2) & 0x38) | (usize::from(self.regs[1] >> 4) & 0x07)
+        } else {
+            usize::from((self.regs[0] << 2) & 0x3C) | (usize::from(self.regs[1] >> 4) & 0x03)
+        };
+        page % self.chr_banks()
+    }
+
+    fn update(&mut self) {
+        self.mirroring = if self.regs[0] & 0x80 != 0 {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        };
+    }
+
+    /// The ROM byte currently on the PRG bus at `address` (bus conflicts and
+    /// register reads both latch this).
+    fn prg_byte(&self, address: u16) -> u8 {
+        let bank = self.prg_page();
+        self.prg[bank * 0x8000 + usize::from(address.wrapping_sub(0x8000))]
+    }
+
+    fn latch(&mut self, address: u16, value: u8) {
+        if (0xFF80..=0xFF9F).contains(&address) {
+            if self.regs[0] & 0x3F == 0 {
+                self.regs[0] = value;
+                self.update();
+            }
+        } else if (0xFFE8..=0xFFF8).contains(&address) {
+            self.regs[1] = value & 0x71;
+            self.update();
+        }
+    }
+}
+
+impl Mapper for Maxi15 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        self.prg_byte(address)
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0xFF80..=0xFF9F).contains(&address) || (0xFFE8..=0xFFF8).contains(&address) {
+            let value = self.prg_byte(address);
+            self.latch(address, value);
+            value
+        } else {
+            self.prg_read(address)
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0xFF80..=0xFF9F).contains(&address) || (0xFFE8..=0xFFF8).contains(&address) {
+            // Bus conflict: the cartridge drives the ROM byte, ANDing the write.
+            let value = value & self.prg_byte(address);
+            self.latch(address, value);
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let bank = self.chr_page();
+        self.chr[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn chr_write(&mut self, _address: u16, _value: u8) {
+        // Maxi 15 boards use CHR-ROM; nothing is writable.
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        234
     }
 }
 
@@ -14590,6 +14716,44 @@ mod tests {
         );
         cart.cpu_write(0xF008, 0x00);
         assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn maxi15_234_latches_prg_chr_mirroring_and_bus_conflicts() {
+        // 512 KiB PRG (16 x 32 KiB), 512 KiB CHR (64 x 8 KiB).
+        let mut rom = synth_banked(234, 512, 512);
+        // Make both latch addresses read $FF in every 32 KiB bank so bus
+        // conflicts allow any written value.
+        for bank8k in 0..(512 * 1024 / 0x2000) {
+            rom[16 + bank8k * 0x2000 + 0x1F80] = 0xFF;
+            rom[16 + bank8k * 0x2000 + 0x1FE8] = 0xFF;
+        }
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 234);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+
+        // $FF80 bit 6 selects NINA-03 mode; $FFE8 supplies the low bank bits.
+        cart.cpu_write(0xFF80, 0x40);
+        cart.cpu_write(0xFFE8, 0x11);
+        // PRG page 1 -> 32 KiB bank 1 (8 KiB bank 4 in the synth image).
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        // CHR page 1 -> 8 KiB bank 1, whose first 1 KiB bank is 8.
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 8);
+
+        // $FF80 bit 7 selects CNROM mode + horizontal mirroring.
+        cart.cpu_write(0xFF80, 0x80);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+
+        // Bus conflict: a write is ANDed with the ROM byte at the address.
+        let mut rom2 = synth_banked(234, 512, 512);
+        // Bus conflict with ROM byte $0E latches CNROM PRG page 14.
+        for bank8k in 0..(512 * 1024 / 0x2000) {
+            rom2[16 + bank8k * 0x2000 + 0x1F80] = 0x0E;
+        }
+        let mut other = Cartridge::from_ines(&rom2).expect("cart");
+        other.cpu_write(0xFF80, 0xFF);
+        assert_eq!(other.cpu_read(0x8000), 56); // 32 KiB bank 14 -> 8 KiB 56
     }
 
     #[test]

@@ -74,6 +74,12 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   pair selected while a CHR low nibble is 4 or 5 (unless the `$88` signature
   forces CHR-ROM). **6/6 images load, 3/6 render at 600 frames**; Dragon Ball Z
   reaches its title screen correctly.
+- **Maxi 15 multicart (234)** — two latches at `$FF80-$FF9F` / `$FFE8-$FFF8`
+  with bus conflicts and side-effecting register reads; 32 KiB PRG / 8 KiB CHR
+  pages; latch bit 6 selects NINA-03 vs CNROM banking and bit 7 the mirroring.
+  The first latch only updates while its bits 0-5 are clear. **6/6 images load
+  and render at 600 frames**, with the `MAXI GAME CART RIDGE` title screen
+  confirmed by a framebuffer dump.
 - **Waixing / Myth Struggle (249)** — MMC3 plus a single `$5000` register: when
   bit 1 is set, the chip permutes the CHR (8-bit) and PRG (5-bit below `$20`,
   8-bit above) page numbers before banking. **6/6 images load and render at 600
@@ -325,7 +331,6 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 | 168 | 6 | Racermate Challenge II + exercise bike | low value; peripheral |
 | 216 | 6 | Bonza / Magic Jewelry II (Dendy) | small; Dendy timing |
 | 222 | 6 | Dragon Ninja (CTC-31) / Super Bros. 8 | medium; two submappers |
-| 234 | 6 | Maxi 15 multicart, discrete logic + bus conflicts | small |
 | 27 | 6 | Mi Hun Che / Super Car (32 KiB PRG, 8 KiB CHR) | undocumented; inspect |
 | 60 | 6 | 4-in-1 multicarts | small latch |
 | 85 | 6 | **VRC7** (Lagrange Point, Tiny Toon 2 JP) | implemented (exact instrument ROM patches) |
@@ -333,8 +338,8 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 
 Only **172** turned out to be an alias of an implemented board (Sachen JV001
 with reversed data bits). The rest are real hardware models; the highest-value
-next targets are the small discrete-logic
-boards 234/60 and the remaining 164/216/222.
+next targets are the remaining 164/216/222
+and the small 4-in-1 multicart (60).
 
 ## Load/run failures
 
