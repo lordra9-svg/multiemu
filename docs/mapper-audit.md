@@ -74,6 +74,13 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   pair selected while a CHR low nibble is 4 or 5 (unless the `$88` signature
   forces CHR-ROM). **6/6 images load, 3/6 render at 600 frames**; Dragon Ball Z
   reaches its title screen correctly.
+- **Waixing educational / 164** — a 32 KiB PRG bank selected by two nibble
+  writes in `$5000-$51FF` (`$5000` low, `$5100` high) with 8 KiB CHR-RAM; the
+  board powers on with the last bank. **6/6 images load, 3/6 render at 600
+  frames** (the Koudai Jingling Pokemon Gold Chinese title screen renders
+  correctly). The three Final Fantasy pirate titles loop in the reset bank
+  writing `$60` to both nibble registers (bank 0x60, out of range for a 16-bank
+  512 KiB image), so they are either a different board/submapper or bad dumps.
 - **Maxi 15 multicart (234)** — two latches at `$FF80-$FF9F` / `$FFE8-$FFF8`
   with bus conflicts and side-effecting register reads; 32 KiB PRG / 8 KiB CHR
   pages; latch bit 6 selects NINA-03 vs CNROM banking and bit 7 the mirroring.
@@ -327,7 +334,6 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 | Mapper | Images | Board / notes | Next step |
 |---:|---:|---|---|
 | 157 | 7 | Datach Joint ROM (barcode reader) | blocked on the peripheral |
-| 164 | 6 | Dongda PEC-9588 educational computer, CHR RAM | small/medium |
 | 168 | 6 | Racermate Challenge II + exercise bike | low value; peripheral |
 | 216 | 6 | Bonza / Magic Jewelry II (Dendy) | small; Dendy timing |
 | 222 | 6 | Dragon Ninja (CTC-31) / Super Bros. 8 | medium; two submappers |
@@ -338,7 +344,7 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 
 Only **172** turned out to be an alias of an implemented board (Sachen JV001
 with reversed data bits). The rest are real hardware models; the highest-value
-next targets are the remaining 164/216/222
+next targets are the remaining 216/222
 and the small 4-in-1 multicart (60).
 
 ## Load/run failures

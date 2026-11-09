@@ -694,6 +694,7 @@ impl Cartridge {
             253 => Box::new(Waixing253::new(prg_rom, chr, header)),
             249 => Box::new(Mmc3_249::new(prg_rom, chr, header)),
             234 => Box::new(Maxi15::new(prg_rom, chr, header)),
+            164 => Box::new(Waixing164::new(prg_rom, chr, header)),
             193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
             172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
@@ -2575,6 +2576,66 @@ impl Mapper for Mmc3_199 {
 
     fn acknowledge_irq(&mut self) {
         self.inner.acknowledge_irq();
+    }
+}
+
+/// Waixing educational cartridges (mapper 164): a 32 KiB PRG bank selected by
+/// two nibble writes in `$5000-$51FF`, plus 8 KiB CHR-RAM.
+#[derive(Debug)]
+pub struct Waixing164 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Waixing164 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            // Mesen powers the board with the last 32 KiB bank selected.
+            prg_bank: 0x0F,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn banks(&self) -> usize {
+        (self.prg.len() / 0x8000).max(1)
+    }
+}
+
+impl Mapper for Waixing164 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let bank = usize::from(self.prg_bank) % self.banks();
+        self.prg[bank * 0x8000 + usize::from(address - 0x8000)]
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0x7300 {
+            0x5000 => self.prg_bank = (self.prg_bank & 0xF0) | (value & 0x0F),
+            0x5100 => self.prg_bank = (self.prg_bank & 0x0F) | ((value & 0x0F) << 4),
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr[usize::from(address) & 0x1FFF]
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.chr[usize::from(address) & 0x1FFF] = value;
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        164
     }
 }
 
@@ -14716,6 +14777,28 @@ mod tests {
         );
         cart.cpu_write(0xF008, 0x00);
         assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn waixing164_prg_nibbles_and_chr_ram() {
+        // 1 MiB PRG (32 x 32 KiB), 8 KiB CHR-RAM.
+        let rom = synth_banked(164, 1024, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 164);
+        assert!(cart.chr_is_ram());
+
+        // Power-on selects the last 32 KiB bank: 8 KiB bank 60.
+        assert_eq!(cart.cpu_read(0x8000), 60);
+
+        // $5000 sets the low nibble, $5100 the high nibble.
+        cart.cpu_write(0x5000, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), 12); // 32 KiB bank 3 -> 8 KiB 12
+        cart.cpu_write(0x5100, 0x01);
+        assert_eq!(cart.cpu_read(0x8000), 76); // 32 KiB bank 19 -> 8 KiB 76
+
+        // CHR-RAM round-trips.
+        cart.ppu_write(0x0123, 0x5A);
+        assert_eq!(cart.ppu_read(0x0123), 0x5A);
     }
 
     #[test]
