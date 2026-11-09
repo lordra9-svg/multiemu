@@ -885,8 +885,11 @@ the dots 1-64 clear phase, which provides the seed.
   resets the head, re-opens the spin-up window and rebuilds the wire image;
   ejecting reports the drive as not ready. Write-mode transfers also work:
   `$4024` bytes are stored into the wire image at the head and advance it,
-  raising the byte-transfer flag/IRQ. Automatic CRC regeneration and writing
-  modified sides back to the raw image are not modelled.
+  raising the byte-transfer flag/IRQ. Per-block CRC-16 is regenerated after
+  each stored byte (the 2C33 does this in hardware, and the BIOS never writes
+  CRCs itself), and `Cartridge::save_disk_image` / `System::save_disk_image`
+  flush modified block payloads back into the raw `.fds` sides so a host can
+  persist them.
 - IRQ counters are clocked once per rendered scanline at the sprite-fetch A12
   window (dot 260) rather than from every individual A12 transition, which is
   sufficient for the standard split-screen case but still approximate for

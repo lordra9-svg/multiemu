@@ -126,8 +126,9 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   Start, into the game (Super Mario Bros. title screen renders). The disk write
   path now handles write-mode transfers: each `$4024` byte is landed on the
   wire image at the head and advances it, with the byte-transfer flag/IRQ
-  raised as in read mode. The 2C33's automatic CRC regeneration and saving
-  modified sides back to the raw image are not modelled. Multi-side images are parsed from the fwNES
+  raised as in read mode. Per-block CRC-16 is regenerated after every stored
+  byte, and `Cartridge::save_disk_image` flushes modified payloads back into
+  the raw `.fds` sides for persistence. Multi-side images are parsed from the fwNES
   header and can be swapped at runtime (`Cartridge::insert_disk_side` /
   `System::insert_disk_side`), which resets the head, re-opens the spin-up
   window and rebuilds the wire image for the new side.

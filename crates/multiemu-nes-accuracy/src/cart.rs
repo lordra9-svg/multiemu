@@ -558,6 +558,11 @@ pub trait Mapper: fmt::Debug {
         0
     }
 
+    /// Raw `.fds` image with pending writes flushed (empty for non-FDS).
+    fn disk_image(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
+
     /// Notification of a fully decoded PPUCTRL write (MMC5 8x16 mode).
     fn set_ppu_ctrl(&mut self, _value: u8) {}
 
@@ -906,6 +911,12 @@ impl Cartridge {
     #[must_use]
     pub fn current_disk_side(&self) -> usize {
         self.mapper.current_disk_side()
+    }
+
+    /// Returns the raw `.fds` image with pending write-mode changes flushed
+    /// back into every side (no-op/empty for non-FDS cartridges).
+    pub fn save_disk_image(&mut self) -> Vec<u8> {
+        self.mapper.disk_image()
     }
 
     /// Notifies the mapper of a fully decoded PPUCTRL write.
@@ -9839,9 +9850,10 @@ fn fds_side_blocks(side: &[u8]) -> Vec<(usize, usize)> {
 /// Synthesizes the wire image for one raw `.fds` side:
 /// `[gap $00] [$80 mark] [block] [crc lo] [crc hi]` per block, with a trailing
 /// gap so the head reads `$00` past the last block.
-fn fds_side_wire(side: &[u8]) -> Vec<u8> {
+fn fds_side_wire(side: &[u8]) -> (Vec<u8>, Vec<(usize, usize, usize)>) {
     let blocks = fds_side_blocks(side);
     let mut wire = Vec::with_capacity(side.len() + blocks.len() * 32 + FDS_LEAD_IN_GAP);
+    let mut map = Vec::with_capacity(blocks.len());
     for (index, &(offset, len)) in blocks.iter().enumerate() {
         let gap = if index == 0 {
             FDS_LEAD_IN_GAP
@@ -9850,14 +9862,16 @@ fn fds_side_wire(side: &[u8]) -> Vec<u8> {
         };
         wire.resize(wire.len() + gap, 0x00);
         wire.push(FDS_START_MARK);
+        let payload = wire.len();
         let block = &side[offset..offset + len];
         wire.extend_from_slice(block);
         let crc = fds_block_crc(block);
         wire.push(crc as u8);
         wire.push((crc >> 8) as u8);
+        map.push((payload, offset, len));
     }
     wire.resize(wire.len() + FDS_BLOCK_GAP, 0x00);
-    wire
+    (wire, map)
 }
 
 /// Famicom Disk System board (mapper 20).
@@ -9876,6 +9890,10 @@ pub struct Fds {
     sides: usize,
     side: usize,
     wire: Vec<u8>,
+    /// For each block of the inserted side: `(wire payload offset, raw side
+    /// offset, payload length)`. Kept so write-mode transfers can refresh the
+    /// per-block CRCs and persist payload bytes back to the raw image.
+    wire_map: Vec<(usize, usize, usize)>,
     ram: Vec<u8>,
     chr: Vec<u8>,
     head: usize,
@@ -9922,6 +9940,7 @@ impl Fds {
             sides,
             side: 0,
             wire: Vec::new(),
+            wire_map: Vec::new(),
             ram: vec![0; 0x8000],
             chr: vec![0; 0x2000],
             head: 0,
@@ -9962,10 +9981,70 @@ impl Fds {
     }
 
     fn rebuild_wire(&mut self) {
-        self.wire = fds_side_wire(self.side_bytes());
+        let (wire, map) = fds_side_wire(self.side_bytes());
+        self.wire = wire;
+        self.wire_map = map;
         self.head = 0;
         self.end_of_head = false;
         self.skipping_gap = true;
+    }
+
+    /// Recomputes every block's CRC-16 after a write-mode transfer modified
+    /// the wire image. The 2C33 regenerates CRCs in hardware; the BIOS never
+    /// writes them itself.
+    fn refresh_crcs(&mut self) {
+        for &(payload, _, len) in &self.wire_map {
+            if payload == 0 || payload + len + 2 > self.wire.len() {
+                continue;
+            }
+            let end = payload + len;
+            let crc = fds_block_crc(&self.wire[payload..end]);
+            self.wire[end] = crc as u8;
+            self.wire[end + 1] = (crc >> 8) as u8;
+        }
+    }
+
+    /// Copies the inserted side's wire payloads back into the raw side image
+    /// and returns the full side.
+    fn save_current_side(&mut self) -> Vec<u8> {
+        self.refresh_crcs();
+        let base = self.side * 65_500;
+        let mut side = self.side_bytes().to_vec();
+        side.resize(65_500, 0);
+        for &(payload, raw_offset, len) in &self.wire_map {
+            if payload + len <= self.wire.len() && raw_offset + len <= side.len() {
+                side[raw_offset..raw_offset + len]
+                    .copy_from_slice(&self.wire[payload..payload + len]);
+            }
+        }
+        if base < self.disk.len() {
+            let end = (base + 65_500).min(self.disk.len());
+            self.disk[base..end].copy_from_slice(&side[..end - base]);
+        }
+        side
+    }
+
+    /// Returns the full raw `.fds` image (fwNES header + every side), with the
+    /// inserted side's pending writes flushed back into it.
+    pub fn disk_image(&mut self) -> Vec<u8> {
+        let current = self.save_current_side();
+        let mut out = Vec::with_capacity(16 + self.disk.len());
+        out.extend_from_slice(b"FDS\x1a");
+        out.push(self.sides.min(255) as u8);
+        out.extend(std::iter::repeat_n(0, 11));
+        for side in 0..self.sides {
+            let start = side * 65_500;
+            let end = (start + 65_500).min(self.disk.len());
+            if side == self.side {
+                let mut bytes = current.clone();
+                bytes.resize(65_500, 0);
+                out.extend_from_slice(&bytes);
+            } else {
+                out.extend_from_slice(&self.disk[start..end]);
+                out.extend(std::iter::repeat_n(0, 65_500 - (end - start)));
+            }
+        }
+        out
     }
 
     /// Inserts a disk side (or ejects), resetting the head and opening a short
@@ -10041,6 +10120,7 @@ impl Fds {
         if self.head < self.wire.len() {
             self.wire[self.head] = self.write_data;
             self.head += 1;
+            self.refresh_crcs();
         }
         if self.head >= self.wire.len() {
             self.end_of_head = true;
@@ -10301,6 +10381,10 @@ impl Mapper for Fds {
 
     fn current_disk_side(&self) -> usize {
         self.side
+    }
+
+    fn disk_image(&mut self) -> Vec<u8> {
+        Fds::disk_image(self)
     }
 }
 
@@ -14004,6 +14088,52 @@ mod tests {
             saw_high |= (sample - 15.0 / 45.0).abs() < 1e-4;
         }
         assert!(saw_low && saw_high, "noise did not toggle");
+    }
+
+    #[test]
+    fn fds_write_regenerates_block_crc_and_persists_to_the_image() {
+        let mut side = vec![0u8; 65_500];
+        side[0] = 0x01;
+        side[1..15].copy_from_slice(b"*NINTENDO-HVC*");
+        for (i, byte) in side.iter_mut().enumerate().take(56).skip(15) {
+            *byte = 0x10 + i as u8;
+        }
+        side[56] = 0x02;
+        side[57] = 0x00;
+        let mut fds = Fds::new(&side, &vec![0xEA; 0x2000]);
+        assert_eq!(fds.wire_map.len(), 2);
+
+        // Write into the first block's payload through the write-mode path.
+        let (payload, raw_offset, len) = fds.wire_map[0];
+        assert_eq!(raw_offset, 0);
+        assert_eq!(len, 56);
+        // Offset 1 keeps the block-type byte ($01) intact so the saved side
+        // still parses; the licensee string byte is a realistic write target.
+        fds.head = payload + 1;
+        fds.write_data = 0x99;
+        fds.store_byte();
+        assert_eq!(fds.wire[payload + 1], 0x99);
+
+        // The block CRC must now cover the modified payload.
+        let expected = fds_block_crc(&fds.wire[payload..payload + 56]);
+        assert_eq!(fds.wire[payload + 56], expected as u8);
+        assert_eq!(fds.wire[payload + 57], (expected >> 8) as u8);
+
+        // Saving flushes the payload back into the raw side.
+        let image = fds.disk_image();
+        assert_eq!(&image[0..4], b"FDS\x1a");
+        assert_eq!(image[4], 1);
+        assert_eq!(image[16], 0x01, "block type intact");
+        assert_eq!(image[17], 0x99, "written byte persisted in the raw side");
+
+        // Reloading the saved image reproduces the payload and its CRC.
+        let reloaded = Fds::new(&image[16..], &vec![0xEA; 0x2000]);
+        let (p2, _, _) = reloaded.wire_map[0];
+        assert_eq!(reloaded.wire[p2], 0x01);
+        assert_eq!(reloaded.wire[p2 + 1], 0x99);
+        let crc2 = fds_block_crc(&reloaded.wire[p2..p2 + 56]);
+        assert_eq!(reloaded.wire[p2 + 56], crc2 as u8);
+        assert_eq!(reloaded.wire[p2 + 57], (crc2 >> 8) as u8);
     }
 
     #[test]

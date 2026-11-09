@@ -361,6 +361,12 @@ impl System {
         self.cart.disk_side_count()
     }
 
+    /// Returns the raw `.fds` image with pending write-mode changes flushed
+    /// (empty for cartridges).
+    pub fn save_disk_image(&mut self) -> Vec<u8> {
+        self.cart.save_disk_image()
+    }
+
     /// Battery-backed PRG RAM, if any.
     #[must_use]
     pub fn sram(&self) -> &[u8] {
