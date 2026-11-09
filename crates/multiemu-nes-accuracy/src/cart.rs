@@ -471,6 +471,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Shared banked CHR-RAM state for the PPU (VRC7).
+    fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
+        None
+    }
+
     /// Expansion-audio contribution for the current CPU cycle (0.0 for boards
     /// without expansion audio).
     fn audio_mix(&self) -> f32 {
@@ -763,6 +768,12 @@ impl Cartridge {
     #[must_use]
     pub fn mmc5_aux(&self) -> Option<Rc<RefCell<Mmc5Aux>>> {
         self.mapper.mmc5_aux()
+    }
+
+    /// Shared banked CHR-RAM state for the PPU (VRC7).
+    #[must_use]
+    pub fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
+        self.mapper.vrc7_chr()
     }
 
     /// Expansion-audio contribution for the current CPU cycle.
@@ -9306,6 +9317,41 @@ impl Mapper for Fds108 {
     }
 }
 
+/// Shared banked CHR-RAM state for VRC7 boards (Lagrange Point uses CHR RAM
+/// and switches 1 KiB banks at runtime).
+#[derive(Debug)]
+pub struct Vrc7Chr {
+    ram: Vec<u8>,
+    banks: [u8; 8],
+}
+
+impl Vrc7Chr {
+    fn new(ram: Vec<u8>) -> Self {
+        Self { ram, banks: [0; 8] }
+    }
+
+    fn set_banks(&mut self, banks: [u8; 8]) {
+        self.banks = banks;
+    }
+
+    pub(crate) fn read(&self, address: u16) -> u8 {
+        let slot = usize::from(address / 0x400) & 0x07;
+        let banks = (self.ram.len() / 0x400).max(1);
+        let bank = usize::from(self.banks[slot]) % banks;
+        self.ram[bank * 0x400 + usize::from(address & 0x3FF)]
+    }
+
+    pub(crate) fn write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address / 0x400) & 0x07;
+        let banks = (self.ram.len() / 0x400).max(1);
+        let bank = usize::from(self.banks[slot]) % banks;
+        let index = bank * 0x400 + usize::from(address & 0x3FF);
+        if let Some(byte) = self.ram.get_mut(index) {
+            *byte = value;
+        }
+    }
+}
+
 /// VRC7 built-in instrument patches (approximation of the YM2413 patch
 /// ROM). Index 0 is the user patch, which is built from registers $00-$07.
 const VRC7_PATCHES: [[u8; 8]; 16] = [
@@ -9593,10 +9639,13 @@ pub struct Vrc7 {
     irq_pending: bool,
     scanline_prescaler: u16,
     audio: Vrc7Audio,
+    chr_aux: Option<Rc<RefCell<Vrc7Chr>>>,
 }
 
 impl Vrc7 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+        let chr_aux =
+            (header.chr_size == 0).then(|| Rc::new(RefCell::new(Vrc7Chr::new(chr.clone()))));
         Self {
             prg,
             chr,
@@ -9612,6 +9661,13 @@ impl Vrc7 {
             irq_pending: false,
             scanline_prescaler: 0,
             audio: Vrc7Audio::default(),
+            chr_aux,
+        }
+    }
+
+    fn refresh_chr_banks(&self) {
+        if let Some(aux) = &self.chr_aux {
+            aux.borrow_mut().set_banks(self.chr_banks);
         }
     }
 
@@ -9668,17 +9724,41 @@ impl Mapper for Vrc7 {
             0x9000 => self.prg_banks[2] = value & 0x3F,
             0x9010 => self.audio.write_select(value),
             0x9030 => self.audio.write_data(value),
-            0xA000 => self.chr_banks[0] = value,
-            0xA008 | 0xA010 => self.chr_banks[1] = value,
-            0xB000 => self.chr_banks[2] = value,
-            0xB008 | 0xB010 => self.chr_banks[3] = value,
-            0xC000 => self.chr_banks[4] = value,
-            0xC008 | 0xC010 => self.chr_banks[5] = value,
-            0xD000 => self.chr_banks[6] = value,
-            0xD008 | 0xD010 => self.chr_banks[7] = value,
+            0xA000 => {
+                self.chr_banks[0] = value;
+                self.refresh_chr_banks();
+            }
+            0xA008 | 0xA010 => {
+                self.chr_banks[1] = value;
+                self.refresh_chr_banks();
+            }
+            0xB000 => {
+                self.chr_banks[2] = value;
+                self.refresh_chr_banks();
+            }
+            0xB008 | 0xB010 => {
+                self.chr_banks[3] = value;
+                self.refresh_chr_banks();
+            }
+            0xC000 => {
+                self.chr_banks[4] = value;
+                self.refresh_chr_banks();
+            }
+            0xC008 | 0xC010 => {
+                self.chr_banks[5] = value;
+                self.refresh_chr_banks();
+            }
+            0xD000 => {
+                self.chr_banks[6] = value;
+                self.refresh_chr_banks();
+            }
+            0xD008 | 0xD010 => {
+                self.chr_banks[7] = value;
+                self.refresh_chr_banks();
+            }
             0xE000 => {
-                self.wram_enabled = value & 0x40 != 0;
-                if value & 0x20 != 0 {
+                self.wram_enabled = value & 0x80 != 0;
+                if value & 0x40 != 0 {
                     self.audio.silence();
                 }
                 self.mirroring = match value & 0x03 {
@@ -9705,6 +9785,9 @@ impl Mapper for Vrc7 {
     }
 
     fn chr_read(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.chr_aux {
+            return aux.borrow().read(address);
+        }
         let slot = usize::from(address / 0x400) & 0x07;
         let banks = (self.chr.len() / 0x400).max(1);
         let bank = usize::from(self.chr_banks[slot]) % banks;
@@ -9712,6 +9795,10 @@ impl Mapper for Vrc7 {
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(aux) = &self.chr_aux {
+            aux.borrow_mut().write(address, value);
+            return;
+        }
         let slot = usize::from(address / 0x400) & 0x07;
         let banks = (self.chr.len() / 0x400).max(1);
         let bank = usize::from(self.chr_banks[slot]) % banks;
@@ -9756,6 +9843,10 @@ impl Mapper for Vrc7 {
 
     fn audio_mix(&self) -> f32 {
         self.audio.mix()
+    }
+
+    fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
+        self.chr_aux.clone()
     }
 }
 
@@ -12980,10 +13071,10 @@ mod tests {
         // WRAM is protected until $E000 bit 6.
         cart.cpu_write(0x6000, 0x11);
         assert_eq!(cart.cpu_read(0x6000), 0);
-        cart.cpu_write(0xE000, 0x40);
+        cart.cpu_write(0xE000, 0x80);
         cart.cpu_write(0x6000, 0x22);
         assert_eq!(cart.cpu_read(0x6000), 0x22);
-        cart.cpu_write(0xE000, 0x41);
+        cart.cpu_write(0xE000, 0x81);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
 
         // IRQ: latch, enable, then 0x100 increments.
@@ -13041,7 +13132,7 @@ mod tests {
         assert_eq!(cart.audio_mix(), 0.0);
 
         // $E000 bit 5 silences and clears the audio registers.
-        cart.cpu_write(0xE000, 0x20);
+        cart.cpu_write(0xE000, 0x40);
         assert_eq!(cart.audio_mix(), 0.0);
         write(&mut cart, 0x10, 0x01);
         for _ in 0..1000 {

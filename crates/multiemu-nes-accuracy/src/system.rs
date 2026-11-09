@@ -141,6 +141,9 @@ impl System {
         if let Some(aux) = cart.mmc5_aux() {
             ppu.set_mmc5_aux(aux);
         }
+        if let Some(aux) = cart.vrc7_chr() {
+            ppu.set_vrc7_chr(aux);
+        }
         if cart.has_rom_nametables() {
             if let Some(rom) = cart.chr_rom() {
                 ppu.set_rom_nametable_rom(rom.to_vec());
@@ -1069,6 +1072,34 @@ mod tests {
         let normal = system.ppu.debug_pixel(200, 0);
         assert_eq!(split, system.ppu.debug_palette(3), "split region wrong");
         assert_eq!(normal, system.ppu.debug_palette(0), "normal region wrong");
+    }
+
+    #[test]
+    fn vrc7_chr_ram_banks_are_shared_with_the_ppu() {
+        let prg_len = 128 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 0; // CHR RAM.
+        rom[6] = 0x50;
+        rom[7] = 0x58;
+        rom[8] = 0x20; // NES 2.0, submapper 2, mapper high bits 0.
+        for byte in &mut rom[16..] {
+            *byte = 0xEA;
+        }
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 85);
+        assert!(system.cart.chr_is_ram());
+
+        // Slot 0 bank 2, upload a tile, then switch to bank 0 and back.
+        system.cart.cpu_write(0xA000, 2);
+        system.ppu.debug_write_vram(0x0000, 0xAB);
+        assert_eq!(system.cart.ppu_read(0x0000), 0xAB);
+        system.cart.cpu_write(0xA000, 0);
+        system.ppu.debug_write_vram(0x0000, 0xCD);
+        assert_eq!(system.cart.ppu_read(0x0000), 0xCD);
+        system.cart.cpu_write(0xA000, 2);
+        assert_eq!(system.cart.ppu_read(0x0000), 0xAB);
     }
 
     #[test]

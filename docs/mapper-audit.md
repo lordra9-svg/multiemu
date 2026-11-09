@@ -104,14 +104,17 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   sequences, plus the held 8-bit `$5011` PCM DAC. No sweep unit. Unit test
   covers the pulse peak, both channels summing and length expiration.
 - **VRC7 (85)** — 8 KiB PRG banks with the last fixed, eight 1 KiB CHR
-  banks, `$E000` mirroring/WRAM-protect/sound-silence, and the VRC cycle or
-  scanline IRQ. Expansion audio is a six-channel, two-operator FM engine with
-  the custom patch registers `$00-$07`, `$9010`/`$9030` selection, key-on/
-  key-off, octave/frequency, per-channel instrument/volume and an approximate
-  built-in instrument table. Audio silence (`$E000` bit 5) clears all state.
-  **6/6** images load; 1/6 renders at 20 and 600 frames (the other dumps are
-  Tiny Toon variants whose board has no audio circuit and whose boot screens
-  need more frames).
+  banks, `$E000` mirroring/WRAM-enable (`$80`) and sound-silence (`$40`), and
+  the VRC cycle or scanline IRQ. CHR-RAM boards share a banked 8 KiB window
+  with the PPU, so Lagrange Point's runtime CHR uploads and 1 KiB switches are
+  visible to rendering. Expansion audio is a six-channel, two-operator FM
+  engine with the custom patch registers `$00-$07`, `$9010`/`$9030`
+  selection, key-on/key-off, octave/frequency, per-channel instrument/volume
+  and an approximate built-in instrument table. Audio silence clears all
+  state. **6/6** images load; 1/6 renders at 20 frames and 2/6 at 600 (the
+  CHR-RAM title now renders; the others are Tiny Toon variants whose board
+  lacks the audio resonator and whose boot screens need more frames). The
+  CHR-RAM title matches the reference video on 296/300 frames.
 - **Sunsoft 5B audio (69)** — YM2149F with three tone channels (CPU/16
   prescaler), the 17-bit/13-tap LFSR noise generator, the 32-step envelope
   generator and the `$07` tone/noise mixer; `$C000` selects an internal

@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::cart::{HybridChr, Mirroring, Mmc5Aux};
+use crate::cart::{HybridChr, Mirroring, Mmc5Aux, Vrc7Chr};
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -121,6 +121,8 @@ pub struct Ppu {
     hybrid: Option<Rc<RefCell<HybridChr>>>,
     /// Shared MMC5 state (ExRAM/nametables/CHR map).
     mmc5_aux: Option<Rc<RefCell<Mmc5Aux>>>,
+    /// Shared banked CHR-RAM state (VRC7).
+    vrc7_chr: Option<Rc<RefCell<Vrc7Chr>>>,
     /// Full CHR ROM used for ROM nametables (Sunsoft-4), if any.
     nt_rom: Vec<u8>,
     /// Two 1 KiB CHR nametable bank indices when ROM nametables are enabled.
@@ -280,6 +282,7 @@ impl Ppu {
             mmc2: None,
             hybrid: None,
             mmc5_aux: None,
+            vrc7_chr: None,
             nt_rom: Vec::new(),
             nt_banks: None,
             chr_ram,
@@ -369,6 +372,11 @@ impl Ppu {
         self.mmc5_aux = Some(aux);
     }
 
+    /// Shares the mapper's banked CHR-RAM state (VRC7).
+    pub fn set_vrc7_chr(&mut self, chr: Rc<RefCell<Vrc7Chr>>) {
+        self.vrc7_chr = Some(chr);
+    }
+
     /// Installs the full CHR ROM used for ROM nametables.
     pub fn set_rom_nametable_rom(&mut self, rom: Vec<u8>) {
         self.nt_rom = rom;
@@ -449,6 +457,9 @@ impl Ppu {
 
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.vrc7_chr {
+            return aux.borrow().read(address);
+        }
         if let Some(aux) = &self.mmc5_aux {
             return aux.borrow().chr_read(address, &self.chr);
         }
@@ -1006,6 +1017,10 @@ impl Ppu {
 
     fn write_vram(&mut self, address: u16, value: u8) {
         if address < 0x2000 {
+            if let Some(aux) = &self.vrc7_chr {
+                aux.borrow_mut().write(address, value);
+                return;
+            }
             if let Some(aux) = &self.mmc5_aux {
                 if aux.borrow().is_ram() {
                     let offset = aux.borrow().chr_offset(address);
