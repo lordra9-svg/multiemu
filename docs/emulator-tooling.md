@@ -191,10 +191,13 @@ frame indices line up with the reference capture.
 The per-CPU-cycle channel outputs and the mixed value are now bit-identical
 on the frames compared (the pulse sequencers run at the APU rate, the
 triangle DAC holds its step, and the console power-on phase/warm-up window
-match). Audio sample arrays are bit-identical for the first 38 frames of a
-commercial title (28,430 of 85,819 samples over 120 frames); divergence starts
-when a rare per-cycle event lands on a different frame boundary. On the NROM
-title, 242 of 300 frame audio hashes match (and 298 of 300 video hashes).
+match). The system also leaves reset on CPU cycle 8 like the reference, which
+keeps every frame start within one cycle of the reference capture. Audio
+sample arrays are bit-identical for the first 38 frames of a commercial title
+(28,428 of 85,818 samples over 120 frames); divergence starts when the
+remaining one-cycle frame-boundary difference moves the drain point. On the
+NROM title, 226 of 300 frame audio hashes match and 299 of 300 video hashes
+match; frame-boundary alignment is within ±1 cycle (previously ±5).
 - `run <rom> --dump-ppu` / `--break <hex>` — per-frame CPU/PPU/APU state and a
   PC breakpoint.
 

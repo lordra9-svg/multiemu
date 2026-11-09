@@ -821,13 +821,15 @@ the dots 1-64 clear phase, which provides the seed.
   only freeze stepping) and freezes on periods below 2, and the system models
   the console power-on phase (PPU pre-render/dot 340) plus the one-frame
   post-reset warm-up window that ignores `$2000`/`$2001`/`$2005`/`$2006`
-  writes. `run_frame` reports the reset's power-on frame without executing, so
-  frame indices match reference captures. The per-cycle channel outputs and
+  writes. The system leaves reset on CPU cycle 8 like the reference, and
+  `run_frame` reports the reset's power-on frame without executing, so frame
+  indices match reference captures and every frame start is within one cycle
+  of the reference (previously up to five). The per-cycle channel outputs and
   mixed value are now bit-identical on compared frames; audio samples are
   bit-identical for the first 38 frames of a local commercial title, and the
-  NROM title reaches 242/300 identical audio hashes (298/300 video). The
-  remaining divergence follows a rare per-cycle event landing on a different
-  frame boundary.
+  NROM title reaches 226/300 identical audio hashes (299/300 video). The
+  remaining divergence follows the last one-cycle frame-boundary difference,
+  which moves the audio drain point.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the
