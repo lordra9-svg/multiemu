@@ -777,7 +777,10 @@ the dots 1-64 clear phase, which provides the seed.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the
-  `$07` tone/noise mixer). VRC7/N163/MMC5/FDS audio is still missing.
+  `$07` tone/noise mixer). The Namco 163 (mapper 19) wave channels are also
+  implemented: up to eight channels cycle every 15 CPU cycles from the shared
+  `$40-$7F` sound RAM, with 24-bit phase accumulation, waveform length/offset
+  and the `$E000` sound-disable bit. VRC7/MMC5/FDS audio is still missing.
 - IRQ counters are clocked once per rendered scanline rather than from exact
   PPU A12 rises, so fine-grained split timing is approximate.
 - AxROM titles that depend on exact PPU timing (e.g. Battletoads) do not boot yet.

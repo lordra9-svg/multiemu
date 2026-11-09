@@ -4746,6 +4746,11 @@ pub struct Namco163 {
     chr_ram_low_disabled: bool,
     chr_ram_high_disabled: bool,
     mirroring: Mirroring,
+    chip_inc: bool,
+    sound_disabled: bool,
+    audio_divider: u8,
+    audio_channel: usize,
+    audio_out: i16,
 }
 
 impl Namco163 {
@@ -4768,7 +4773,48 @@ impl Namco163 {
             chr_ram_low_disabled: false,
             chr_ram_high_disabled: false,
             mirroring: header.mirroring,
+            chip_inc: false,
+            sound_disabled: false,
+            audio_divider: 0,
+            audio_channel: 0,
+            audio_out: 0,
         }
+    }
+
+    /// Updates one N163 wave channel, cycling through the enabled set every
+    /// 15 CPU cycles.
+    fn audio_update(&mut self) {
+        if self.sound_disabled {
+            self.audio_out = 0;
+            return;
+        }
+        let control = self.chip_ram[0x7F];
+        let count = usize::from((control >> 4) & 0x07) + 1;
+        let index = 7 - (self.audio_channel % count);
+        self.audio_channel = (self.audio_channel + 1) % count;
+        let base = 0x40 + index * 8;
+        let frequency = (u32::from(self.chip_ram[base + 4] & 0x03) << 16)
+            | (u32::from(self.chip_ram[base + 2]) << 8)
+            | u32::from(self.chip_ram[base]);
+        let length = 256 - u32::from(self.chip_ram[base + 4] & 0xFC);
+        let mut phase = (u32::from(self.chip_ram[base + 5]) << 16)
+            | (u32::from(self.chip_ram[base + 3]) << 8)
+            | u32::from(self.chip_ram[base + 1]);
+        phase = (phase + frequency) % (length << 16);
+        self.chip_ram[base + 1] = phase as u8;
+        self.chip_ram[base + 3] = (phase >> 8) as u8;
+        self.chip_ram[base + 5] = (phase >> 16) as u8;
+
+        let offset = u32::from(self.chip_ram[base + 6]);
+        let sample_address = ((phase >> 16) + offset) & 0xFF;
+        let byte = self.chip_ram[(sample_address >> 1) as usize & 0x7F];
+        let sample = if sample_address & 1 == 0 {
+            byte & 0x0F
+        } else {
+            byte >> 4
+        };
+        let volume = i16::from(self.chip_ram[base + 7] & 0x0F);
+        self.audio_out = (i16::from(sample) - 8) * volume;
     }
 
     fn prg_bank_count(&self) -> usize {
@@ -4841,7 +4887,11 @@ impl Mapper for Namco163 {
     fn prg_write(&mut self, address: u16, value: u8) {
         match address {
             0x4800..=0x4FFF => {
-                self.chip_ram[usize::from(self.chip_addr) & 0x7F] = value;
+                let index = usize::from(self.chip_addr) & 0x7F;
+                self.chip_ram[index] = value;
+                if self.chip_inc && index < 0x7F {
+                    self.chip_addr = (index + 1) as u8;
+                }
             }
             0x5000..=0x57FF => {
                 self.irq_counter = (self.irq_counter & 0x7F00) | u16::from(value);
@@ -4870,7 +4920,10 @@ impl Mapper for Namco163 {
                 let slot = usize::from((address - 0xC000) / 0x800) & 0x03;
                 self.nt_banks[slot] = value;
             }
-            0xE000..=0xE7FF => self.prg_banks[0] = value & 0x3F,
+            0xE000..=0xE7FF => {
+                self.prg_banks[0] = value & 0x3F;
+                self.sound_disabled = value & 0x40 != 0;
+            }
             0xE800..=0xEFFF => {
                 self.prg_banks[1] = value & 0x3F;
                 self.chr_ram_low_disabled = value & 0x40 != 0;
@@ -4879,6 +4932,7 @@ impl Mapper for Namco163 {
             0xF000..=0xF7FF => self.prg_banks[2] = value & 0x3F,
             0xF800..=0xFFFF => {
                 self.chip_addr = value & 0x7F;
+                self.chip_inc = value & 0x80 != 0;
                 self.write_protect = value;
             }
             _ => {}
@@ -4929,6 +4983,11 @@ impl Mapper for Namco163 {
     }
 
     fn clock_cpu(&mut self) {
+        self.audio_divider += 1;
+        if self.audio_divider >= 15 {
+            self.audio_divider = 0;
+            self.audio_update();
+        }
         if !self.irq_enabled {
             return;
         }
@@ -4942,6 +5001,10 @@ impl Mapper for Namco163 {
 
     fn acknowledge_irq(&mut self) {
         self.irq_pending = false;
+    }
+
+    fn audio_mix(&self) -> f32 {
+        f32::from(self.audio_out) / 256.0
     }
 }
 
@@ -12155,6 +12218,44 @@ mod tests {
         cart.cpu_write(0x8001, 0x00);
         cart.ppu_write(0x0200, 0x33);
         assert_eq!(cart.ppu_read(0x0200), 0x33);
+    }
+
+    #[test]
+    fn namco163_wavetable_audio_updates_and_disables() {
+        let rom = synth_banked(19, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 19);
+
+        // Waveform at sound-RAM 0: sixteen samples of $F (8 bytes x 2).
+        cart.cpu_write(0xF800, 0x80); // address 0, auto-increment
+        for _ in 0..8 {
+            cart.cpu_write(0x4800, 0xFF);
+        }
+        // Channel 8: frequency $001000, phase 0, length 256, wave address 0,
+        // volume 15, only channel 8 enabled (C=0 in the high nibble).
+        cart.cpu_write(0xF800, 0xF8); // address $78, auto-increment
+        for value in [0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x0F] {
+            cart.cpu_write(0x4800, value);
+        }
+
+        // One channel is updated every 15 CPU cycles; a sample of $F minus
+        // the -8 bias is 7, times volume 15.
+        cart.cpu_write(0xF800, 0x00);
+        assert_eq!(cart.cpu_read(0x4800), 0xFF, "wave sample");
+        cart.cpu_write(0xF800, 0x7F);
+        assert_eq!(cart.cpu_read(0x4800), 0x0F, "volume register");
+        for _ in 0..15 {
+            cart.clock_cpu();
+        }
+        let sample = cart.audio_mix();
+        assert!((sample - 105.0 / 256.0).abs() < 1e-4, "sample {sample}");
+
+        // $E000 bit 6 disables sound.
+        cart.cpu_write(0xE000, 0x40);
+        for _ in 0..15 {
+            cart.clock_cpu();
+        }
+        assert_eq!(cart.audio_mix(), 0.0);
     }
 
     #[test]

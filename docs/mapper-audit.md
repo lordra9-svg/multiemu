@@ -104,6 +104,12 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   generator and the `$07` tone/noise mixer; `$C000` selects an internal
   register and `$E000` writes it. Unit test covers tone toggling, both
   channels summing, constant-volume mixing and noise.
+- **Namco 163 audio (19)** — up to eight wavetable channels stored in the
+  shared `$40-$7F` chip RAM, updated one channel per 15 CPU cycles with a
+  24-bit phase accumulator, 18-bit frequency, waveform length/offset and the
+  `$E000` sound-disable bit. `$F800` address-port auto-increment is honoured
+  for data writes. Unit test covers a $F sample reaching the expected
+  `105/256` output and the disable bit.
 - **PPU** — the backdrop no longer double-indirects the palette; all five
   mirroring modes are modelled with 4 KiB CIRAM; the `$2007` read buffer is
   fed by the per-dot background/sprite fetch with a four-dot data state
