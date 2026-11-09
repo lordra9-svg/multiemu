@@ -158,7 +158,7 @@ writes, and MMC1 bank switching.
 | MRCM MMC3 clone (196) | MMC3 with the CPU A0 input remapped to A1/A2/A3 |
 | HP-898F (319) | two 16 KiB PRG windows, mirroring and 8 KiB CHR bank from `$6000`/`$6004` |
 | FDS conversions (108) | 8 KiB bank at `$6000-$7FFF`, fixed last 32 KiB, CHR-RAM/ROM variant |
-| Konami VRC6 (24/26) | 16 KiB + 8 KiB PRG, eight 1 KiB CHR banks, PPU banking/mirroring, VRC cycle/scanline IRQ (audio missing) |
+| Konami VRC6 (24/26) | 16 KiB + 8 KiB PRG, eight 1 KiB CHR banks, PPU banking/mirroring, VRC cycle/scanline IRQ, two-pulse + sawtooth expansion audio |
 | Irem G-101 (32) | two 8 KiB PRG banks with switchable/fixed pair, eight 1 KiB CHR banks, mirroring/PRG-mode |
 | Taito TC0690 (48) | TC0190-style PRG/CHR banking plus inverted-reload MMC3-style IRQ |
 | Jaleco JF-13 (86) | GNROM-style 32 KiB PRG / 8 KiB CHR latch at `$6000-$6FFF` (speech chip not modelled) |
@@ -774,7 +774,9 @@ the dots 1-64 clear phase, which provides the seed.
 
 - MMC5 is partial: Castlevania III (US) now boots and runs its intro, but
   ExRAM/split-screen, extended attributes and expansion audio are missing.
-- VRC expansion audio is missing; VRC6 (24/26) is not dispatched yet.
+- VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
+  `$9003` halt/16x/256x scaling); VRC7/N163/FME-7/MMC5/FDS audio is still
+  missing.
 - IRQ counters are clocked once per rendered scanline rather than from exact
   PPU A12 rises, so fine-grained split timing is approximate.
 - AxROM titles that depend on exact PPU timing (e.g. Battletoads) do not boot yet.

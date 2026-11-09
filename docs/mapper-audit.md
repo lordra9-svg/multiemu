@@ -94,6 +94,11 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   the split fine Y driving CHR A0-A2. 12/37 render at 20 frames, 17/37 at 600.
   Still missing: extended attributes, accurate per-page CIRAM mapping, and
   expansion audio.
+- **VRC6 audio (24/26)** — the two pulse channels (16-step duty generator,
+  `$9003` halt/16x/256x frequency scaling) and the sawtooth (14-step
+  accumulator reset) feed a linear 6-bit DAC (two 4-bit pulses + the saw's
+  high 5 bits). Unit test covers duty peaks, the mode bit, channel summing and
+  the saw ladder.
 - **PPU** — the backdrop no longer double-indirects the palette; all five
   mirroring modes are modelled with 4 KiB CIRAM; the `$2007` read buffer is
   fed by the per-dot background/sprite fetch with a four-dot data state

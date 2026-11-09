@@ -471,6 +471,12 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Expansion-audio contribution for the current CPU cycle (0.0 for boards
+    /// without expansion audio).
+    fn audio_mix(&self) -> f32 {
+        0.0
+    }
+
     /// Mapper IRQ output (level).
     fn irq_line(&self) -> bool {
         false
@@ -756,6 +762,12 @@ impl Cartridge {
     #[must_use]
     pub fn mmc5_aux(&self) -> Option<Rc<RefCell<Mmc5Aux>>> {
         self.mapper.mmc5_aux()
+    }
+
+    /// Expansion-audio contribution for the current CPU cycle.
+    #[must_use]
+    pub fn audio_mix(&self) -> f32 {
+        self.mapper.audio_mix()
     }
 
     /// Battery-backed PRG-RAM contents.
@@ -8866,8 +8878,169 @@ impl Mapper for Fds108 {
     }
 }
 
+/// One VRC6 pulse channel.
+#[derive(Debug, Default, Clone)]
+struct Vrc6Pulse {
+    volume: u8,
+    duty: u8,
+    mode: bool,
+    freq: u16,
+    enabled: bool,
+    divider: u16,
+    step: u8,
+}
+
+impl Vrc6Pulse {
+    fn write(&mut self, register: u16, value: u8) {
+        match register {
+            0 => {
+                self.volume = value & 0x0F;
+                self.duty = (value >> 4) & 0x07;
+                self.mode = value & 0x80 != 0;
+            }
+            1 => self.freq = (self.freq & 0x0F00) | u16::from(value),
+            2 => {
+                self.freq = (self.freq & 0x00FF) | (u16::from(value & 0x0F) << 8);
+                self.enabled = value & 0x80 != 0;
+                if !self.enabled {
+                    self.step = 15;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn clock(&mut self, halt: bool, shift: u8) {
+        if halt {
+            return;
+        }
+        if !self.enabled {
+            self.step = 15;
+            return;
+        }
+        if self.divider == 0 {
+            self.divider = self.freq >> shift;
+            // The 16-step duty generator counts down from 15 to 0.
+            self.step = if self.step == 0 { 15 } else { self.step - 1 };
+        } else {
+            self.divider -= 1;
+        }
+    }
+
+    fn output(&self) -> u8 {
+        if self.enabled && (self.mode || self.step <= self.duty) {
+            self.volume
+        } else {
+            0
+        }
+    }
+}
+
+/// The VRC6 sawtooth channel.
+#[derive(Debug, Default, Clone)]
+struct Vrc6Saw {
+    rate: u8,
+    freq: u16,
+    enabled: bool,
+    divider: u16,
+    accumulator: u8,
+    step: u8,
+}
+
+impl Vrc6Saw {
+    fn write(&mut self, register: u16, value: u8) {
+        match register {
+            0 => self.rate = value & 0x3F,
+            1 => self.freq = (self.freq & 0x0F00) | u16::from(value),
+            2 => {
+                self.freq = (self.freq & 0x00FF) | (u16::from(value & 0x0F) << 8);
+                self.enabled = value & 0x80 != 0;
+            }
+            _ => {}
+        }
+    }
+
+    fn clock(&mut self, halt: bool, shift: u8) {
+        if halt {
+            return;
+        }
+        if !self.enabled {
+            self.accumulator = 0;
+            return;
+        }
+        if self.divider == 0 {
+            self.divider = self.freq >> shift;
+            self.step += 1;
+            if self.step >= 14 {
+                // The 14th clock resets the accumulator instead of adding.
+                self.step = 0;
+                self.accumulator = 0;
+            } else if self.step.is_multiple_of(2) {
+                self.accumulator = self.accumulator.wrapping_add(self.rate);
+            }
+        } else {
+            self.divider -= 1;
+        }
+    }
+
+    fn output(&self) -> u8 {
+        if self.enabled {
+            self.accumulator >> 3
+        } else {
+            0
+        }
+    }
+}
+
+/// VRC6 expansion audio: two pulse channels and one sawtooth.
+#[derive(Debug, Default, Clone)]
+struct Vrc6Audio {
+    pulse1: Vrc6Pulse,
+    pulse2: Vrc6Pulse,
+    saw: Vrc6Saw,
+    halt: bool,
+    shift: u8,
+}
+
+impl Vrc6Audio {
+    fn write(&mut self, address: u16, value: u8) {
+        match address & 0xF000 {
+            0x9000 => self.pulse1.write(address & 0x03, value),
+            0xA000 => self.pulse2.write(address & 0x03, value),
+            0xB000 => self.saw.write(address & 0x03, value),
+            _ => {}
+        }
+    }
+
+    fn write_frequency_control(&mut self, value: u8) {
+        self.halt = value & 0x01 != 0;
+        self.shift = if value & 0x04 != 0 {
+            8
+        } else if value & 0x02 != 0 {
+            4
+        } else {
+            0
+        };
+    }
+
+    fn clock(&mut self) {
+        self.pulse1.clock(self.halt, self.shift);
+        self.pulse2.clock(self.halt, self.shift);
+        self.saw.clock(self.halt, self.shift);
+    }
+
+    fn mix(&self) -> f32 {
+        // Linear 6-bit DAC: two 4-bit pulses plus the saw's high 5 bits.
+        let sum = u16::from(self.pulse1.output())
+            + u16::from(self.pulse2.output())
+            + u16::from(self.saw.output());
+        f32::from(sum) / 61.0
+    }
+}
+
 /// Konami VRC6 (mappers 24/26): 16 KiB + 8 KiB PRG banking, eight 1 KiB CHR
-/// banks, PPU banking/mirroring control and the VRC cycle/scanline IRQ.
+/// banks, PPU banking/mirroring control, the VRC cycle/scanline IRQ and the
+/// two-pulse + sawtooth expansion audio.
 #[derive(Debug)]
 pub struct Vrc6 {
     prg: Vec<u8>,
@@ -8885,6 +9058,7 @@ pub struct Vrc6 {
     irq_cycle_mode: bool,
     irq_pending: bool,
     scanline_prescaler: u16,
+    audio: Vrc6Audio,
 }
 
 impl Vrc6 {
@@ -8905,6 +9079,7 @@ impl Vrc6 {
             irq_cycle_mode: false,
             irq_pending: false,
             scanline_prescaler: 0,
+            audio: Vrc6Audio::default(),
         }
     }
 
@@ -8998,6 +9173,10 @@ impl Mapper for Vrc6 {
             0xC000 => self.prg8 = value & 0x3F,
             0xD000..=0xD003 => self.chr_banks[usize::from(address & 0x03)] = value,
             0xE000..=0xE003 => self.chr_banks[4 + usize::from(address & 0x03)] = value,
+            0x9000..=0x9002 | 0xA000..=0xA002 | 0xB000..=0xB002 => {
+                self.audio.write(address, value);
+            }
+            0x9003 => self.audio.write_frequency_control(value),
             0xF000 => {
                 self.irq_latch = value;
                 self.irq_counter = value;
@@ -9046,6 +9225,7 @@ impl Mapper for Vrc6 {
     }
 
     fn clock_cpu(&mut self) {
+        self.audio.clock();
         if self.irq_cycle_mode {
             self.clock_irq();
         } else {
@@ -9059,6 +9239,10 @@ impl Mapper for Vrc6 {
 
     fn acknowledge_irq(&mut self) {
         self.irq_pending = false;
+    }
+
+    fn audio_mix(&self) -> f32 {
+        self.audio.mix()
     }
 }
 
@@ -11755,6 +11939,51 @@ mod tests {
         cart.cpu_write(0x8001, 0x00);
         cart.ppu_write(0x0200, 0x33);
         assert_eq!(cart.ppu_read(0x0200), 0x33);
+    }
+
+    #[test]
+    fn vrc6_expansion_audio_pulses_and_saw() {
+        let rom = synth_banked(24, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.audio_mix(), 0.0);
+
+        // Pulse 1: volume 15, duty 0, period 0, enabled. The 16-step duty
+        // generator only outputs on step 0, so the peak is 15/61.
+        cart.cpu_write(0x9000, 0x0F);
+        cart.cpu_write(0x9001, 0x00);
+        cart.cpu_write(0x9002, 0x80);
+        let mut max = 0.0f32;
+        for _ in 0..64 {
+            cart.clock_cpu();
+            max = max.max(cart.audio_mix());
+        }
+        assert!((max - 15.0 / 61.0).abs() < 1e-4, "pulse peak {max}");
+
+        // The mode bit ignores the duty generator and holds full volume.
+        cart.cpu_write(0x9000, 0x8F);
+        assert!((cart.audio_mix() - 15.0 / 61.0).abs() < 1e-4);
+
+        // Pulse 2 is independent and adds to the DAC sum.
+        cart.cpu_write(0xA000, 0x8F);
+        cart.cpu_write(0xA002, 0x80);
+        assert!((cart.audio_mix() - 30.0 / 61.0).abs() < 1e-4);
+
+        // Sawtooth: rate 42 gives six additions of 42 = 252, so the high five
+        // bits reach 31 before the 14-step reset.
+        let mut saw = Cartridge::from_ines(&rom).expect("saw cart");
+        saw.cpu_write(0xB000, 42);
+        saw.cpu_write(0xB001, 0x00);
+        saw.cpu_write(0xB002, 0x80);
+        let mut saw_max = 0.0f32;
+        for _ in 0..64 {
+            saw.clock_cpu();
+            saw_max = saw_max.max(saw.audio_mix());
+        }
+        assert!((saw_max - 31.0 / 61.0).abs() < 1e-4, "saw peak {saw_max}");
+
+        // Disabling the channel forces the output back to zero.
+        saw.cpu_write(0xB002, 0x00);
+        assert_eq!(saw.audio_mix(), 0.0);
     }
 
     #[test]

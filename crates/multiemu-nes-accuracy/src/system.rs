@@ -444,7 +444,7 @@ impl System {
     }
 
     fn mix_sample(&mut self) {
-        self.audio_accum += self.apu.output;
+        self.audio_accum += self.apu.output + self.cart.audio_mix();
         self.audio_count += 1;
         if self.audio_count >= self.sample_cycle.max(1) {
             let sample = self.audio_accum / self.audio_count as f32;
