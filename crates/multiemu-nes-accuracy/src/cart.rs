@@ -572,6 +572,9 @@ pub trait Mapper: fmt::Debug {
         0.0
     }
 
+    /// Soft-reset notification (multicarts advance their selected game here).
+    fn soft_reset(&mut self) {}
+
     /// Mapper IRQ output (level).
     fn irq_line(&self) -> bool {
         false
@@ -696,6 +699,7 @@ impl Cartridge {
             234 => Box::new(Maxi15::new(prg_rom, chr, header)),
             164 => Box::new(Waixing164::new(prg_rom, chr, header)),
             222 => Box::new(Ctc222::new(prg_rom, chr, header)),
+            60 => Box::new(FourInOne60::new(prg_rom, chr, header)),
             193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
             172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
@@ -952,6 +956,11 @@ impl Cartridge {
     /// Clocks the mapper once for a rendered scanline (PPU A12 rise).
     pub fn clock_scanline(&mut self) {
         self.mapper.clock_scanline();
+    }
+
+    /// Notifies the mapper of a soft reset.
+    pub fn soft_reset(&mut self) {
+        self.mapper.soft_reset();
     }
 
     /// Acknowledges a pending mapper IRQ.
@@ -2688,6 +2697,67 @@ impl Mapper for Ctc222 {
                 self.irq_counter = 0;
             }
         }
+    }
+}
+
+/// 4-in-1 multicart (mapper 60): the selected 16 KiB PRG bank and 8 KiB CHR
+/// bank advance on every soft reset, cycling through four games.
+#[derive(Debug)]
+pub struct FourInOne60 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    bank: u8,
+    mirroring: Mirroring,
+}
+
+impl FourInOne60 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_banks(&self) -> usize {
+        (self.prg.len() / 0x4000).max(1)
+    }
+
+    fn chr_banks(&self) -> usize {
+        (self.chr.len() / 0x2000).max(1)
+    }
+}
+
+impl Mapper for FourInOne60 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        // Both 16 KiB CPU slots map the same selected bank.
+        let bank = usize::from(self.bank) % self.prg_banks();
+        self.prg[bank * 0x4000 + usize::from(address & 0x3FFF)]
+    }
+
+    fn prg_write(&mut self, _address: u16, _value: u8) {}
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let bank = usize::from(self.bank) % self.chr_banks();
+        self.chr[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn chr_write(&mut self, _address: u16, _value: u8) {}
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        60
+    }
+
+    fn soft_reset(&mut self) {
+        self.bank = (self.bank + 1) % 4;
     }
 }
 
@@ -14889,6 +14959,30 @@ mod tests {
         );
         cart.cpu_write(0xF008, 0x00);
         assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn four_in_one_60_advances_on_soft_reset() {
+        // 64 KiB PRG (4 x 16 KiB), 32 KiB CHR (4 x 8 KiB).
+        let rom = synth_banked(60, 64, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 60);
+
+        // Bank 0 on power-on; both CPU slots mirror the same 16 KiB bank.
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 0);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+
+        cart.soft_reset();
+        assert_eq!(cart.cpu_read(0x8000), 2); // 16 KiB bank 1 -> 8 KiB bank 2
+        assert_eq!(cart.cpu_read(0xC000), 2);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 8); // 8 KiB CHR bank 1 -> 1 KiB 8
+
+        // Four resets wrap back to game 0.
+        cart.soft_reset();
+        cart.soft_reset();
+        cart.soft_reset();
+        assert_eq!(cart.cpu_read(0x8000), 0);
     }
 
     #[test]

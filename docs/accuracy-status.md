@@ -126,6 +126,7 @@ writes, and MMC1 bank switching.
 | Maxi 15 multicart (234) | two bus-conflict latches, CNROM/NINA-03 banking, 32 KiB PRG / 8 KiB CHR, register reads (6/6 render) |
 | Waixing educational (164) | 32 KiB PRG bank from `$5000`/`$5100` nibble writes, 8 KiB CHR-RAM (3/6 render) |
 | Dragon Ninja CTC-31 (222) | eight 1 KiB CHR banks, two switchable 8 KiB PRG banks + fixed last 16 KiB, A12-rise IRQ (6/6 render) |
+| 4-in-1 multicart (60) | soft-reset-selected 16 KiB PRG / 8 KiB CHR bank, four games (6/6 render) |
 | Sachen SA-008-A (148) | mapper 79 latch moved to `$8000-$FFFF`, bus conflicts |
 | Jaleco SS88006 (18) | VRC4-like 8 KiB PRG / 1 KiB CHR nibble-pair banking, CPU-cycle IRQ |
 | NINA-03/06 (79/146) | 32 KiB PRG + 8 KiB CHR via a single control register |

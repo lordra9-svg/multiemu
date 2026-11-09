@@ -74,6 +74,11 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   pair selected while a CHR low nibble is 4 or 5 (unless the `$88` signature
   forces CHR-ROM). **6/6 images load, 3/6 render at 600 frames**; Dragon Ball Z
   reaches its title screen correctly.
+- **4-in-1 multicarts (60)** — the selected 16 KiB PRG bank and 8 KiB CHR bank
+  advance on every **soft reset**, cycling through four games; there are no
+  writable registers. `System::reset` now notifies the mapper through a new
+  `Mapper::soft_reset` hook. **6/6 images load and render at 600 frames**, with
+  the Battle City title screen confirmed.
 - **Dragon Ninja / CTC-31 (222)** — eight 1 KiB CHR banks (`$B000-$E002`),
   two switchable 8 KiB PRG banks (`$8000`/`$A000`) with the last 16 KiB fixed,
   mirroring at `$9000`, and an A12-rise IRQ that counts rendered scanlines and
@@ -342,14 +347,13 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 | 168 | 6 | Racermate Challenge II + exercise bike | low value; peripheral |
 | 216 | 6 | Bonza / Magic Jewelry II (Dendy) | small; Dendy timing |
 | 27 | 6 | Mi Hun Che / Super Car (32 KiB PRG, 8 KiB CHR) | undocumented; inspect |
-| 60 | 6 | 4-in-1 multicarts | small latch |
 | 85 | 6 | **VRC7** (Lagrange Point, Tiny Toon 2 JP) | implemented (exact instrument ROM patches) |
 | 303 | 6 | Kaiser KS-7017 (Armana no Kiseki) | likely related to KS7032 |
 
 Only **172** turned out to be an alias of an implemented board (Sachen JV001
 with reversed data bits). The rest are real hardware models; the highest-value
-next targets are mapper 216 (Dendy timing)
-and the small 4-in-1 multicart (60).
+the remaining tail target is mapper 216
+(Dendy timing/peripheral).
 
 ## Load/run failures
 

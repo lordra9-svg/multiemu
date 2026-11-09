@@ -203,6 +203,7 @@ impl System {
 
     /// Resets the CPU and PPU without reloading the cartridge.
     pub fn reset(&mut self) {
+        self.cart.soft_reset();
         let mut cpu = self.cpu;
         cpu.reset(self);
         self.cpu = cpu;
