@@ -33,12 +33,14 @@ The main effort is now the reference-parity accuracy core. Details in
       3,554 rendering, 446 unsupported, 0 panics; 136/193/197 render 7/7,
       159/165 8/8, 172 4/6, 195 8/8 (Tiexue needs Start on its title screen)
       (`docs/mapper-audit.md`).
-      Remaining: MMC5 extended attributes/expansion audio, VRC7/N163/FME-7/
-      MMC5/FDS expansion audio, the Datach peripheral and the small six-image
-      ASIC tail (triage in `docs/mapper-audit.md`). VRC6 expansion audio (two
+      Remaining: MMC5 extended attributes, FDS expansion audio (the FDS
+      mapper/BIOS is still missing), the Datach peripheral and the small
+      six-image ASIC tail (triage in `docs/mapper-audit.md`). VRC6 expansion audio (two
       pulses + sawtooth), Sunsoft 5B / YM2149 (three tones + noise + envelope)
-      Namco 163 (up to eight wave channels, shared $40-$7F sound RAM) and MMC5
-      (two pulses + PCM DAC) are implemented with unit tests.
+      Namco 163 (up to eight wave channels, shared $40-$7F sound RAM), MMC5
+      (two pulses + PCM DAC) and the VRC7/YM2413 two-operator FM engine are
+      implemented with unit tests (the built-in VRC7 patch table is an
+      approximation; the custom patch registers are exact).
 - [x] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
       all 151 rows: **146 pass, 0 fail, 5 DRAW skips, 0 unrun** — every
       non-DRAW test passes. `$2007 Stress Test` was closed with the PPU data

@@ -640,6 +640,7 @@ impl Cartridge {
             36 => Box::new(Txc36::new(prg_rom, chr, header)),
             42 => Box::new(Fds42::new(prg_rom, chr, header)),
             48 => Box::new(Taito48::new(prg_rom, chr, header)),
+            85 => Box::new(Vrc7::new(prg_rom, chr, prg_ram, header)),
             86 => Box::new(Jf13::new(prg_rom, chr, header)),
             75 => Box::new(Vrc1::new(prg_rom, chr, header)),
             80 => Box::new(Taito80::new(prg_rom, chr, header, false, 80)),
@@ -9305,6 +9306,459 @@ impl Mapper for Fds108 {
     }
 }
 
+/// VRC7 built-in instrument patches (approximation of the YM2413 patch
+/// ROM). Index 0 is the user patch, which is built from registers $00-$07.
+const VRC7_PATCHES: [[u8; 8]; 16] = [
+    [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+    [0x71, 0x61, 0x1E, 0x17, 0x98, 0x30, 0x39, 0x00],
+    [0x13, 0x41, 0x1A, 0x0D, 0x58, 0x50, 0x29, 0x00],
+    [0x11, 0x51, 0x1B, 0x0F, 0x48, 0x60, 0x39, 0x00],
+    [0x31, 0x61, 0x0B, 0x07, 0x18, 0x30, 0x39, 0x00],
+    [0x21, 0x51, 0x1D, 0x17, 0x78, 0x40, 0x39, 0x00],
+    [0x31, 0x61, 0x1C, 0x17, 0xA8, 0x40, 0x39, 0x00],
+    [0x01, 0x41, 0x1B, 0x07, 0x48, 0x40, 0x39, 0x00],
+    [0x11, 0x51, 0x1A, 0x1F, 0x88, 0x60, 0x39, 0x00],
+    [0x21, 0x61, 0x0C, 0x0F, 0x28, 0x30, 0x39, 0x00],
+    [0x31, 0x51, 0x1A, 0x17, 0x68, 0x40, 0x39, 0x00],
+    [0x01, 0x61, 0x1B, 0x0F, 0x58, 0x30, 0x39, 0x00],
+    [0x11, 0x41, 0x1D, 0x0F, 0x38, 0x50, 0x39, 0x00],
+    [0x21, 0x51, 0x1C, 0x17, 0x98, 0x40, 0x39, 0x00],
+    [0x31, 0x61, 0x0B, 0x07, 0x58, 0x30, 0x39, 0x00],
+    [0x21, 0x41, 0x1A, 0x0F, 0x48, 0x40, 0x39, 0x00],
+];
+
+/// The VRC7 multi-multiplier table.
+const VRC7_MULTIPLIER: [f32; 16] = [
+    0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 10.0, 12.0, 12.0, 15.0, 15.0,
+];
+
+/// Envelope stage indices.
+const ENV_IDLE: u8 = 0;
+const ENV_ATTACK: u8 = 1;
+const ENV_DECAY: u8 = 2;
+const ENV_SUSTAIN: u8 = 3;
+const ENV_RELEASE: u8 = 4;
+
+#[derive(Debug, Default, Clone)]
+struct Vrc7Operator {
+    phase: f32,
+    envelope: f32,
+    stage: u8,
+}
+
+impl Vrc7Operator {
+    fn key_on(&mut self) {
+        self.phase = 0.0;
+        self.envelope = 0.0;
+        self.stage = ENV_ATTACK;
+    }
+
+    fn key_off(&mut self) {
+        if self.stage != ENV_IDLE {
+            self.stage = ENV_RELEASE;
+        }
+    }
+
+    fn advance(&mut self, patch: &[u8; 8], offset: usize, channel_sustain: bool) {
+        let rate_scale = |rate: u8, scale: f32| -> f32 {
+            if rate == 0 {
+                0.0
+            } else {
+                scale * f32::from(rate) * f32::from(rate) / 225.0
+            }
+        };
+        match self.stage {
+            ENV_ATTACK => {
+                let rate = patch[4 + offset] >> 4;
+                self.envelope += rate_scale(rate, 0.012);
+                if self.envelope >= 1.0 {
+                    self.envelope = 1.0;
+                    self.stage = ENV_DECAY;
+                }
+            }
+            ENV_DECAY => {
+                let rate = patch[4 + offset] & 0x0F;
+                let sustain = 1.0 - f32::from(patch[6 + offset] >> 4) / 15.0 * 0.95;
+                self.envelope -= rate_scale(rate, 0.004);
+                if self.envelope <= sustain {
+                    self.envelope = sustain;
+                    self.stage = ENV_SUSTAIN;
+                }
+            }
+            ENV_SUSTAIN => {
+                // The sustain bit keeps the operator in the sustain section;
+                // without it the release starts as soon as decay finishes.
+                if !channel_sustain && patch[offset] & 0x20 == 0 {
+                    self.stage = ENV_RELEASE;
+                }
+            }
+            ENV_RELEASE => {
+                let rate = if channel_sustain {
+                    5
+                } else {
+                    patch[6 + offset] & 0x0F
+                };
+                self.envelope -= rate_scale(rate, 0.005);
+                if self.envelope <= 0.0 {
+                    self.envelope = 0.0;
+                    self.stage = ENV_IDLE;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct Vrc7Channel {
+    frequency: u16,
+    octave: u8,
+    instrument: u8,
+    volume: u8,
+    key_on: bool,
+    sustain: bool,
+    modulator: Vrc7Operator,
+    carrier: Vrc7Operator,
+}
+
+/// VRC7 / YM2413-style two-operator FM synthesis, six channels.
+#[derive(Debug, Clone)]
+struct Vrc7Audio {
+    custom: [u8; 8],
+    registers: [u8; 64],
+    selected: u8,
+    channels: [Vrc7Channel; 6],
+    current: usize,
+    divider: u8,
+    output: f32,
+    silenced: bool,
+}
+
+impl Default for Vrc7Audio {
+    fn default() -> Self {
+        Self {
+            custom: [0; 8],
+            registers: [0; 64],
+            selected: 0,
+            channels: Default::default(),
+            current: 0,
+            divider: 0,
+            output: 0.0,
+            silenced: false,
+        }
+    }
+}
+
+impl Vrc7Audio {
+    fn silence(&mut self) {
+        self.registers = [0; 64];
+        self.custom = [0; 8];
+        self.channels = Default::default();
+        self.output = 0.0;
+        self.silenced = true;
+    }
+
+    fn write_select(&mut self, value: u8) {
+        if self.silenced {
+            return;
+        }
+        self.selected = value & 0x3F;
+    }
+
+    fn write_data(&mut self, value: u8) {
+        if self.silenced {
+            return;
+        }
+        let register = usize::from(self.selected);
+        if register >= self.registers.len() {
+            return;
+        }
+        self.registers[register] = value;
+        match register {
+            0x00..=0x07 => self.custom[register] = value,
+            0x10..=0x15 => {
+                let channel = register - 0x10;
+                self.channels[channel].frequency =
+                    (self.channels[channel].frequency & 0x100) | u16::from(value);
+            }
+            0x20..=0x25 => {
+                let channel = register - 0x20;
+                let key_on = value & 0x10 != 0;
+                let was_on = self.channels[channel].key_on;
+                self.channels[channel].frequency =
+                    (self.channels[channel].frequency & 0x0FF) | (u16::from(value & 0x01) << 8);
+                self.channels[channel].octave = (value >> 1) & 0x07;
+                self.channels[channel].sustain = value & 0x20 != 0;
+                self.channels[channel].key_on = key_on;
+                if key_on && !was_on {
+                    self.channels[channel].modulator.key_on();
+                    self.channels[channel].carrier.key_on();
+                } else if !key_on && was_on {
+                    self.channels[channel].modulator.key_off();
+                    self.channels[channel].carrier.key_off();
+                }
+            }
+            0x30..=0x35 => {
+                let channel = register - 0x30;
+                self.channels[channel].instrument = value >> 4;
+                self.channels[channel].volume = value & 0x0F;
+            }
+            _ => {}
+        }
+    }
+
+    fn patch(&self, channel: &Vrc7Channel) -> [u8; 8] {
+        if channel.instrument == 0 {
+            self.custom
+        } else {
+            VRC7_PATCHES[usize::from(channel.instrument & 0x0F)]
+        }
+    }
+
+    fn update_channel(&mut self, index: usize) {
+        let patch = {
+            let channel = &self.channels[index];
+            self.patch(channel)
+        };
+        let channel = &mut self.channels[index];
+        let modulator_multiplier = VRC7_MULTIPLIER[usize::from(patch[0] & 0x0F)];
+        let carrier_multiplier = VRC7_MULTIPLIER[usize::from(patch[1] & 0x0F)];
+        // 8286 Hz per-channel update rate: 49716 Hz * freq / 2^(19-octave)
+        // divided by 6 channels.
+        let scale = 6.0 / (1u32 << (19u32.saturating_sub(u32::from(channel.octave)))) as f32;
+        let modulator_increment = f32::from(channel.frequency) * modulator_multiplier * scale;
+        let carrier_increment = f32::from(channel.frequency) * carrier_multiplier * scale;
+
+        channel.modulator.advance(&patch, 0, channel.sustain);
+        channel.carrier.advance(&patch, 1, channel.sustain);
+        channel.modulator.phase = (channel.modulator.phase + modulator_increment).fract();
+        channel.carrier.phase = (channel.carrier.phase + carrier_increment).fract();
+
+        let waveform = |phase: f32, half: bool| -> f32 {
+            let value = (phase * std::f32::consts::TAU).sin();
+            if half {
+                value.max(0.0)
+            } else {
+                value
+            }
+        };
+        let mod_half = patch[3] & 0x10 != 0;
+        let car_half = patch[3] & 0x20 != 0;
+        let mod_level = 10f32.powf(-0.75 * f32::from(patch[2] & 0x3F) / 20.0);
+        let feedback = f32::from(patch[3] & 0x07) / 7.0;
+        let modulator = waveform(channel.modulator.phase, mod_half)
+            * channel.modulator.envelope
+            * mod_level
+            * (1.0 + feedback);
+        let carrier =
+            waveform(channel.carrier.phase + modulator * 1.5, car_half) * channel.carrier.envelope;
+        self.output = carrier * (f32::from(channel.volume) / 15.0);
+    }
+
+    fn clock(&mut self) {
+        self.divider += 1;
+        if self.divider < 36 {
+            return;
+        }
+        self.divider = 0;
+        if self.silenced {
+            self.output = 0.0;
+            return;
+        }
+        self.update_channel(self.current);
+        self.current = (self.current + 1) % 6;
+    }
+
+    fn mix(&self) -> f32 {
+        self.output * 0.5
+    }
+}
+
+/// Konami VRC7 (mapper 85): 8 KiB PRG + 1 KiB CHR banking, WRAM protection,
+/// switchable mirroring, a VRC cycle/scanline IRQ and the YM2413-style
+/// six-channel FM expansion audio.
+#[derive(Debug)]
+pub struct Vrc7 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_banks: [u8; 3],
+    chr_banks: [u8; 8],
+    wram_enabled: bool,
+    mirroring: Mirroring,
+    irq_latch: u8,
+    irq_counter: u8,
+    irq_enabled: bool,
+    irq_cycle_mode: bool,
+    irq_pending: bool,
+    scanline_prescaler: u16,
+    audio: Vrc7Audio,
+}
+
+impl Vrc7 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            prg_banks: [0; 3],
+            chr_banks: [0; 8],
+            wram_enabled: false,
+            mirroring: header.mirroring,
+            irq_latch: 0,
+            irq_counter: 0,
+            irq_enabled: false,
+            irq_cycle_mode: false,
+            irq_pending: false,
+            scanline_prescaler: 0,
+            audio: Vrc7Audio::default(),
+        }
+    }
+
+    fn clock_irq(&mut self) {
+        if !self.irq_enabled {
+            return;
+        }
+        if self.irq_counter == 0xFF {
+            self.irq_counter = self.irq_latch;
+            self.irq_pending = true;
+        } else {
+            self.irq_counter = self.irq_counter.wrapping_add(1);
+        }
+    }
+}
+
+impl Mapper for Vrc7 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
+            0x8000..=0x9FFF => {
+                let banks = (self.prg.len() / 0x2000).max(1);
+                self.prg[(usize::from(self.prg_banks[0]) % banks) * 0x2000
+                    + usize::from(address & 0x1FFF)]
+            }
+            0xA000..=0xBFFF => {
+                let banks = (self.prg.len() / 0x2000).max(1);
+                self.prg[(usize::from(self.prg_banks[1]) % banks) * 0x2000
+                    + usize::from(address & 0x1FFF)]
+            }
+            0xC000..=0xDFFF => {
+                let banks = (self.prg.len() / 0x2000).max(1);
+                self.prg[(usize::from(self.prg_banks[2]) % banks) * 0x2000
+                    + usize::from(address & 0x1FFF)]
+            }
+            0xE000..=0xFFFF => {
+                let bank = (self.prg.len() / 0x2000).max(1) - 1;
+                self.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x6000..=0x7FFF => {
+                if self.wram_enabled {
+                    let index = usize::from(address - 0x6000) % self.prg_ram.len();
+                    self.prg_ram[index] = value;
+                }
+            }
+            0x8000 => self.prg_banks[0] = value & 0x3F,
+            0x8008 | 0x8010 => self.prg_banks[1] = value & 0x3F,
+            0x9000 => self.prg_banks[2] = value & 0x3F,
+            0x9010 => self.audio.write_select(value),
+            0x9030 => self.audio.write_data(value),
+            0xA000 => self.chr_banks[0] = value,
+            0xA008 | 0xA010 => self.chr_banks[1] = value,
+            0xB000 => self.chr_banks[2] = value,
+            0xB008 | 0xB010 => self.chr_banks[3] = value,
+            0xC000 => self.chr_banks[4] = value,
+            0xC008 | 0xC010 => self.chr_banks[5] = value,
+            0xD000 => self.chr_banks[6] = value,
+            0xD008 | 0xD010 => self.chr_banks[7] = value,
+            0xE000 => {
+                self.wram_enabled = value & 0x40 != 0;
+                if value & 0x20 != 0 {
+                    self.audio.silence();
+                }
+                self.mirroring = match value & 0x03 {
+                    0 => Mirroring::Vertical,
+                    1 => Mirroring::Horizontal,
+                    2 => Mirroring::SingleLower,
+                    _ => Mirroring::SingleUpper,
+                };
+            }
+            0xE008 | 0xE010 => {
+                self.irq_latch = value;
+                self.irq_counter = value;
+            }
+            0xF000 => {
+                self.irq_enabled = value & 0x02 != 0;
+                self.irq_cycle_mode = value & 0x04 != 0;
+                if value & 0x01 != 0 {
+                    self.irq_pending = false;
+                }
+            }
+            0xF008 | 0xF010 => self.irq_pending = false,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address / 0x400) & 0x07;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        self.chr[bank * 0x400 + usize::from(address & 0x3FF)]
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address / 0x400) & 0x07;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        let index = bank * 0x400 + usize::from(address & 0x3FF);
+        if let Some(byte) = self.chr.get_mut(index) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        85
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        self.audio.clock();
+        if self.irq_cycle_mode {
+            self.clock_irq();
+        } else {
+            self.scanline_prescaler += 1;
+            if self.scanline_prescaler >= 114 {
+                self.scanline_prescaler = 0;
+                self.clock_irq();
+            }
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+
+    fn audio_mix(&self) -> f32 {
+        self.audio.mix()
+    }
+}
+
 /// One VRC6 pulse channel.
 #[derive(Debug, Default, Clone)]
 struct Vrc6Pulse {
@@ -12501,6 +12955,99 @@ mod tests {
             saw_high |= (sample - 15.0 / 45.0).abs() < 1e-4;
         }
         assert!(saw_low && saw_high, "noise did not toggle");
+    }
+
+    #[test]
+    fn vrc7_banks_prg_chr_irq_and_wram() {
+        let rom = synth_banked(85, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 85);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+
+        cart.cpu_write(0x8000, 2);
+        cart.cpu_write(0x8010, 3);
+        cart.cpu_write(0x9000, 4);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+        assert_eq!(cart.cpu_read(0xA000), 3);
+        assert_eq!(cart.cpu_read(0xC000), 4);
+
+        cart.cpu_write(0xA010, 5);
+        cart.cpu_write(0xD008, 7);
+        assert_eq!(cart.ppu_read(0x0400), 0x85);
+        assert_eq!(cart.ppu_read(0x1C00), 0x87);
+
+        // WRAM is protected until $E000 bit 6.
+        cart.cpu_write(0x6000, 0x11);
+        assert_eq!(cart.cpu_read(0x6000), 0);
+        cart.cpu_write(0xE000, 0x40);
+        cart.cpu_write(0x6000, 0x22);
+        assert_eq!(cart.cpu_read(0x6000), 0x22);
+        cart.cpu_write(0xE000, 0x41);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+
+        // IRQ: latch, enable, then 0x100 increments.
+        cart.cpu_write(0xF000, 0x06);
+        cart.cpu_write(0xF008, 0x00);
+        for _ in 0..255 {
+            cart.clock_cpu();
+        }
+        assert!(!cart.irq_line());
+        cart.clock_cpu();
+        assert!(cart.irq_line());
+        cart.cpu_write(0xF010, 0);
+        assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn vrc7_opll_key_on_release_and_silence() {
+        let rom = synth_banked(85, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        let write = |cart: &mut Cartridge, register: u8, value: u8| {
+            cart.cpu_write(0x9010, register);
+            cart.cpu_write(0x9030, value);
+        };
+
+        // Custom patch: sustain on both operators, fast attack, release 15.
+        for (register, value) in [
+            (0x00, 0x21),
+            (0x01, 0x21),
+            (0x02, 0x00),
+            (0x03, 0x00),
+            (0x04, 0xF0),
+            (0x05, 0xF0),
+            (0x06, 0x0F),
+            (0x07, 0x0F),
+        ] {
+            write(&mut cart, register, value);
+        }
+        // Channel 0: frequency $080 at octave 4, custom instrument, volume 15.
+        write(&mut cart, 0x10, 0x80);
+        write(&mut cart, 0x20, 0x18); // trigger, octave 4
+        write(&mut cart, 0x30, 0x0F);
+
+        let mut peak = 0.0f32;
+        for _ in 0..(36 * 6 * 400) {
+            cart.clock_cpu();
+            peak = peak.max(cart.audio_mix().abs());
+        }
+        assert!(peak > 0.01, "VRC7 produced no FM output: {peak}");
+
+        // Key-off starts the release; after 500 channel updates it is silent.
+        write(&mut cart, 0x20, 0x08);
+        for _ in 0..(36 * 6 * 600) {
+            cart.clock_cpu();
+        }
+        assert_eq!(cart.audio_mix(), 0.0);
+
+        // $E000 bit 5 silences and clears the audio registers.
+        cart.cpu_write(0xE000, 0x20);
+        assert_eq!(cart.audio_mix(), 0.0);
+        write(&mut cart, 0x10, 0x01);
+        for _ in 0..1000 {
+            cart.clock_cpu();
+        }
+        assert_eq!(cart.audio_mix(), 0.0);
     }
 
     #[test]

@@ -103,6 +103,15 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   7-bit MMC5 length table, a fixed ~240 Hz envelope/length clock and four duty
   sequences, plus the held 8-bit `$5011` PCM DAC. No sweep unit. Unit test
   covers the pulse peak, both channels summing and length expiration.
+- **VRC7 (85)** — 8 KiB PRG banks with the last fixed, eight 1 KiB CHR
+  banks, `$E000` mirroring/WRAM-protect/sound-silence, and the VRC cycle or
+  scanline IRQ. Expansion audio is a six-channel, two-operator FM engine with
+  the custom patch registers `$00-$07`, `$9010`/`$9030` selection, key-on/
+  key-off, octave/frequency, per-channel instrument/volume and an approximate
+  built-in instrument table. Audio silence (`$E000` bit 5) clears all state.
+  **6/6** images load; 1/6 renders at 20 and 600 frames (the other dumps are
+  Tiny Toon variants whose board has no audio circuit and whose boot screens
+  need more frames).
 - **Sunsoft 5B audio (69)** — YM2149F with three tone channels (CPU/16
   prescaler), the 17-bit/13-tap LFSR noise generator, the 32-step envelope
   generator and the `$07` tone/noise mixer; `$C000` selects an internal
@@ -248,12 +257,12 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 | 253 | 6 | Waixing VRC4-based (Dragon Ball Z) | medium; reuses VRC4 |
 | 27 | 6 | Mi Hun Che / Super Car (32 KiB PRG, 8 KiB CHR) | undocumented; inspect |
 | 60 | 6 | 4-in-1 multicarts | small latch |
-| 85 | 6 | **VRC7** (Lagrange Point, Tiny Toon 2 JP) | expansion audio (OPLL) |
+| 85 | 6 | **VRC7** (Lagrange Point, Tiny Toon 2 JP) | implemented (FM audio approximation) |
 | 303 | 6 | Kaiser KS-7017 (Armana no Kiseki) | likely related to KS7032 |
 
 Only **172** turned out to be an alias of an implemented board (Sachen JV001
 with reversed data bits). The rest are real hardware models; the highest-value
-next targets are **85 (VRC7 + expansion audio)**, **199/253/249** (Waixing,
+next targets are **199/253/249** (Waixing,
 MMC3/VRC4 reuse), and the small discrete-logic boards 234/60.
 
 ## Load/run failures
