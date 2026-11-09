@@ -1632,7 +1632,7 @@ impl Ppu {
                 let clean = if physical {
                     self.split_chr_byte(address)
                 } else {
-                    self.chr_byte_background(address)
+                    self.chr_byte_background(address as u16)
                 };
                 if corrupt {
                     self.ale_countdown = None;
@@ -1640,12 +1640,12 @@ impl Ppu {
                     self.pat_lo = if physical {
                         self.split_chr_byte(bus_address)
                     } else {
-                        self.chr_byte_background(bus_address)
+                        self.chr_byte_background(bus_address as u16)
                     };
                 } else {
                     self.pat_lo = clean;
                 }
-                self.note_chr_fetch(address);
+                self.note_chr_fetch(address as u16);
                 // The `$2007` state-machine buffer sees the clean plane byte
                 // even when the rendering fetch collides with the ALE.
                 self.fetch_byte = clean;
@@ -1657,9 +1657,9 @@ impl Ppu {
                 self.pat_hi = if physical {
                     self.split_chr_byte(address)
                 } else {
-                    self.chr_byte_background(address)
+                    self.chr_byte_background(address as u16)
                 };
-                self.note_chr_fetch(address);
+                self.note_chr_fetch(address as u16);
                 self.fetch_byte = self.pat_hi;
                 self.fetch_hold = 2;
             }
@@ -1669,7 +1669,7 @@ impl Ppu {
 
     /// CHR address for a pattern fetch, using the split bank/fine Y when the
     /// current fetch group is inside the split region.
-    fn split_pattern_address(&self, group: u16, high: bool) -> Option<u16> {
+    fn split_pattern_address(&self, group: u16, high: bool) -> Option<usize> {
         self.mmc5_aux.as_ref().and_then(|aux| {
             aux.borrow()
                 .split_pattern(group, self.scanline, self.nt_byte, high)
@@ -1679,17 +1679,17 @@ impl Ppu {
     /// CHR address and physical-address flag for a background pattern fetch,
     /// applying MMC5 extended attributes first, then split mode, then normal
     /// CHR banking.
-    fn background_pattern_address(&self, group: u16, high: bool) -> (u16, bool) {
+    fn background_pattern_address(&self, group: u16, high: bool) -> (usize, bool) {
         if let (Some(ext), Some(aux)) = (self.ext_attr, &self.mmc5_aux) {
             let fine_y = ((self.v >> 12) & 0x07) as u8;
             let address =
-                aux.borrow().extended_pattern(ext, self.nt_byte, fine_y) | if high { 8 } else { 0 };
+                aux.borrow().extended_pattern(ext, self.nt_byte, fine_y) | (usize::from(high) * 8);
             return (address, true);
         }
         if let Some(address) = self.split_pattern_address(group, high) {
             return (address, true);
         }
-        (self.pattern_address(self.nt_byte, high), false)
+        (usize::from(self.pattern_address(self.nt_byte, high)), false)
     }
 
     /// Background CHR read: MMC5 8x16 mode uses its background bank set.
@@ -1702,10 +1702,10 @@ impl Ppu {
 
     /// CHR address for a split fetch, where `address` is already the physical
     /// (banked) CHR address rather than a PPU-space address.
-    fn split_chr_byte(&self, address: u16) -> u8 {
+    fn split_chr_byte(&self, address: usize) -> u8 {
         match &self.mmc5_aux {
             Some(aux) => aux.borrow().chr_physical(address, &self.chr),
-            None => self.chr_byte(address),
+            None => self.chr_byte(address as u16),
         }
     }
 

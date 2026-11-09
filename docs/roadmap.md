@@ -44,8 +44,9 @@ The main effort is now the reference-parity accuracy core. Details in
       the ~149-cycle byte cadence, and the real BIOS boots a local
       commercial `.fds` title to its licence screen and game title. Remaining
       FDS work: the disk write path, multi-side insertion, and byte-identical
-      audio parity. Remaining overall: the MMC5 >256 KiB CHR path, the Datach
-      peripheral and the small six-image ASIC tail (triage in
+      audio parity. MMC5 now covers the full CHR range (the extended-attribute
+      path carries physical offsets, so >256 KiB CHR works). Remaining overall:
+      the Datach peripheral and the small six-image ASIC tail (triage in
       `docs/mapper-audit.md`). VRC6 expansion audio (two
       pulses + sawtooth), Sunsoft 5B / YM2149 (three tones + noise + envelope)
       Namco 163 (up to eight wave channels, shared $40-$7F sound RAM), MMC5

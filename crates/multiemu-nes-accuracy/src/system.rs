@@ -1302,6 +1302,68 @@ mod tests {
     }
 
     #[test]
+    fn mmc5_extended_attributes_reach_chr_above_256_kib() {
+        // 512 KiB CHR (64 x 8 KiB); 4 KiB bank 64 is solid and lives above the
+        // 256 KiB reachable by the ExRAM bank bits alone.
+        let prg_len = 128 * 1024;
+        let chr_len = 512 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 64;
+        rom[6] = 0x50; // Mapper 5.
+        rom[16..16 + prg_len].fill(0xEA);
+        rom[16] = 0x4C;
+        rom[17] = 0x00;
+        rom[18] = 0x80;
+        let vector = 16 + prg_len - 4;
+        rom[vector] = 0x00;
+        rom[vector + 1] = 0x80;
+        let chr = 16 + prg_len;
+        rom[chr..chr + chr_len].fill(0x00);
+        rom[chr + 64 * 0x1000..chr + 65 * 0x1000].fill(0xFF);
+
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 5);
+
+        // Extended-attribute mode: every tile selects bank (attr & $3F) plus
+        // the $5130 bits. ExRAM = $40 -> palette 1, low bank bits 0.
+        CpuBus::write(&mut system, 0x5104, 1);
+        CpuBus::write(&mut system, 0x5105, 0x00);
+        CpuBus::write(&mut system, 0x5130, 0x01); // bank bits 6-7 = 1 -> bank 64
+        for i in 0..32u16 {
+            CpuBus::write(&mut system, 0x5C00 + i, 0x40);
+        }
+        system.ppu.debug_write_vram(0x2000, 0x00);
+        system.ppu.debug_write_vram(0x3F00, 0x0F);
+        system.ppu.debug_write_vram(0x3F07, 0x2D);
+
+        system.ppu.ctrl = 0;
+        system.ppu.mask = 0x0A;
+        system.ppu.v = 0;
+        system.ppu.fine_x = 0;
+        system.ppu.scanline = 0;
+        system.ppu.dot = 0;
+        for _ in 0..248 {
+            system.ppu.step_dot();
+        }
+        // Palette 1, colour 3 -> entry 7, fetched from 4 KiB bank 64.
+        assert_eq!(system.ppu.debug_pixel(40, 0), system.ppu.debug_palette(7));
+
+        // Clearing $5130 selects bank 0 (all zeros) -> the backdrop shows.
+        CpuBus::write(&mut system, 0x5130, 0x00);
+        system.ppu.mask = 0x0A;
+        system.ppu.v = 0;
+        system.ppu.fine_x = 0;
+        system.ppu.scanline = 0;
+        system.ppu.dot = 0;
+        for _ in 0..248 {
+            system.ppu.step_dot();
+        }
+        assert_eq!(system.ppu.debug_pixel(40, 0), system.ppu.debug_palette(0));
+    }
+
+    #[test]
     fn mmc5_extended_attributes_select_palette_and_chr_bank() {
         let prg_len = 128 * 1024;
         let chr_len = 64 * 1024;

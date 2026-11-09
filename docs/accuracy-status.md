@@ -183,7 +183,7 @@ writes, and MMC1 bank switching.
 | Protected NROM (143) | NROM plus a `$4100-$5FFF` protection read of inverted low address bits |
 | Golden Game 235 | write-address latch: 32 KiB page, 16 KiB half, ROM chip, 1/2-screen mirroring |
 | Benshieng BMC-BS-5 (286) | address-latched 8 KiB PRG and 2 KiB CHR windows (partial; menus still blank) |
-| MMC5 (5) | PRG modes/CHR banking/IRQ, multiplier, per-slot `$5105` nametable mapping (CIRAM page 0/1, ExRAM, fill), split screen, extended attributes, two-pulse + PCM audio (write/read DAC modes with the `$5010` IRQ); >256 KiB CHR remains |
+| MMC5 (5) | PRG modes/CHR banking/IRQ, multiplier, per-slot `$5105` nametable mapping (CIRAM page 0/1, ExRAM, fill), split screen, extended attributes with >256 KiB CHR, two-pulse + PCM audio (write/read DAC modes with the `$5010` IRQ) |
 
 NES 2.0 PRG (16 KiB units) and CHR (8 KiB units) sizes are parsed correctly.
 
@@ -786,7 +786,10 @@ the dots 1-64 clear phase, which provides the seed.
   and the wiki. The PCM channel now models both DAC modes: `$5011` writes in
   write mode and `$8000-$BFFF` PRG reads in read mode (`$5010` bit 0), with a
   zero update tripping the `$5010` IRQ that joins the mapper IRQ line. The
-  >256 KiB CHR path remains.
+  Extended-attribute fetches use the full `$5130` upper bank bits, so CHR
+  beyond 256 KiB is addressable (the PPU pattern path carries a physical
+  byte offset rather than a 16-bit PPU address); a 512 KiB CHR title
+  (Metal Slader Glory) matches the reference video on 140/300 frames.
 - The differential oracle harness now compares per-frame RGBA8 hashes against
   a RustyNES capture (`trace --no-state` plus `diff`). Local results: the
   AccuracyCoin test image matches 49/60 frames; a commercial NROM title

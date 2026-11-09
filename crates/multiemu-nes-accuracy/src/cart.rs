@@ -40,8 +40,8 @@ pub struct Mmc5Aux {
     chr_upper: u8,
     rom: Vec<u8>,
     ram: bool,
-    slots: [u16; 8],
-    bg_slots: [u16; 8],
+    slots: [usize; 8],
+    bg_slots: [usize; 8],
     split_enabled: bool,
     split_right: bool,
     split_threshold: u8,
@@ -85,11 +85,11 @@ impl Mmc5Aux {
         self.chr_upper = chr_upper;
     }
 
-    fn set_slots(&mut self, slots: [u16; 8]) {
+    fn set_slots(&mut self, slots: [usize; 8]) {
         self.slots = slots;
     }
 
-    fn set_bg_slots(&mut self, slots: [u16; 8]) {
+    fn set_bg_slots(&mut self, slots: [usize; 8]) {
         self.bg_slots = slots;
     }
 
@@ -160,12 +160,12 @@ impl Mmc5Aux {
         scanline: u16,
         tile: u8,
         high: bool,
-    ) -> Option<u16> {
+    ) -> Option<usize> {
         let (_, _, fine_y) = self.split_position(group, scanline)?;
-        let address = (u16::from(self.split_bank) << 12)
-            | ((u16::from(tile) << 4) & 0x0FF8)
-            | u16::from(fine_y);
-        Some(address | if high { 8 } else { 0 })
+        let address = (usize::from(self.split_bank) << 12)
+            | ((usize::from(tile) << 4) & 0x0FF8)
+            | usize::from(fine_y);
+        Some(address | (usize::from(high) * 8))
     }
 
     /// Extended-attribute byte for the tile at `address` in mode 1.
@@ -176,12 +176,11 @@ impl Mmc5Aux {
     /// CHR address for an extended-attribute background tile: the ExRAM
     /// byte supplies the 4 KiB bank (A12-A17) and palette (bits 6-7), while
     /// $5130 supplies A18-A19.
-    pub(crate) fn extended_pattern(&self, attr: u8, tile: u8, fine_y: u8) -> u16 {
-        // The PPU address API is 16-bit, so the $5130 A18/A19 bits are not
-        // representable yet; boards up to 256 KiB CHR are covered.
-        (u16::from(attr & 0x3F) << 12)
-            | ((u16::from(tile) << 4) & 0x0FF8)
-            | u16::from(fine_y & 0x07)
+    pub(crate) fn extended_pattern(&self, attr: u8, tile: u8, fine_y: u8) -> usize {
+        // ExRAM bits 0-5 select the low six bits of the 4 KiB bank; $5130
+        // supplies bank bits 6-7, so the physical offset can exceed 256 KiB.
+        let bank = (usize::from(self.chr_upper & 0x03) << 6) | usize::from(attr & 0x3F);
+        (bank << 12) | ((usize::from(tile) << 4) & 0x0FF8) | usize::from(fine_y & 0x07)
     }
 
     /// Extended-attribute palette (bits 6-7 of the ExRAM byte).
@@ -243,7 +242,7 @@ impl Mmc5Aux {
 
     pub(crate) fn chr_offset(&self, address: u16) -> usize {
         let slot = usize::from(address) / 0x400;
-        usize::from(self.slots[slot]) * 0x400 + usize::from(address & 0x3FF)
+        self.slots[slot] * 0x400 + usize::from(address & 0x3FF)
     }
 
     pub(crate) fn chr_read(&self, address: u16, local: &[u8]) -> u8 {
@@ -259,7 +258,7 @@ impl Mmc5Aux {
     /// `$5128-$512B` background banks instead of the sprite banks.
     pub(crate) fn bg_chr_read(&self, address: u16, local: &[u8]) -> u8 {
         let slot = usize::from(address) / 0x400;
-        let offset = usize::from(self.bg_slots[slot]) * 0x400 + usize::from(address & 0x3FF);
+        let offset = self.bg_slots[slot] * 0x400 + usize::from(address & 0x3FF);
         if self.ram {
             local.get(offset).copied().unwrap_or(0)
         } else {
@@ -268,11 +267,11 @@ impl Mmc5Aux {
     }
 
     /// Read a physical CHR address (already banked by the split registers).
-    pub(crate) fn chr_physical(&self, address: u16, local: &[u8]) -> u8 {
+    pub(crate) fn chr_physical(&self, address: usize, local: &[u8]) -> u8 {
         if self.ram {
-            local.get(usize::from(address)).copied().unwrap_or(0)
+            local.get(address).copied().unwrap_or(0)
         } else {
-            self.rom.get(usize::from(address)).copied().unwrap_or(0)
+            self.rom.get(address).copied().unwrap_or(0)
         }
     }
 
@@ -2955,10 +2954,10 @@ impl Mmc5 {
             self.split_scroll,
             self.split_bank,
         );
-        let mut slots = [0u16; 8];
-        let mut bg_slots = [0u16; 8];
+        let mut slots = [0usize; 8];
+        let mut bg_slots = [0usize; 8];
         for (slot, value) in slots.iter_mut().enumerate() {
-            *value = self.chr_bank(slot) as u16;
+            *value = self.chr_bank(slot);
         }
         if self.ppu_ctrl & 0x20 != 0 {
             // 8x16 sprites: $5128-$512B apply to background tiles. Each
@@ -2968,7 +2967,7 @@ impl Mmc5 {
                 let bank = ((usize::from(self.chr_upper) << 8)
                     | usize::from(self.chr_banks[register]))
                     % self.chr_bank_count();
-                *value = bank as u16;
+                *value = bank;
             }
         } else {
             bg_slots = slots;
