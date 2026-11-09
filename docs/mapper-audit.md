@@ -95,10 +95,11 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   `$5113` 8 KiB PRG-RAM bank, the `$5114-$5116` RAM/ROM toggle, ExRAM CPU
   access modes (`$5104`, `$5C00-$5FFF`), `$5130` upper CHR bits and the
   `$5204` IRQ-pending read. A shared ExRAM/CHR state now feeds the PPU:
-  ExRAM-backed nametables (modes 2/3) and fill mode are rendered, and the
-  1 KiB CHR bank map is consulted per fetch so mid-frame `$5120` writes take
-  effect (plain CIRAM nametables keep the working vertical/horizontal
-  approximation). Vertical split-screen (`$5200-$5202`) substitutes ExRAM
+  `$5105` maps each of the four nametable slots independently to CIRAM page 0,
+  CIRAM page 1, ExRAM or fill mode (ExRAM is a nametable only in modes 0/1,
+  as on hardware; modes 2/3 read the slot as zeros). Fill mode and the
+  1 KiB CHR bank map are consulted per fetch so mid-frame `$5120` writes take
+  effect. Vertical split-screen (`$5200-$5202`) substitutes ExRAM
   nametable/attribute data and the `$5202` 4 KiB CHR bank per fetch group, with
   the split fine Y driving CHR A0-A2. Extended-attribute mode (`$5104` = 1)
   takes the palette from ExRAM bits 6-7 and the 4 KiB CHR bank from bits 0-5
@@ -106,8 +107,9 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   (the PPU address API is 16-bit today, so boards above 256 KiB CHR still need
   a wider path). 8x16 sprite mode keeps separate background banks:
   `$5128-$512B` drive background fetches while `$5120-$5127` drive sprites.
-  12/37 render at 20 frames, 17/37 at 600. Still missing: accurate per-page
-  CIRAM mapping and the PCM read-mode IRQ.
+  11/37 render at 20 frames, 17/37 at 600 (one boot-time title is blank in
+  ExRAM modes 2/3 now that the slot correctly reads zeros). Still missing:
+  the >256 KiB CHR path and the PCM read-mode IRQ.
 - **Famicom Disk System (20)** — raw `.fds` loader plus a BIOS (both
   user-supplied): the 8 KiB BIOS maps at `$E000-$FFFF`, 32 KiB work RAM at
   `$6000-$DFFF`, and `$4020-$4097` carries the disk timer IRQ, disk/sound

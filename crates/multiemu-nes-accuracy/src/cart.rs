@@ -190,16 +190,18 @@ impl Mmc5Aux {
     }
 
     /// Nametable byte supplied by ExRAM or fill mode, if this slot uses one.
+    ///
+    /// ExRAM is a nametable only in modes 0/1; in modes 2/3 the mapped slot
+    /// reads as all zeros (`$5104` table and the `$5105` note on the wiki).
     pub(crate) fn nametable_override(&self, address: u16) -> Option<u8> {
-        // In modes 0/1 ExRAM is extended-attribute data; keep the CIRAM
-        // fallback for games that map it as a nametable only incidentally.
-        if self.mode <= 1 {
-            return None;
-        }
         let slot = usize::from(address >> 10 & 3);
         let offset = usize::from(address & 0x3FF);
         match self.nt_map[slot] {
-            2 => Some(self.exram[offset]),
+            2 => Some(if self.mode <= 1 {
+                self.exram[offset]
+            } else {
+                0
+            }),
             3 => Some(if address & 0x03C0 == 0x03C0 {
                 self.fill_attr
             } else {
@@ -209,12 +211,27 @@ impl Mmc5Aux {
         }
     }
 
+    /// CIRAM index for this slot when `$5105` maps it to page 0 or page 1.
+    ///
+    /// Unlike the legacy vertical/horizontal mirroring, each MMC5 nametable
+    /// slot selects its own 1 KiB CIRAM page.
+    pub(crate) fn nametable_index(&self, address: u16) -> Option<usize> {
+        let slot = usize::from(address >> 10 & 3);
+        let offset = usize::from(address & 0x3FF);
+        match self.nt_map[slot] {
+            0 => Some(offset),
+            1 => Some(0x400 + offset),
+            _ => None,
+        }
+    }
+
     pub(crate) fn nametable_write(&mut self, address: u16, value: u8) -> bool {
         let slot = usize::from(address >> 10 & 3);
         match self.nt_map[slot] {
             2 => {
-                // ExRAM writes are ignored in read-only mode.
-                if self.mode != 3 {
+                // ExRAM is PPU-writable only while it is usable as a
+                // nametable, i.e. in modes 0/1.
+                if self.mode <= 1 {
                     self.exram[usize::from(address & 0x3FF)] = value;
                 }
                 true
@@ -14200,6 +14217,48 @@ mod tests {
             assert_eq!(aux.split_tile(0, 0), Some(0x22));
             assert_eq!(aux.split_pattern(0, 0, 0, false), Some(0x2000));
         }
+    }
+
+    #[test]
+    fn mmc5_nametable_mapping_selects_per_slot_cirarn_exram_and_fill() {
+        let mut aux = Mmc5Aux::new(vec![0; 0x1000], false);
+
+        // $5105 = $50: vertical arrangement, NT0/NT1 use CIRAM page 0 and
+        // NT2/NT3 use page 1 — each slot picks its page independently.
+        aux.set_registers(0, [0, 0, 1, 1], 0, 0, 0);
+        assert_eq!(aux.nametable_index(0x2000), Some(0x000));
+        assert_eq!(aux.nametable_index(0x2400), Some(0x000));
+        assert_eq!(aux.nametable_index(0x2800), Some(0x400));
+        assert_eq!(aux.nametable_index(0x2C00), Some(0x400));
+
+        // $5105 = $44: horizontal arrangement, NT0/NT2 page 0, NT1/NT3 page 1.
+        aux.set_registers(0, [0, 1, 0, 1], 0, 0, 0);
+        assert_eq!(aux.nametable_index(0x2000), Some(0x000));
+        assert_eq!(aux.nametable_index(0x2400), Some(0x400));
+        assert_eq!(aux.nametable_index(0x2800), Some(0x000));
+        assert_eq!(aux.nametable_index(0x2C00), Some(0x400));
+
+        // Single-screen CIRAM page 1 ($55) maps all four slots to page 1.
+        aux.set_registers(0, [1, 1, 1, 1], 0, 0, 0);
+        for address in [0x2000, 0x2400, 0x2800, 0x2C00] {
+            assert_eq!(aux.nametable_index(address), Some(0x400));
+        }
+
+        // ExRAM is a nametable in modes 0/1 and reads as zeros in modes 2/3.
+        aux.set_registers(0, [2, 2, 2, 2], 0, 0, 0);
+        aux.exram[0] = 0x77;
+        assert_eq!(aux.nametable_override(0x2000), Some(0x77));
+        assert!(aux.nametable_write(0x2000, 0x11));
+        assert_eq!(aux.exram[0], 0x11);
+        aux.set_registers(2, [2, 2, 2, 2], 0, 0, 0);
+        assert_eq!(aux.nametable_override(0x2000), Some(0x00));
+        aux.nametable_write(0x2000, 0x22);
+        assert_eq!(aux.exram[0], 0x11, "mode 2 ignores PPU ExRAM writes");
+
+        // Fill mode supplies the tile and attribute bytes.
+        aux.set_registers(0, [3, 3, 3, 3], 0x42, 0x05, 0);
+        assert_eq!(aux.nametable_override(0x2000), Some(0x42));
+        assert_eq!(aux.nametable_override(0x23C0), Some(0x05));
     }
 
     #[test]

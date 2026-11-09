@@ -964,8 +964,12 @@ impl Ppu {
 
     fn read_nametable(&self, address: u16) -> u8 {
         if let Some(aux) = &self.mmc5_aux {
-            if let Some(value) = aux.borrow().nametable_override(address) {
+            let aux = aux.borrow();
+            if let Some(value) = aux.nametable_override(address) {
                 return value;
+            }
+            if let Some(index) = aux.nametable_index(address) {
+                return self.vram[index];
             }
         }
         if let Some(banks) = self.nt_banks {
@@ -1048,7 +1052,12 @@ impl Ppu {
             }
         } else if address < 0x3F00 {
             if let Some(aux) = &self.mmc5_aux {
-                if aux.borrow_mut().nametable_write(address, value) {
+                let mut aux = aux.borrow_mut();
+                if aux.nametable_write(address, value) {
+                    return;
+                }
+                if let Some(index) = aux.nametable_index(address) {
+                    self.vram[index] = value;
                     return;
                 }
             }

@@ -1221,6 +1221,67 @@ mod tests {
     }
 
     #[test]
+    fn mmc5_per_page_cirarn_nametables_reach_the_ppu() {
+        let prg_len = 128 * 1024;
+        let chr_len = 64 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 8;
+        rom[6] = 0x50; // Mapper 5.
+        rom[16..16 + prg_len].fill(0xEA);
+        rom[16] = 0x4C;
+        rom[17] = 0x00;
+        rom[18] = 0x80;
+        let vector = 16 + prg_len - 4;
+        rom[vector] = 0x00;
+        rom[vector + 1] = 0x80;
+        // CHR bank 0: tile 0 transparent, tile 1 solid (color index 3).
+        let chr = 16 + prg_len;
+        rom[chr..chr + 0x1000].fill(0x00);
+        rom[chr + 0x10..chr + 0x20].fill(0xFF);
+
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 5);
+
+        // Horizontal arrangement: NT0/NT2 -> CIRAM page 0, NT1/NT3 -> page 1.
+        CpuBus::write(&mut system, 0x5105, 0x44);
+        system.ppu.debug_write_vram(0x2000, 0x00);
+        for i in 0..32u16 {
+            system.ppu.debug_write_vram(0x2400 + i, 0x01);
+        }
+        assert_eq!(system.ppu.debug_read_vram(0x2000), 0x00);
+        assert_eq!(system.ppu.debug_read_vram(0x2400), 0x01);
+
+        // Render line 0 from NT1 ($2400): tile 1 -> palette entry 3.
+        system.ppu.ctrl = 0;
+        system.ppu.mask = 0x0A;
+        system.ppu.v = 0x2400;
+        system.ppu.fine_x = 0;
+        system.ppu.scanline = 0;
+        system.ppu.dot = 0;
+        system.ppu.debug_write_vram(0x3F00, 0x0F);
+        system.ppu.debug_write_vram(0x3F03, 0x2D);
+        for _ in 0..256 {
+            system.ppu.step_dot();
+        }
+        assert_eq!(system.ppu.debug_pixel(40, 0), system.ppu.debug_palette(3));
+
+        // Remap every slot to CIRAM page 0: $2400 now aliases $2000's page,
+        // whose tile 0 is transparent, so the line shows the backdrop.
+        CpuBus::write(&mut system, 0x5105, 0x00);
+        system.ppu.mask = 0x0A;
+        system.ppu.v = 0x2400;
+        system.ppu.fine_x = 0;
+        system.ppu.scanline = 0;
+        system.ppu.dot = 0;
+        for _ in 0..256 {
+            system.ppu.step_dot();
+        }
+        assert_eq!(system.ppu.debug_pixel(40, 0), system.ppu.debug_palette(0));
+    }
+
+    #[test]
     fn mmc5_eight_by_sixteen_background_banks_are_separate() {
         let prg_len = 128 * 1024;
         let chr_len = 64 * 1024;
@@ -1307,13 +1368,20 @@ mod tests {
         let mut system = System::from_ines(&rom).expect("load");
         assert_eq!(system.cart.mapper(), 5);
 
-        // ExRAM-backed nametable in mode 2, mapped to slot 0.
+        // ExRAM-backed nametable: the CPU fills it in mode 2 (writable), then
+        // the PPU sees it in mode 0 (the only modes where ExRAM is a
+        // nametable are 0/1).
         CpuBus::write(&mut system, 0x5104, 2);
-        CpuBus::write(&mut system, 0x5105, 0x02);
         CpuBus::write(&mut system, 0x5C00, 0x5A);
+        CpuBus::write(&mut system, 0x5104, 0);
+        CpuBus::write(&mut system, 0x5105, 0x02);
         assert_eq!(system.ppu.debug_read_vram(0x2000), 0x5A);
         system.ppu.debug_write_vram(0x2000, 0x33);
+        CpuBus::write(&mut system, 0x5104, 2);
         assert_eq!(system.cart.cpu_read(0x5C00), 0x33);
+        // In mode 2 the same slot reads as all zeros.
+        CpuBus::write(&mut system, 0x5105, 0x02);
+        assert_eq!(system.ppu.debug_read_vram(0x2000), 0x00);
 
         // Fill mode: tile bytes return $5106, attributes $5107.
         CpuBus::write(&mut system, 0x5105, 0x03);
