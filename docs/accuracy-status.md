@@ -122,6 +122,7 @@ writes, and MMC1 bank switching.
 | Daou DIS23C01 (156) | 16 KiB PRG banking, eight split-register 1 KiB CHR banks, 8 KiB WRAM, runtime H/V mirroring |
 | Waixing FS309 (199) | MMC3 + four extra PRG/CHR bank registers, four mirroring modes, 8 KiB CHR-RAM and a 4 KiB `$5000-$5FFF` PRG-RAM window (6/6 render) |
 | Waixing T9552 (253) | 8 KiB PRG + split-nibble 1 KiB CHR banking, four mirroring modes, /114 CPU-clock IRQ, 2 KiB CHR-RAM page pair |
+| Waixing / Myth Struggle (249) | MMC3 + a `$5000` page-scramble register for CHR/PRG banking (6/6 render) |
 | Sachen SA-008-A (148) | mapper 79 latch moved to `$8000-$FFFF`, bus conflicts |
 | Jaleco SS88006 (18) | VRC4-like 8 KiB PRG / 1 KiB CHR nibble-pair banking, CPU-cycle IRQ |
 | NINA-03/06 (79/146) | 32 KiB PRG + 8 KiB CHR via a single control register |

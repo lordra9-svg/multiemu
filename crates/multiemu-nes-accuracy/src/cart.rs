@@ -692,6 +692,7 @@ impl Cartridge {
             156 => Box::new(Daou156::new(prg_rom, chr, header)),
             199 => Box::new(Mmc3_199::new(prg_rom, chr, header)),
             253 => Box::new(Waixing253::new(prg_rom, chr, header)),
+            249 => Box::new(Mmc3_249::new(prg_rom, chr, header)),
             193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
             172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
@@ -2561,6 +2562,121 @@ impl Mapper for Mmc3_199 {
 
     fn low_window(&self) -> Option<(u16, u16)> {
         Some((0x5000, 0x5FFF))
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// Waixing/Myth Struggle board (mapper 249): MMC3 plus a `$5000` register that
+/// scrambles the CHR and PRG page numbers when bit 1 is set.
+#[derive(Debug)]
+pub struct Mmc3_249 {
+    inner: Mmc3,
+    ex: u8,
+}
+
+impl Mmc3_249 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 249),
+            ex: 0,
+        }
+    }
+
+    fn prg8_banks(&self) -> usize {
+        (self.inner.prg.len() / 0x2000).max(1)
+    }
+
+    fn chr1_banks(&self) -> usize {
+        (self.inner.chr.len() / 0x400).max(1)
+    }
+
+    /// The board's 8-bit CHR/PRG page permutation (Mesen `MMC3_249`).
+    fn permute(page: usize) -> usize {
+        (page & 0x03)
+            | ((page >> 1) & 0x04)
+            | ((page >> 4) & 0x08)
+            | ((page >> 2) & 0x10)
+            | ((page << 3) & 0x20)
+            | ((page << 2) & 0xC0)
+    }
+
+    fn scramble_prg(&self, page: usize) -> usize {
+        if self.ex & 0x02 == 0 {
+            return page;
+        }
+        let scrambled = if page < 0x20 {
+            (page & 0x01) | ((page >> 3) & 0x02) | ((page >> 1) & 0x04) | ((page << 2) & 0x18)
+        } else {
+            Self::permute(page - 0x20)
+        };
+        scrambled % self.prg8_banks()
+    }
+
+    fn scramble_chr(&self, page: usize) -> usize {
+        if self.ex & 0x02 == 0 {
+            return page % self.chr1_banks();
+        }
+        Self::permute(page) % self.chr1_banks()
+    }
+}
+
+impl Mapper for Mmc3_249 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.scramble_prg(self.inner.prg_slot(slot));
+        self.inner.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address == 0x5000 {
+            self.ex = value;
+            return;
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.scramble_chr(self.inner.chr_bank(slot));
+        self.inner.chr[bank * 0x400 + usize::from(address & 0x3FF)]
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.scramble_chr(self.inner.chr_bank(slot));
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        249
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
     }
 
     fn irq_line(&self) -> bool {
@@ -14474,6 +14590,33 @@ mod tests {
         );
         cart.cpu_write(0xF008, 0x00);
         assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn mmc3_249_5000_register_scrambles_prg_and_chr_pages() {
+        // 256 KiB PRG (32 x 8 KiB), 256 KiB CHR-ROM (256 x 1 KiB).
+        let rom = synth_banked(249, 256, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 249);
+
+        // R6 = 2 -> $8000 sees bank 2 while $5000 bit 1 is clear.
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x02);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+
+        // With $5000 bit 1 set the 5-bit PRG page is permuted: 2 -> 8.
+        cart.cpu_write(0x5000, 0x02);
+        assert_eq!(cart.cpu_read(0x8000), 8);
+
+        // CHR page 4 permutes to 32 ((page << 3) & 0x20).
+        cart.cpu_write(0x8000, 0x00);
+        cart.cpu_write(0x8001, 0x04);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 32);
+
+        // Clearing bit 1 restores the direct page.
+        cart.cpu_write(0x5000, 0x00);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 4);
+        assert_eq!(cart.cpu_read(0x8000), 2);
     }
 
     #[test]
