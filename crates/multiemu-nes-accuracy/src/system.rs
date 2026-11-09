@@ -432,19 +432,8 @@ impl System {
     fn clock(&mut self) {
         self.end_dots = 0;
         let dots = self.next_cpu_dots();
-        let before = self.ppu.scanline;
-        self.ppu.step_dots(dots);
+        self.advance_ppu_cycle(dots);
         self.sample_zapper();
-        let after = self.ppu.scanline;
-        if before != after {
-            // MMC3-style mappers clock once per rendered scanline on the PPU
-            // A12 rise. Visible lines and the pre-render line both fetch
-            // patterns; vblank does not.
-            let rendered = (after <= 239 || after == 261) && self.ppu.mask & 0x18 != 0;
-            if rendered {
-                self.cart.clock_scanline();
-            }
-        }
         self.cart.clock_cpu();
         self.apu.phase_override = Some(self.phase);
         self.apu.tick();
