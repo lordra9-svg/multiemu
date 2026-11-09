@@ -545,6 +545,19 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Inserts an FDS disk side (`Some`) or ejects (`None`). No-op elsewhere.
+    fn insert_disk_side(&mut self, _side: Option<usize>) {}
+
+    /// Number of sides in an FDS image (0 for non-FDS boards).
+    fn disk_side_count(&self) -> usize {
+        0
+    }
+
+    /// Currently inserted FDS side.
+    fn current_disk_side(&self) -> usize {
+        0
+    }
+
     /// Notification of a fully decoded PPUCTRL write (MMC5 8x16 mode).
     fn set_ppu_ctrl(&mut self, _value: u8) {}
 
@@ -876,6 +889,23 @@ impl Cartridge {
     #[must_use]
     pub fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
         self.mapper.vrc7_chr()
+    }
+
+    /// Inserts an FDS disk side (`Some`) or ejects (`None`).
+    pub fn insert_disk_side(&mut self, side: Option<usize>) {
+        self.mapper.insert_disk_side(side);
+    }
+
+    /// Number of sides in an FDS image (0 for non-FDS boards).
+    #[must_use]
+    pub fn disk_side_count(&self) -> usize {
+        self.mapper.disk_side_count()
+    }
+
+    /// Currently inserted FDS side.
+    #[must_use]
+    pub fn current_disk_side(&self) -> usize {
+        self.mapper.current_disk_side()
     }
 
     /// Notifies the mapper of a fully decoded PPUCTRL write.
@@ -10240,6 +10270,18 @@ impl Mapper for Fds {
     }
 
     fn acknowledge_irq(&mut self) {}
+
+    fn insert_disk_side(&mut self, side: Option<usize>) {
+        self.set_side(side);
+    }
+
+    fn disk_side_count(&self) -> usize {
+        self.sides
+    }
+
+    fn current_disk_side(&self) -> usize {
+        self.side
+    }
 }
 
 /// VRC7 built-in instrument patches/// VRC7 built-in instrument patches (approximation of the YM2413 patch
@@ -13942,6 +13984,65 @@ mod tests {
             saw_high |= (sample - 15.0 / 45.0).abs() < 1e-4;
         }
         assert!(saw_low && saw_high, "noise did not toggle");
+    }
+
+    #[test]
+    fn fds_multi_side_insertion_switches_the_disk_image() {
+        // fwNES header + two 65,500-byte sides. Each side's disk-info block
+        // carries a distinct licensee byte at offset $0F.
+        let mut image = vec![0u8; 16 + 2 * 65_500];
+        image[0..4].copy_from_slice(b"FDS\x1a");
+        image[4] = 2;
+        for (side, licensee) in [(0usize, 0x55u8), (1, 0xAA)] {
+            let base = 16 + side * 65_500;
+            let block = &mut image[base..base + 65_500];
+            block[0] = 0x01;
+            block[1..15].copy_from_slice(b"*NINTENDO-HVC*");
+            block[15] = licensee;
+            for (i, byte) in block.iter_mut().enumerate().take(56).skip(16) {
+                *byte = 0xA0 | (i as u8 & 0x1F);
+            }
+            block[56] = 0x02;
+            block[57] = 0x00;
+        }
+        let mut cart = Cartridge::from_fds(&image, &vec![0xEA; 0x2000]).expect("fds");
+        assert_eq!(cart.disk_side_count(), 2);
+        assert_eq!(cart.current_disk_side(), 0);
+
+        fn read_info_block(cart: &mut Cartridge) -> Vec<u8> {
+            cart.cpu_write(0x4023, 0x83);
+            cart.cpu_write(0x4025, 0x64); // read mode, motor on, CRC enabled
+            while cart.cpu_read_io(0x4032) & 0x02 != 0 {
+                cart.clock_cpu();
+            }
+            for _ in 0..FDS_BYTE_CYCLES {
+                cart.clock_cpu();
+            }
+            let mut block = Vec::with_capacity(56);
+            for _ in 0..56 {
+                block.push(cart.cpu_read_io(0x4031));
+                for _ in 0..FDS_BYTE_CYCLES {
+                    cart.clock_cpu();
+                }
+            }
+            block
+        }
+
+        let side_a = read_info_block(&mut cart);
+        assert_eq!(side_a[0], 0x01);
+        assert_eq!(side_a[15], 0x55);
+
+        cart.insert_disk_side(Some(1));
+        assert_eq!(cart.current_disk_side(), 1);
+        // The motor restarts from the beginning of the newly inserted side.
+        cart.cpu_write(0x4025, 0x66); // stop the motor first
+        let side_b = read_info_block(&mut cart);
+        assert_eq!(side_b[0], 0x01);
+        assert_eq!(side_b[15], 0xAA);
+
+        // Ejecting stops the drive and reports not-ready.
+        cart.insert_disk_side(None);
+        assert_eq!(cart.cpu_read_io(0x4032) & 0x02, 0x02);
     }
 
     #[test]

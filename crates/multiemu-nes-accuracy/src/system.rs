@@ -349,6 +349,18 @@ impl System {
         self.audio_rate
     }
 
+    /// Inserts an FDS disk side (`Some`) or ejects (`None`); no-op for
+    /// non-FDS cartridges.
+    pub fn insert_disk_side(&mut self, side: Option<usize>) {
+        self.cart.insert_disk_side(side);
+    }
+
+    /// Number of sides in an FDS image (0 for iNES cartridges).
+    #[must_use]
+    pub fn disk_side_count(&self) -> usize {
+        self.cart.disk_side_count()
+    }
+
     /// Battery-backed PRG RAM, if any.
     #[must_use]
     pub fn sram(&self) -> &[u8] {

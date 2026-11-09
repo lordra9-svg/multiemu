@@ -868,6 +868,10 @@ the dots 1-64 clear phase, which provides the seed.
   Super Mario Bros. FDS title screen renders correctly. Against the reference
   capture the 900-frame run matches 735/900 frames directly and 877/899 when
   allowing a single-frame phase offset (our boot completes one frame early).
+  Multi-side images are parsed from the fwNES header and can be swapped at
+  runtime (`Cartridge::insert_disk_side`, `System::insert_disk_side`), which
+  resets the head, re-opens the spin-up window and rebuilds the wire image;
+  ejecting reports the drive as not ready. The disk write path remains.
 - IRQ counters are clocked once per rendered scanline at the sprite-fetch A12
   window (dot 260) rather than from every individual A12 transition, which is
   sufficient for the standard split-screen case but still approximate for
