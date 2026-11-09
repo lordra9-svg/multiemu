@@ -690,6 +690,7 @@ impl Cartridge {
             68 => Box::new(Sunsoft4::new(prg_rom, chr, prg_ram, header)),
             136 => Box::new(Sachen136::new(prg_rom, chr, header)),
             156 => Box::new(Daou156::new(prg_rom, chr, header)),
+            199 => Box::new(Mmc3_199::new(prg_rom, chr, header)),
             193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
             172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
@@ -2244,7 +2245,8 @@ impl Mmc3 {
             txsrom: false,
             remap_a0: false,
             select: 0,
-            bank_data: [0; 8],
+            // MMC3 power-on register values (Mesen ResetMmc3): R0..R7.
+            bank_data: [0, 2, 4, 5, 6, 7, 0, 1],
             mirroring: header.mirroring,
             ram_enabled: true,
             irq_latch: 0,
@@ -2310,7 +2312,8 @@ impl Mapper for Mmc3 {
             return 0;
         }
         if address < 0x8000 {
-            if !self.ram_enabled || self.prg_ram.is_empty() {
+            // `$A001` bit 7 gates *writes* only; PRG-RAM reads stay mapped.
+            if self.prg_ram.is_empty() {
                 return 0;
             }
             return self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()];
@@ -2436,6 +2439,125 @@ impl Mapper for Mmc3 {
         if self.irq_counter == 0 && self.irq_enabled {
             self.irq_pending = true;
         }
+    }
+}
+
+/// Waixing FS309 (mapper 199): MMC3 plus four extra registers.
+///
+/// `$8001` writes with select bit 3 set land in the extra registers instead of
+/// the normal MMC3 bank registers. The extra registers then force 8 KiB PRG
+/// slots 2/3 (`$C000`/`$E000`) and 1 KiB CHR slots 1/3, while slots 0/2 come
+/// from the normal R0/R1 registers. `$A000` selects one of four mirroring
+/// modes. All local images use 8 KiB CHR-RAM.
+#[derive(Debug)]
+pub struct Mmc3_199 {
+    inner: Mmc3,
+    ex: [u8; 4],
+}
+
+impl Mmc3_199 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 199),
+            ex: [0xFE, 0xFF, 1, 3],
+        }
+    }
+
+    fn prg8_banks(&self) -> usize {
+        (self.inner.prg.len() / 0x2000).max(1)
+    }
+
+    fn chr1_banks(&self) -> usize {
+        (self.inner.chr.len() / 0x400).max(1)
+    }
+
+    fn chr_bank_199(&self, slot: usize) -> usize {
+        let raw = match slot {
+            0 => usize::from(self.inner.bank_data[0] & 0xFE),
+            1 => usize::from(self.ex[2]),
+            2 => usize::from(self.inner.bank_data[1] & 0xFE),
+            3 => usize::from(self.ex[3]),
+            _ => return self.inner.chr_bank(slot),
+        };
+        raw % self.chr1_banks()
+    }
+}
+
+impl Mapper for Mmc3_199 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0xC000..=0xDFFF => {
+                let bank = usize::from(self.ex[0]) % self.prg8_banks();
+                self.inner.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+            }
+            0xE000..=0xFFFF => {
+                let bank = usize::from(self.ex[1]) % self.prg8_banks();
+                self.inner.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+            }
+            _ => self.inner.prg_read(address),
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            let decoded = address & 0xE001;
+            if decoded == 0xA000 {
+                self.inner.mirroring = match value & 0x03 {
+                    0 => Mirroring::Vertical,
+                    1 => Mirroring::Horizontal,
+                    2 => Mirroring::SingleLower,
+                    _ => Mirroring::SingleUpper,
+                };
+                return;
+            }
+            if decoded == 0x8001 && self.inner.select & 0x08 != 0 {
+                self.ex[usize::from(self.inner.select & 0x03)] = value;
+                return;
+            }
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank_199(slot);
+        self.inner.chr[bank * 0x400 + usize::from(address & 0x3FF)]
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank_199(slot);
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        199
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
     }
 }
 
@@ -14116,6 +14238,51 @@ mod tests {
         cart.cpu_write(0x8001, 0x00);
         cart.ppu_write(0x0200, 0x33);
         assert_eq!(cart.ppu_read(0x0200), 0x33);
+    }
+
+    #[test]
+    fn mmc3_199_extra_registers_and_fixed_banks() {
+        // 512 KiB PRG (64 x 8 KiB banks), 8 KiB CHR-RAM.
+        let rom = synth_banked(199, 512, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 199);
+        assert!(cart.chr_is_ram());
+
+        // Slot 0/1 follow the MMC3 registers; slots 2/3 are the extra regs
+        // (power-on 0xFE/0xFF -> last two 8 KiB banks of a 64-bank image).
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xA000), 1);
+        assert_eq!(cart.cpu_read(0xC000), 62);
+        assert_eq!(cart.cpu_read(0xE000), 63);
+
+        // $8000 select bit 3 routes $8001 to the extra registers.
+        cart.cpu_write(0x8000, 0x08);
+        cart.cpu_write(0x8001, 0x20);
+        assert_eq!(cart.cpu_read(0xC000), 0x20);
+        cart.cpu_write(0x8000, 0x09);
+        cart.cpu_write(0x8001, 0x21);
+        assert_eq!(cart.cpu_read(0xE000), 0x21);
+
+        // CHR slots 1/3 come from the extra registers; slot 1 defaults to 1.
+        cart.ppu_write(0x0400, 0x5A);
+        assert_eq!(cart.ppu_read(0x0400), 0x5A);
+        cart.cpu_write(0x8000, 0x0A); // extra register 2 -> CHR slot 1
+        cart.cpu_write(0x8001, 0x02);
+        assert_eq!(cart.ppu_read(0x0400), 0, "slot 1 moved to the empty bank 2");
+
+        // Four mirroring modes from $A000.
+        cart.cpu_write(0xA000, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0xA000, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0xA000, 2);
+        assert_eq!(cart.mirroring(), Mirroring::SingleLower);
+        cart.cpu_write(0xA000, 3);
+        assert_eq!(cart.mirroring(), Mirroring::SingleUpper);
+
+        // Work RAM.
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
     }
 
     #[test]

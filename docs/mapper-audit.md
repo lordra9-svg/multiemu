@@ -66,6 +66,14 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   renders the split at the correct line (frame 200: 7,030 -> 277 differing
   pixels, and the remaining difference is the sprite animation phase). The
   regression test `mmc3_irq_clocks_once_per_rendered_scanline` pins it.
+- **Waixing FS309 (199, partial)** — MMC3 plus four extra registers written
+  through `$8001` when `$8000` bit 3 is set: they force 8 KiB PRG slots 2/3
+  (`$C000`/`$E000`) and 1 KiB CHR slots 1/3, while slots 0/2 use R0/R1. `$A000`
+  selects four mirroring modes; the board has 8 KiB CHR-RAM. The general MMC3
+  core also gained the Mesen `ResetMmc3` power-on register values and now keeps
+  PRG-RAM readable when `$A001` bit 7 gates writes only. **6/6 images load, 1/6
+  renders at 600 frames**; the rest still stall/blank (control flow reaches
+  zeroed PRG-RAM), so the FS309 WRAM/outer-banking details need more work.
 - **Daou DIS23C01 (156)** — 16 KiB PRG banking (`$C010`, last bank fixed at
   `$C000`), eight 1 KiB CHR banks whose 16-bit registers are split across low
   and high nibble writes (`$C000-$C00F`, Mesen2's slot decode), 8 KiB work RAM
@@ -298,7 +306,7 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 | 157 | 7 | Datach Joint ROM (barcode reader) | blocked on the peripheral |
 | 164 | 6 | Dongda PEC-9588 educational computer, CHR RAM | small/medium |
 | 168 | 6 | Racermate Challenge II + exercise bike | low value; peripheral |
-| 199 | 6 | Waixing FS309, MMC3-like + CHR RAM + IRQ | medium; shares MMC3 work |
+| 199 | 6 | Waixing FS309, MMC3-like + CHR RAM + IRQ | implemented (partial: 1/6 render) |
 | 216 | 6 | Bonza / Magic Jewelry II (Dendy) | small; Dendy timing |
 | 222 | 6 | Dragon Ninja (CTC-31) / Super Bros. 8 | medium; two submappers |
 | 234 | 6 | Maxi 15 multicart, discrete logic + bus conflicts | small |
