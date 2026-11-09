@@ -121,6 +121,7 @@ writes, and MMC1 bank switching.
 | Sachen SA-015 (150) | indexed register pair `$4100`/`$4101`: 32 KiB PRG, 8 KiB CHR, mirroring |
 | Daou DIS23C01 (156) | 16 KiB PRG banking, eight split-register 1 KiB CHR banks, 8 KiB WRAM, runtime H/V mirroring |
 | Waixing FS309 (199, partial) | MMC3 + four extra PRG/CHR bank registers and four mirroring modes; 8 KiB CHR-RAM (1/6 render) |
+| Waixing T9552 (253) | 8 KiB PRG + split-nibble 1 KiB CHR banking, four mirroring modes, /114 CPU-clock IRQ, 2 KiB CHR-RAM page pair |
 | Sachen SA-008-A (148) | mapper 79 latch moved to `$8000-$FFFF`, bus conflicts |
 | Jaleco SS88006 (18) | VRC4-like 8 KiB PRG / 1 KiB CHR nibble-pair banking, CPU-cycle IRQ |
 | NINA-03/06 (79/146) | 32 KiB PRG + 8 KiB CHR via a single control register |

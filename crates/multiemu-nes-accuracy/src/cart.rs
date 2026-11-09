@@ -691,6 +691,7 @@ impl Cartridge {
             136 => Box::new(Sachen136::new(prg_rom, chr, header)),
             156 => Box::new(Daou156::new(prg_rom, chr, header)),
             199 => Box::new(Mmc3_199::new(prg_rom, chr, header)),
+            253 => Box::new(Waixing253::new(prg_rom, chr, header)),
             193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
             172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
@@ -2558,6 +2559,177 @@ impl Mapper for Mmc3_199 {
 
     fn acknowledge_irq(&mut self) {
         self.inner.acknowledge_irq();
+    }
+}
+
+/// Waixing T9552 / VRC4-derived board (mapper 253).
+///
+/// 8 KiB PRG pages at `$8000`/`$A000` (`$8010`/`$A010`) with the last two pages
+/// fixed at `$C000`/`$E000`; eight 1 KiB CHR pages whose 16-bit bank registers
+/// are assembled from low/high nibble writes across `$B000-$E00C`; four
+/// mirroring modes at `$9400`; and a CPU-clock IRQ with a /114 prescaler
+/// (`$F000`/`$F004` reload, `$F008` enable). A 2 KiB CHR-RAM page pair is
+/// selected while a CHR low nibble is 4 or 5 and the game has not forced
+/// CHR-ROM with the `$C8`/`$88` signature on slot 0.
+#[derive(Debug)]
+pub struct Waixing253 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    chr_lo: [u8; 8],
+    chr_hi: [u8; 8],
+    chr_ram: [u8; 0x800],
+    force_chr_rom: bool,
+    prg_banks: [u8; 2],
+    mirroring: Mirroring,
+    irq_reload: u8,
+    irq_counter: u8,
+    irq_enabled: bool,
+    irq_scaler: u16,
+    irq_pending: bool,
+}
+
+impl Waixing253 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            chr_lo: [0; 8],
+            chr_hi: [0; 8],
+            chr_ram: [0; 0x800],
+            force_chr_rom: false,
+            prg_banks: [0, 1],
+            mirroring: header.mirroring,
+            irq_reload: 0,
+            irq_counter: 0,
+            irq_enabled: false,
+            irq_scaler: 0,
+            irq_pending: false,
+        }
+    }
+
+    fn prg8_banks(&self) -> usize {
+        (self.prg.len() / 0x2000).max(1)
+    }
+
+    fn chr1_banks(&self) -> usize {
+        (self.chr.len() / 0x400).max(1)
+    }
+
+    fn chr_page(&self, slot: usize) -> usize {
+        usize::from(self.chr_lo[slot]) | (usize::from(self.chr_hi[slot]) << 8)
+    }
+
+    fn chr_is_ram(&self, slot: usize) -> bool {
+        !self.force_chr_rom && matches!(self.chr_lo[slot], 4 | 5)
+    }
+
+    fn write_chr_nibble(&mut self, address: u16, value: u8) {
+        let slot = usize::from(((((address & 0x08) | (address >> 8)) >> 3) + 2) & 0x07);
+        let shift = address & 0x04;
+        let mask = (0xF0u16 >> shift) as u8;
+        self.chr_lo[slot] = (self.chr_lo[slot] & mask) | (value << shift);
+        if shift != 0 {
+            self.chr_hi[slot] = value >> 4;
+        }
+        if slot == 0 {
+            if self.chr_lo[0] == 0xC8 {
+                self.force_chr_rom = false;
+            } else if self.chr_lo[0] == 0x88 {
+                self.force_chr_rom = true;
+            }
+        }
+    }
+}
+
+impl Mapper for Waixing253 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let banks = self.prg8_banks();
+        let bank = match address {
+            0x8000..=0x9FFF => usize::from(self.prg_banks[0]) % banks,
+            0xA000..=0xBFFF => usize::from(self.prg_banks[1]) % banks,
+            0xC000..=0xDFFF => banks.saturating_sub(2),
+            0xE000..=0xFFFF => banks - 1,
+            _ => return 0,
+        };
+        self.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x8010 => self.prg_banks[0] = value,
+            0xA010 => self.prg_banks[1] = value,
+            0x9400 => {
+                self.mirroring = match value & 0x03 {
+                    0 => Mirroring::Vertical,
+                    1 => Mirroring::Horizontal,
+                    2 => Mirroring::SingleLower,
+                    _ => Mirroring::SingleUpper,
+                };
+            }
+            0xF000 => {
+                self.irq_reload = (self.irq_reload & 0xF0) | (value & 0x0F);
+                self.irq_pending = false;
+            }
+            0xF004 => {
+                self.irq_reload = (self.irq_reload & 0x0F) | (value << 4);
+                self.irq_pending = false;
+            }
+            0xF008 => {
+                self.irq_counter = self.irq_reload;
+                self.irq_enabled = value & 0x02 != 0;
+                self.irq_scaler = 0;
+                self.irq_pending = false;
+            }
+            0xB000..=0xE00C => self.write_chr_nibble(address, value),
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) >> 10 & 0x07;
+        let page = self.chr_page(slot);
+        let offset = usize::from(address & 0x3FF);
+        if self.chr_is_ram(slot) {
+            self.chr_ram[(page & 0x01) * 0x400 + offset]
+        } else {
+            let bank = page % self.chr1_banks();
+            self.chr[bank * 0x400 + offset]
+        }
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) >> 10 & 0x07;
+        if self.chr_is_ram(slot) {
+            let page = self.chr_page(slot);
+            self.chr_ram[(page & 0x01) * 0x400 + usize::from(address & 0x3FF)] = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        253
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if !self.irq_enabled {
+            return;
+        }
+        self.irq_scaler += 1;
+        if self.irq_scaler >= 114 {
+            self.irq_scaler = 0;
+            self.irq_counter = self.irq_counter.wrapping_add(1);
+            if self.irq_counter == 0 {
+                self.irq_counter = self.irq_reload;
+                self.irq_pending = true;
+            }
+        }
     }
 }
 
@@ -14238,6 +14410,56 @@ mod tests {
         cart.cpu_write(0x8001, 0x00);
         cart.ppu_write(0x0200, 0x33);
         assert_eq!(cart.ppu_read(0x0200), 0x33);
+    }
+
+    #[test]
+    fn waixing253_banks_prg_chr_mirroring_and_irq() {
+        // 256 KiB PRG (32 x 8 KiB), 512 KiB CHR-ROM (512 x 1 KiB).
+        let rom = synth_banked(253, 256, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 253);
+
+        // $8000/$A000 are switched, $C000/$E000 fixed to the last two banks.
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xA000), 1);
+        assert_eq!(cart.cpu_read(0xC000), 30);
+        assert_eq!(cart.cpu_read(0xE000), 31);
+        cart.cpu_write(0x8010, 5);
+        cart.cpu_write(0xA010, 7);
+        assert_eq!(cart.cpu_read(0x8000), 5);
+        assert_eq!(cart.cpu_read(0xA000), 7);
+
+        // CHR slot 1: low byte at $B800, high byte/nibble at $B804 (the high
+        // write carries the page's upper byte in its high nibble and the low
+        // byte's high nibble in its low nibble): page 0x0103.
+        cart.cpu_write(0xB800, 0x03);
+        cart.cpu_write(0xB804, 0x10);
+        assert_eq!(cart.ppu_read(0x0400), 0x80 | (0x0103u16 & 0x7F) as u8);
+
+        // Four mirroring modes.
+        cart.cpu_write(0x9400, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0x9400, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x9400, 2);
+        assert_eq!(cart.mirroring(), Mirroring::SingleLower);
+        cart.cpu_write(0x9400, 3);
+        assert_eq!(cart.mirroring(), Mirroring::SingleUpper);
+
+        // /114 IRQ prescaler: reload 0xFF, counter 0xFF wraps to 0 and fires.
+        cart.cpu_write(0xF000, 0x0F); // low nibble
+        cart.cpu_write(0xF004, 0x0F); // high nibble -> reload 0xFF
+        cart.cpu_write(0xF008, 0x02);
+        assert!(!cart.irq_line());
+        for _ in 0..114 {
+            cart.clock_cpu();
+        }
+        assert!(
+            cart.irq_line(),
+            "IRQ did not fire after one prescaler period"
+        );
+        cart.cpu_write(0xF008, 0x00);
+        assert!(!cart.irq_line());
     }
 
     #[test]

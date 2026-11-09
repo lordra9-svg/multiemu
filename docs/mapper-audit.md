@@ -66,14 +66,25 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   renders the split at the correct line (frame 200: 7,030 -> 277 differing
   pixels, and the remaining difference is the sprite animation phase). The
   regression test `mmc3_irq_clocks_once_per_rendered_scanline` pins it.
+- **Waixing T9552 (253)** — 8 KiB PRG pages at `$8000`/`$A000` (`$8010`/
+  `$A010`) with the last two fixed at `$C000`/`$E000`; eight 1 KiB CHR pages
+  whose 16-bit bank values are assembled from low/high nibble writes across
+  `$B000-$E00C`; four mirroring modes at `$9400`; a CPU-clock IRQ with a /114
+  prescaler (`$F000`/`$F004` reload, `$F008` enable); and a 2 KiB CHR-RAM page
+  pair selected while a CHR low nibble is 4 or 5 (unless the `$88` signature
+  forces CHR-ROM). **6/6 images load, 3/6 render at 600 frames**; Dragon Ball Z
+  reaches its title screen correctly.
 - **Waixing FS309 (199, partial)** — MMC3 plus four extra registers written
   through `$8001` when `$8000` bit 3 is set: they force 8 KiB PRG slots 2/3
   (`$C000`/`$E000`) and 1 KiB CHR slots 1/3, while slots 0/2 use R0/R1. `$A000`
   selects four mirroring modes; the board has 8 KiB CHR-RAM. The general MMC3
   core also gained the Mesen `ResetMmc3` power-on register values and now keeps
   PRG-RAM readable when `$A001` bit 7 gates writes only. **6/6 images load, 1/6
-  renders at 600 frames**; the rest still stall/blank (control flow reaches
-  zeroed PRG-RAM), so the FS309 WRAM/outer-banking details need more work.
+  renders at 600 frames**. Tracing the stalls shows the local games only ever
+  write the *normal* MMC3 registers R0-R7 (never the extra ones), then jump to
+  `$5C42`/`$602A` in the `$4020-$7FFF` window; that region is open bus/WRAM
+  here, so they execute zeroed bytes. Resolving it needs the FS309 low-window
+  mapping (Mapper 195 has a `$5000` PRG-RAM window) or a Mesen reference run.
 - **Daou DIS23C01 (156)** — 16 KiB PRG banking (`$C010`, last bank fixed at
   `$C000`), eight 1 KiB CHR banks whose 16-bit registers are split across low
   and high nibble writes (`$C000-$C00F`, Mesen2's slot decode), 8 KiB work RAM
@@ -311,7 +322,6 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 | 222 | 6 | Dragon Ninja (CTC-31) / Super Bros. 8 | medium; two submappers |
 | 234 | 6 | Maxi 15 multicart, discrete logic + bus conflicts | small |
 | 249 | 6 | Waixing T9552 board | medium |
-| 253 | 6 | Waixing VRC4-based (Dragon Ball Z) | medium; reuses VRC4 |
 | 27 | 6 | Mi Hun Che / Super Car (32 KiB PRG, 8 KiB CHR) | undocumented; inspect |
 | 60 | 6 | 4-in-1 multicarts | small latch |
 | 85 | 6 | **VRC7** (Lagrange Point, Tiny Toon 2 JP) | implemented (exact instrument ROM patches) |
