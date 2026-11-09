@@ -2782,6 +2782,12 @@ struct Mmc5Audio {
     pulse2: Mmc5Pulse,
     pcm: u8,
     frame_divider: u32,
+    /// `$5010` bit 0: 1 = PCM read mode, 0 = write mode.
+    pcm_read_mode: bool,
+    /// `$5010` bit 7: PCM IRQ enable.
+    pcm_irq_enable: bool,
+    /// Set when a zero DAC update is seen; cleared by reading `$5010`.
+    pcm_irq_trip: bool,
 }
 
 impl Mmc5Audio {
@@ -2789,9 +2795,42 @@ impl Mmc5Audio {
         match address {
             0x5000..=0x5003 => self.pulse1.write(address - 0x5000, value),
             0x5004..=0x5007 => self.pulse2.write(address - 0x5004, value),
-            0x5011 if value != 0 => self.pcm = value,
+            0x5010 => {
+                self.pcm_read_mode = value & 0x01 != 0;
+                self.pcm_irq_enable = value & 0x80 != 0;
+            }
+            // Direct writes are ignored in PCM read mode; the DAC is fed by
+            // PRG reads in that mode.
+            0x5011 if !self.pcm_read_mode => self.dac_update(value),
             _ => {}
         }
+    }
+
+    /// A DAC update from `$5011` (write mode) or a `$8000-$BFFF` read (read
+    /// mode). A zero value leaves the DAC unchanged and trips the PCM IRQ.
+    fn dac_update(&mut self, value: u8) {
+        if value == 0 {
+            self.pcm_irq_trip = true;
+        } else {
+            self.pcm = value;
+            self.pcm_irq_trip = false;
+        }
+    }
+
+    /// `$5010` read: bit 7 is the latched IRQ, bit 0 reports MMC5A. Reading
+    /// acknowledges (clears) the trip.
+    fn read_mode_irq(&mut self) -> u8 {
+        let irq = u8::from(self.pcm_irq_trip && self.pcm_irq_enable);
+        self.pcm_irq_trip = false;
+        (irq << 7) | 0x01
+    }
+
+    fn pcm_read_mode(&self) -> bool {
+        self.pcm_read_mode
+    }
+
+    fn irq_active(&self) -> bool {
+        self.pcm_irq_trip && self.pcm_irq_enable
     }
 
     fn clock(&mut self) {
@@ -3073,7 +3112,7 @@ impl Mmc5 {
                 self.chr_upper = value & 0x03;
                 self.refresh_aux();
             }
-            0x5000..=0x5007 | 0x5011 => self.audio.write(address, value),
+            0x5000..=0x5007 | 0x5010 | 0x5011 => self.audio.write(address, value),
             0x5203 => self.irq_latch = value,
             0x5204 => {
                 if value & 0x80 != 0 {
@@ -3204,8 +3243,26 @@ impl Mapper for Mmc5 {
         self.refresh_aux();
     }
 
+    fn read_io(&mut self, address: u16) -> u8 {
+        // PCM read mode: every PRG-ROM read in `$8000-$BFFF` feeds the DAC;
+        // a zero read trips the PCM IRQ until `$5010` is read.
+        if (0x8000..=0xBFFF).contains(&address) && self.audio.pcm_read_mode() {
+            let value = self.prg_read(address);
+            self.audio.dac_update(value);
+            return value;
+        }
+        if address == 0x5010 {
+            return self.audio.read_mode_irq();
+        }
+        self.prg_read(address)
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
+    }
+
     fn irq_line(&self) -> bool {
-        self.irq_pending
+        self.irq_pending || self.audio.irq_active()
     }
 
     fn clock_scanline(&mut self) {
@@ -14217,6 +14274,45 @@ mod tests {
             assert_eq!(aux.split_tile(0, 0), Some(0x22));
             assert_eq!(aux.split_pattern(0, 0, 0, false), Some(0x2000));
         }
+    }
+
+    #[test]
+    fn mmc5_pcm_read_mode_irq() {
+        let rom = synth_banked(5, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+
+        // $5010 = read mode, IRQ enabled; bit 0 reads back as MMC5A revision 1.
+        cart.cpu_write(0x5010, 0x81);
+        // PRG mode 3: $5114 selects the 8 KiB bank at $8000-$9FFF. The synth
+        // image fills each bank with its index.
+        cart.cpu_write(0x5100, 3);
+        cart.cpu_write(0x5114, 0x81); // bit 7 = ROM, bank 1
+        assert_eq!(cart.cpu_read_io(0x8000), 1);
+        assert!(!cart.irq_line(), "nonzero read must not trip");
+
+        // Bank 0 is all zeros: a read trips the PCM IRQ.
+        cart.cpu_write(0x5114, 0x80); // bit 7 = ROM, bank 0 (all zeros)
+        assert_eq!(cart.cpu_read_io(0x8000), 0);
+        assert!(cart.irq_line(), "zero read should trip the PCM IRQ");
+        let status = cart.cpu_read_io(0x5010);
+        assert_eq!(status & 0x80, 0x80, "IRQ flag latched");
+        assert_eq!(status & 0x01, 0x01, "MMC5A revision bit");
+        assert!(!cart.irq_line(), "reading $5010 acknowledges the IRQ");
+
+        // Write mode: $5011 feeds the DAC and a zero write trips the IRQ.
+        cart.cpu_write(0x5010, 0x80);
+        cart.cpu_write(0x5011, 0x40);
+        assert!(!cart.irq_line());
+        cart.cpu_write(0x5011, 0x00);
+        assert!(cart.irq_line(), "zero DAC write should trip the IRQ");
+        assert_eq!(cart.cpu_read_io(0x5010) & 0x80, 0x80);
+        assert!(!cart.irq_line());
+
+        // With the IRQ disabled the zero update still trips, but the line
+        // stays released.
+        cart.cpu_write(0x5010, 0x00);
+        cart.cpu_read_io(0x8000);
+        assert!(!cart.irq_line());
     }
 
     #[test]

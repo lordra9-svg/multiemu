@@ -863,7 +863,7 @@ impl CpuBus for System {
                     self.cart.cpu_read(address)
                 }
             }
-            0x8000..=0xFFFF => self.cart.cpu_read(address),
+            0x8000..=0xFFFF => self.cart.cpu_read_io(address),
             _ => self.open_bus,
         };
         if drives_bus {

@@ -107,9 +107,12 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   (the PPU address API is 16-bit today, so boards above 256 KiB CHR still need
   a wider path). 8x16 sprite mode keeps separate background banks:
   `$5128-$512B` drive background fetches while `$5120-$5127` drive sprites.
+  The PCM DAC runs in both modes: `$5011` writes in write mode and
+  `$8000-$BFFF` PRG reads in read mode (`$5010` bit 0), and a zero update
+  trips the `$5010` IRQ, which is ORed onto the mapper IRQ line.
   11/37 render at 20 frames, 17/37 at 600 (one boot-time title is blank in
   ExRAM modes 2/3 now that the slot correctly reads zeros). Still missing:
-  the >256 KiB CHR path and the PCM read-mode IRQ.
+  the >256 KiB CHR path.
 - **Famicom Disk System (20)** — raw `.fds` loader plus a BIOS (both
   user-supplied): the 8 KiB BIOS maps at `$E000-$FFFF`, 32 KiB work RAM at
   `$6000-$DFFF`, and `$4020-$4097` carries the disk timer IRQ, disk/sound

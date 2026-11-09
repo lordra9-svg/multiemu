@@ -183,7 +183,7 @@ writes, and MMC1 bank switching.
 | Protected NROM (143) | NROM plus a `$4100-$5FFF` protection read of inverted low address bits |
 | Golden Game 235 | write-address latch: 32 KiB page, 16 KiB half, ROM chip, 1/2-screen mirroring |
 | Benshieng BMC-BS-5 (286) | address-latched 8 KiB PRG and 2 KiB CHR windows (partial; menus still blank) |
-| MMC5 (5) | PRG modes/CHR banking/IRQ, multiplier, per-slot `$5105` nametable mapping (CIRAM page 0/1, ExRAM, fill), split screen, extended attributes and two-pulse + PCM audio; >256 KiB CHR and the PCM read-mode IRQ remain |
+| MMC5 (5) | PRG modes/CHR banking/IRQ, multiplier, per-slot `$5105` nametable mapping (CIRAM page 0/1, ExRAM, fill), split screen, extended attributes, two-pulse + PCM audio (write/read DAC modes with the `$5010` IRQ); >256 KiB CHR remains |
 
 NES 2.0 PRG (16 KiB units) and CHR (8 KiB units) sizes are parsed correctly.
 
@@ -783,7 +783,10 @@ the dots 1-64 clear phase, which provides the seed.
   the two-pulse + PCM audio are implemented. `$5105` now maps each nametable
   slot independently to CIRAM page 0/1, ExRAM or fill, with ExRAM usable as a
   nametable only in `$5104` modes 0/1 (modes 2/3 read zeros), matching Mesen
-  and the wiki. The >256 KiB CHR path and the PCM read-mode IRQ remain.
+  and the wiki. The PCM channel now models both DAC modes: `$5011` writes in
+  write mode and `$8000-$BFFF` PRG reads in read mode (`$5010` bit 0), with a
+  zero update tripping the `$5010` IRQ that joins the mapper IRQ line. The
+  >256 KiB CHR path remains.
 - The differential oracle harness now compares per-frame RGBA8 hashes against
   a RustyNES capture (`trace --no-state` plus `diff`). Local results: the
   AccuracyCoin test image matches 49/60 frames; a commercial NROM title
