@@ -829,7 +829,17 @@ the dots 1-64 clear phase, which provides the seed.
   bit-identical for the first 38 frames of a local commercial title, and the
   NROM title reaches 226/300 identical audio hashes (299/300 video). The
   remaining divergence follows the last one-cycle frame-boundary difference,
-  which moves the audio drain point.
+  which moves the audio drain point. A per-cycle trace at the first divergent
+  frame shows every channel matching except one pulse-2 duty transition two
+  cycles late; the preceding `$4007` write lands at CPU cycle 1,154,224 here
+  and 1,154,223 in the reference, and that one-cycle absolute offset flips the
+  APU clock phase at the write. Fractional sub-cycle scheduling experiments
+  (the reference's (5,7)/(7,5) master-clock split around the bus access, and a
+  1-dot/2-dot pre/post split) did not improve frame alignment — they drifted
+  +1..+5 cycles from frame 3 — so the shipped 2-dot/1-dot split (frame starts
+  within ±1) is retained. Closing the gap requires the frame boundary to land
+  on the same CPU instruction as the reference, i.e., a master-clock CPU/PPU
+  scheduler rather than the current integer-dot split.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the
