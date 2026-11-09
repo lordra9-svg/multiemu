@@ -695,6 +695,7 @@ impl Cartridge {
             249 => Box::new(Mmc3_249::new(prg_rom, chr, header)),
             234 => Box::new(Maxi15::new(prg_rom, chr, header)),
             164 => Box::new(Waixing164::new(prg_rom, chr, header)),
+            222 => Box::new(Ctc222::new(prg_rom, chr, header)),
             193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
             172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
@@ -2576,6 +2577,117 @@ impl Mapper for Mmc3_199 {
 
     fn acknowledge_irq(&mut self) {
         self.inner.acknowledge_irq();
+    }
+}
+
+/// Dragon Ninja / CTC-31 (mapper 222): eight 1 KiB CHR banks and two
+/// switchable 8 KiB PRG banks with the last 16 KiB fixed, plus an IRQ that
+/// counts A12 rises (one per rendered scanline) and fires after 240.
+#[derive(Debug)]
+pub struct Ctc222 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_banks: [u8; 2],
+    chr_banks: [u8; 8],
+    mirroring: Mirroring,
+    irq_counter: u16,
+    irq_pending: bool,
+}
+
+impl Ctc222 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_banks: [0, 1],
+            chr_banks: [0; 8],
+            mirroring: header.mirroring,
+            irq_counter: 0,
+            irq_pending: false,
+        }
+    }
+
+    fn prg8_banks(&self) -> usize {
+        (self.prg.len() / 0x2000).max(1)
+    }
+
+    fn chr_banks(&self) -> usize {
+        (self.chr.len() / 0x400).max(1)
+    }
+}
+
+impl Mapper for Ctc222 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let banks = self.prg8_banks();
+        let bank = match address {
+            0x8000..=0x9FFF => usize::from(self.prg_banks[0]) % banks,
+            0xA000..=0xBFFF => usize::from(self.prg_banks[1]) % banks,
+            0xC000..=0xDFFF => banks.saturating_sub(2),
+            0xE000..=0xFFFF => banks - 1,
+            _ => return 0,
+        };
+        self.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0xF003 {
+            0x8000 => self.prg_banks[0] = value,
+            0x9000 => {
+                self.mirroring = if value & 0x01 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+            0xA000 => self.prg_banks[1] = value,
+            0xB000 => self.chr_banks[0] = value,
+            0xB002 => self.chr_banks[1] = value,
+            0xC000 => self.chr_banks[2] = value,
+            0xC002 => self.chr_banks[3] = value,
+            0xD000 => self.chr_banks[4] = value,
+            0xD002 => self.chr_banks[5] = value,
+            0xE000 => self.chr_banks[6] = value,
+            0xE002 => self.chr_banks[7] = value,
+            0xF000 => {
+                self.irq_counter = u16::from(value);
+                self.irq_pending = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) >> 10 & 0x07;
+        let bank = usize::from(self.chr_banks[slot]) % self.chr_banks();
+        self.chr[bank * 0x400 + usize::from(address & 0x3FF)]
+    }
+
+    fn chr_write(&mut self, _address: u16, _value: u8) {
+        // CHR-ROM board.
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        222
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_scanline(&mut self) {
+        // Each A12 rise (one per rendered scanline) advances the counter; after
+        // 240 it fires and restarts. A zero reload disables counting.
+        if self.irq_counter != 0 {
+            self.irq_counter += 1;
+            if self.irq_counter >= 240 {
+                self.irq_pending = true;
+                self.irq_counter = 0;
+            }
+        }
     }
 }
 
@@ -14776,6 +14888,48 @@ mod tests {
             "IRQ did not fire after one prescaler period"
         );
         cart.cpu_write(0xF008, 0x00);
+        assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn ctc222_banks_irq_and_mirroring() {
+        // 128 KiB PRG (16 x 8 KiB), 128 KiB CHR (128 x 1 KiB).
+        let rom = synth_banked(222, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 222);
+
+        // Power-on: slots 0/1 are 0/1, the last 16 KiB is fixed.
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xA000), 1);
+        assert_eq!(cart.cpu_read(0xC000), 14);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+
+        cart.cpu_write(0x8000, 5);
+        cart.cpu_write(0xA000, 6);
+        assert_eq!(cart.cpu_read(0x8000), 5);
+        assert_eq!(cart.cpu_read(0xA000), 6);
+
+        // CHR 1 KiB slots: $B000/$B002 select slots 0/1.
+        cart.cpu_write(0xB000, 4);
+        cart.cpu_write(0xB002, 5);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 4);
+        assert_eq!(cart.ppu_read(0x0400), 0x80 | 5);
+
+        // Mirroring.
+        cart.cpu_write(0x9000, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x9000, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+
+        // A12-rise IRQ: reload 1, fire on the 239th rise.
+        cart.cpu_write(0xF000, 1);
+        for _ in 0..238 {
+            cart.clock_scanline();
+        }
+        assert!(!cart.irq_line());
+        cart.clock_scanline();
+        assert!(cart.irq_line(), "IRQ did not fire after 239 A12 rises");
+        cart.cpu_write(0xF000, 0);
         assert!(!cart.irq_line());
     }
 
