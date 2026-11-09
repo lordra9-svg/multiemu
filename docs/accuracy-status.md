@@ -119,6 +119,7 @@ writes, and MMC1 bank switching.
 | UNROM-512 (30) | 16 KiB switchable + fixed last 16 KiB, 8 KiB CHR-RAM, one-screen/vertical/horizontal |
 | BNROM/NINA-001 (34) | 32 KiB PRG banking (BNROM bus conflicts) or NINA-001 32 KiB PRG + 4 KiB CHR |
 | Sachen SA-015 (150) | indexed register pair `$4100`/`$4101`: 32 KiB PRG, 8 KiB CHR, mirroring |
+| Daou DIS23C01 (156) | 16 KiB PRG banking, eight split-register 1 KiB CHR banks, 8 KiB WRAM, runtime H/V mirroring |
 | Sachen SA-008-A (148) | mapper 79 latch moved to `$8000-$FFFF`, bus conflicts |
 | Jaleco SS88006 (18) | VRC4-like 8 KiB PRG / 1 KiB CHR nibble-pair banking, CPU-cycle IRQ |
 | NINA-03/06 (79/146) | 32 KiB PRG + 8 KiB CHR via a single control register |

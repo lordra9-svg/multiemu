@@ -66,6 +66,13 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   renders the split at the correct line (frame 200: 7,030 -> 277 differing
   pixels, and the remaining difference is the sprite animation phase). The
   regression test `mmc3_irq_clocks_once_per_rendered_scanline` pins it.
+- **Daou DIS23C01 (156)** — 16 KiB PRG banking (`$C010`, last bank fixed at
+  `$C000`), eight 1 KiB CHR banks whose 16-bit registers are split across low
+  and high nibble writes (`$C000-$C00F`, Mesen2's slot decode), 8 KiB work RAM
+  at `$6000-$7FFF` and runtime vertical/horizontal mirroring (`$C014`,
+  power-on single-screen). **6/6 images load, 4/6 render at 600 frames**
+  (Metal Force, Koko Adventure, Janggun-ui Adeul and Street Hero); against the
+  reference, Metal Force matches on 118/120 video frames.
 - **Sachen JV001 (136)** — six-bit latch with adder/inverter; CHR from output
   bits 0-2, 32 KiB PRG from bit 4. **7/7** images render at 60 frames.
 - **Super Mega JV001 (172)** — the same latch with reversed CPU data bits and
@@ -289,7 +296,6 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 | Mapper | Images | Board / notes | Next step |
 |---:|---:|---|---|
 | 157 | 7 | Datach Joint ROM (barcode reader) | blocked on the peripheral |
-| 156 | 6 | Daou DIS23C01 (Korean) | distinct board; small |
 | 164 | 6 | Dongda PEC-9588 educational computer, CHR RAM | small/medium |
 | 168 | 6 | Racermate Challenge II + exercise bike | low value; peripheral |
 | 199 | 6 | Waixing FS309, MMC3-like + CHR RAM + IRQ | medium; shares MMC3 work |
@@ -300,7 +306,7 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 | 253 | 6 | Waixing VRC4-based (Dragon Ball Z) | medium; reuses VRC4 |
 | 27 | 6 | Mi Hun Che / Super Car (32 KiB PRG, 8 KiB CHR) | undocumented; inspect |
 | 60 | 6 | 4-in-1 multicarts | small latch |
-| 85 | 6 | **VRC7** (Lagrange Point, Tiny Toon 2 JP) | implemented (FM audio approximation) |
+| 85 | 6 | **VRC7** (Lagrange Point, Tiny Toon 2 JP) | implemented (exact instrument ROM patches) |
 | 303 | 6 | Kaiser KS-7017 (Armana no Kiseki) | likely related to KS7032 |
 
 Only **172** turned out to be an alias of an implemented board (Sachen JV001

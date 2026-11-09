@@ -689,6 +689,7 @@ impl Cartridge {
             10 => Box::new(Mmc2::new(prg_rom, chr, prg_ram, header, 10)),
             68 => Box::new(Sunsoft4::new(prg_rom, chr, prg_ram, header)),
             136 => Box::new(Sachen136::new(prg_rom, chr, header)),
+            156 => Box::new(Daou156::new(prg_rom, chr, header)),
             193 => Box::new(NtdTc112::new(prg_rom, chr, header)),
             172 => Box::new(Sachen136::new_172(prg_rom, chr, header)),
             197 => Box::new(Mmc3_197::new(prg_rom, chr, header)),
@@ -3337,6 +3338,126 @@ impl Mapper for Mmc5 {
 
     fn audio_mix(&self) -> f32 {
         self.audio.mix()
+    }
+}
+
+/// Daou Infosys (mapper 156): 16 KiB PRG banking, eight 1 KiB CHR banks with
+/// 16-bit bank registers split across low/high writes, 8 KiB work RAM and a
+/// runtime vertical/horizontal mirroring select.
+#[derive(Debug)]
+pub struct Daou156 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_bank: u8,
+    chr_lo: [u8; 8],
+    chr_hi: [u8; 8],
+    mirroring: Mirroring,
+}
+
+impl Daou156 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_ram: vec![0; header.prg_ram_size.max(0x2000)],
+            prg_bank: 0,
+            chr_lo: [0; 8],
+            chr_hi: [0; 8],
+            // DAOU/DIS23C01 powers on single-screen (lower nametable);
+            // `$C014` selects vertical/horizontal at runtime.
+            mirroring: Mirroring::SingleLower,
+        }
+    }
+
+    fn prg_banks(&self) -> usize {
+        (self.prg.len() / 0x4000).max(1)
+    }
+
+    fn chr_banks(&self) -> usize {
+        (self.chr.len() / 0x400).max(1)
+    }
+}
+
+impl Mapper for Daou156 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
+            0x8000..=0xBFFF => {
+                let bank = usize::from(self.prg_bank) % self.prg_banks();
+                self.prg[bank * 0x4000 + usize::from(address & 0x3FFF)]
+            }
+            0xC000..=0xFFFF => {
+                let bank = self.prg_banks() - 1;
+                self.prg[bank * 0x4000 + usize::from(address & 0x3FFF)]
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x6000..=0x7FFF => {
+                let index = usize::from(address - 0x6000) % self.prg_ram.len();
+                self.prg_ram[index] = value;
+            }
+            // 16 CHR-bank-nibble registers at `$C000-$C00F`. The 1 KiB slot is
+            // `(addr & 3) + (addr >= $C008 ? 4 : 0)`; bit 2 selects the high
+            // nibble. This is the Mesen2 decode, not a flat lo/hi split.
+            0xC000..=0xC00F => {
+                let slot = usize::from((address & 0x03) + if address >= 0xC008 { 4 } else { 0 });
+                if address & 0x04 != 0 {
+                    self.chr_hi[slot] = value;
+                } else {
+                    self.chr_lo[slot] = value;
+                }
+            }
+            0xC010 => self.prg_bank = value,
+            0xC014 => {
+                self.mirroring = if value & 0x01 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) >> 10 & 0x07;
+        let bank = (usize::from(self.chr_lo[slot]) | (usize::from(self.chr_hi[slot]) << 8))
+            % self.chr_banks();
+        self.chr[bank * 0x400 + usize::from(address & 0x3FF)]
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        // CHR-ROM boards ignore writes; CHR-RAM headers are handled by the
+        // shared CHR-RAM path.
+        if self.chr.is_empty() {
+            return;
+        }
+        let slot = usize::from(address) >> 10 & 0x07;
+        let bank = (usize::from(self.chr_lo[slot]) | (usize::from(self.chr_hi[slot]) << 8))
+            % self.chr_banks();
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        156
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
     }
 }
 
@@ -13995,6 +14116,35 @@ mod tests {
         cart.cpu_write(0x8001, 0x00);
         cart.ppu_write(0x0200, 0x33);
         assert_eq!(cart.ppu_read(0x0200), 0x33);
+    }
+
+    #[test]
+    fn daou156_banks_prg_chr_mirroring_and_ram() {
+        let rom = synth_banked(156, 64, 8);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 156);
+
+        // $8000 is the switchable 16 KiB bank, $C000 the fixed last bank.
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 6); // 16 KiB bank 3 -> 8 KiB bank 6
+        cart.cpu_write(0xC010, 2);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+
+        // CHR slot 0: low nibble at $C000, high nibble at $C004.
+        cart.cpu_write(0xC000, 0x03);
+        cart.cpu_write(0xC004, 0x01); // bank 0x0103, wrapped to 3 of 8
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 3);
+
+        // $6000-$7FFF work RAM.
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+
+        // Power-on single-screen, then $C014 selects H/V.
+        assert_eq!(cart.mirroring(), Mirroring::SingleLower);
+        cart.cpu_write(0xC014, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0xC014, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
     }
 
     #[test]
