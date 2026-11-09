@@ -164,7 +164,7 @@ writes, and MMC1 bank switching.
 | HP-898F (319) | two 16 KiB PRG windows, mirroring and 8 KiB CHR bank from `$6000`/`$6004` |
 | FDS conversions (108) | 8 KiB bank at `$6000-$7FFF`, fixed last 32 KiB, CHR-RAM/ROM variant |
 | Konami VRC6 (24/26) | 16 KiB + 8 KiB PRG, eight 1 KiB CHR banks, PPU banking/mirroring, VRC cycle/scanline IRQ, two-pulse + sawtooth expansion audio |
-| Konami VRC7 (85) | 8 KiB PRG, eight 1 KiB CHR banks, shared banked CHR-RAM window, mirroring/WRAM-enable, VRC cycle/scanline IRQ, six-channel two-operator FM audio (approximate built-in patches) |
+| Konami VRC7 (85) | 8 KiB PRG, eight 1 KiB CHR banks, shared banked CHR-RAM window, mirroring/WRAM-enable, VRC cycle/scanline IRQ, six-channel two-operator FM audio with the documented VRC7 instrument ROM patches |
 | Irem G-101 (32) | two 8 KiB PRG banks with switchable/fixed pair, eight 1 KiB CHR banks, mirroring/PRG-mode |
 | Taito TC0690 (48) | TC0190-style PRG/CHR banking plus inverted-reload MMC3-style IRQ |
 | Jaleco JF-13 (86) | GNROM-style 32 KiB PRG / 8 KiB CHR latch at `$6000-$6FFF` (speech chip not modelled) |
@@ -850,10 +850,11 @@ the dots 1-64 clear phase, which provides the seed.
   implemented: two APU-style pulses with the 7-bit length table, envelope and
   the fixed ~240 Hz frame clock, plus the held `$5011` PCM DAC. The VRC7
   (mapper 85) six-channel FM engine is implemented with the custom patch
-  registers and key-on/key-off/silence handling; its built-in instrument table
-  is an approximation of the YM2413 patch ROM. The VRC7 CHR-RAM board shares
-  its banked window with the PPU, and its local title matches the reference
-  video on 296/300 frames. The FDS wavetable/modulation audio device is also
+  registers, key-on/key-off/silence handling and the documented VRC7
+  instrument ROM patches (15 built-ins; the modulator waveform is bit 3 and
+  the carrier waveform bit 4 of `$03`). The VRC7 CHR-RAM board shares its
+  banked window with the PPU, and its local title now matches the reference
+  on 299/300 video frames (243/300 audio hashes). The FDS wavetable/modulation audio device is also
   implemented (`FdsAudio`: wave RAM, volume/mod envelopes, modulation table,
   `$4023` enable/reset) and unit-tested. A raw loader (`System::from_fds`)
   and a complete mapper 20 board map the 8 KiB BIOS at `$E000-$FFFF`, 32 KiB

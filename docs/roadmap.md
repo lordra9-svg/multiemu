@@ -51,8 +51,8 @@ The main effort is now the reference-parity accuracy core. Details in
       pulses + sawtooth), Sunsoft 5B / YM2149 (three tones + noise + envelope)
       Namco 163 (up to eight wave channels, shared $40-$7F sound RAM), MMC5
       (two pulses + PCM DAC) and the VRC7/YM2413 two-operator FM engine are
-      implemented with unit tests (the built-in VRC7 patch table is an
-      approximation; the custom patch registers are exact).
+      implemented with unit tests; the VRC7 built-in patch table is the
+      documented instrument ROM dump and the custom patch registers are exact.
 - [x] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
       all 151 rows: **146 pass, 0 fail, 5 DRAW skips, 0 unrun** — every
       non-DRAW test passes. `$2007 Stress Test` was closed with the PPU data

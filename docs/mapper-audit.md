@@ -141,7 +141,9 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   visible to rendering. Expansion audio is a six-channel, two-operator FM
   engine with the custom patch registers `$00-$07`, `$9010`/`$9030`
   selection, key-on/key-off, octave/frequency, per-channel instrument/volume
-  and an approximate built-in instrument table. Audio silence clears all
+  and the exact VRC7 instrument ROM patch table (all 15 built-in patches,
+  with the carrier waveform on bit 4 and the modulator waveform on bit 3 of
+  `$03` as documented). Audio silence clears all
   state. **6/6** images load; 1/6 renders at 20 frames and 2/6 at 600 (the
   CHR-RAM title now renders; the others are Tiny Toon variants whose board
   lacks the audio resonator and whose boot screens need more frames). The
