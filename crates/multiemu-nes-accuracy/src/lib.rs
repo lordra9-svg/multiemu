@@ -18,6 +18,7 @@ pub mod clock;
 pub mod cpu;
 pub mod nsf;
 pub mod ppu;
+pub mod resampler;
 pub mod system;
 
 pub use accuracycoin::{
@@ -30,4 +31,5 @@ pub use clock::{Region, Timing};
 pub use cpu::{Cpu, Registers, Status};
 pub use nsf::{Nsf, NsfError, NsfHeader};
 pub use ppu::Ppu;
+pub use resampler::Resampler;
 pub use system::System;

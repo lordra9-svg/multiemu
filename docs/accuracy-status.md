@@ -811,6 +811,14 @@ the dots 1-64 clear phase, which provides the seed.
   differing pixels; frame 299 matches the reference's next frame to within 8
   pixels). The regression test `mmc3_irq_clocks_once_per_rendered_scanline`
   pins the ~17-scanline latency of a latch of 16.
+- The output audio chain now matches the reference architecture: the mixer
+  formula was aligned (95.52/8128 pulse, 163.67/24329 `3*tri+2*noise+dmc`),
+  and samples pass through a 256-phase/32-tap windowed-sinc BLEP decimator to
+  44.1 kHz followed by the 90 Hz/440 Hz high-pass and 14 kHz low-pass stages
+  (new `resampler` module with unit tests). Audio is no longer a DC-shifted
+  box average. Sample counts align with the reference over 120 frames with a
+  one-frame drain offset; exact sample hashes still differ because per-cycle
+  APU channel timing differs slightly.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the

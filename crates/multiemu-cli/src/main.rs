@@ -583,7 +583,13 @@ fn run() -> Result<(), Box<dyn Error>> {
             let (_, rom) = load_arg(&path)?;
             let registry = registry();
             let mut core = create_core(&registry, core_id.as_deref())?;
-            core.load(&rom, &LoadOptions::default())?;
+            // The reference captures run at 44.1 kHz; use the same rate so
+            // per-frame audio sample counts are comparable.
+            let options = LoadOptions {
+                sample_rate: 44_100.0,
+                ..LoadOptions::default()
+            };
+            core.load(&rom, &options)?;
             let info = core.info();
             let mut text = String::from("# multiemu trace v1\n");
             text.push_str(&format!("core {}\n", info.id));

@@ -181,9 +181,15 @@ multiemu diff video.trace reference.trace --skip 28 --video
 ok: 272 frames (from 28, state not compared)
 ```
 
-Audio hashes do not match the reference yet: the two cores use different
-sample rates and mixer output scaling, so audio parity remains a separate
-task even when every video frame matches.
+Audio now uses the same architecture as the reference: the non-linear mixer's
+per-CPU-cycle value goes through a 256-phase, 32-tap Blackman-windowed-sinc
+BLEP decimator to 44.1 kHz, then the NES front-loader's 90 Hz/440 Hz
+high-pass and 14 kHz low-pass sections. The trace runs at 44.1 kHz to match.
+Over 120 frames the sample counts line up with a one-frame drain offset
+(88,037 vs 87,304); the *values* still differ, so audio hashes do not match
+yet. The per-frame waveforms correlate (best-lag mean absolute error
+0.02-0.05), which points at remaining per-cycle APU channel-timing
+differences rather than the resampler.
 - `run <rom> --dump-ppu` / `--break <hex>` — per-frame CPU/PPU/APU state and a
   PC breakpoint.
 

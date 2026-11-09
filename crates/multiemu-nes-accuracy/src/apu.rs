@@ -36,7 +36,7 @@ const PULSE_MIX: [f32; 31] = {
     while i < 31 {
         let pulse = i as f32;
         table[i] = if pulse > 0.0 {
-            95.88 / (8128.0 / pulse + 100.0)
+            95.52 / (8128.0 / pulse + 100.0)
         } else {
             0.0
         };
@@ -45,14 +45,14 @@ const PULSE_MIX: [f32; 31] = {
     table
 };
 
-/// Mixer output for each possible triangle+noise+DMC sum (0..=157).
-const TND_MIX: [f32; 158] = {
-    let mut table = [0.0f32; 158];
+/// Mixer output for each possible `3*triangle + 2*noise + DMC` sum (0..=202).
+const TND_MIX: [f32; 203] = {
+    let mut table = [0.0f32; 203];
     let mut i = 0;
-    while i < 158 {
+    while i < 203 {
         let tnd = i as f32;
         table[i] = if tnd > 0.0 {
-            159.79 / (1.0 / (tnd / 8227.0) + 100.0)
+            163.67 / (24329.0 / tnd + 100.0)
         } else {
             0.0
         };
@@ -1058,11 +1058,11 @@ impl Apu {
         // Exact lookup of the two non-linear mixer curves; the sums are
         // integer-valued channel outputs so the tables reproduce the formula
         // bit-for-bit without the per-cycle divisions.
-        let pulse = self.pulse1.output() + self.pulse2.output();
-        let tnd = self.triangle.output() + self.noise.output() + self.dmc.output();
-        let pulse_index = (pulse as usize).min(PULSE_MIX.len() - 1);
-        let tnd_index = (tnd as usize).min(TND_MIX.len() - 1);
-        PULSE_MIX[pulse_index] + TND_MIX[tnd_index]
+        let pulse = (self.pulse1.output() + self.pulse2.output()) as usize;
+        let tnd = 3 * self.triangle.output() as usize
+            + 2 * self.noise.output() as usize
+            + self.dmc.output() as usize;
+        PULSE_MIX[pulse.min(PULSE_MIX.len() - 1)] + TND_MIX[tnd.min(TND_MIX.len() - 1)]
     }
 
     /// Current frame-counter position `(step, cycle)`.
@@ -1085,9 +1085,9 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn mixer_uses_the_nonlinear_curves() {
-        let pulse_15 = 95.88 / (8128.0 / 15.0 + 100.0);
+        let pulse_15 = 95.52 / (8128.0 / 15.0 + 100.0);
         assert!((PULSE_MIX[15] - pulse_15).abs() < 1e-6);
-        let tnd_82 = 159.79 / (1.0 / (82.0 / 8227.0) + 100.0);
+        let tnd_82 = 163.67 / (24329.0 / 82.0 + 100.0);
         assert!((TND_MIX[82] - tnd_82).abs() < 1e-6);
         // The curve is compressive: doubling the sum does not double the output.
         assert!(PULSE_MIX[20] < 2.0 * PULSE_MIX[10]);

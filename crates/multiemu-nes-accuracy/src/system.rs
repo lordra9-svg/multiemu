@@ -42,10 +42,8 @@ pub struct System {
     shift: [u8; 2],
     frame: Vec<u8>,
     audio: Vec<f32>,
-    audio_accum: f32,
-    audio_count: u32,
     audio_rate: f32,
-    sample_cycle: u32,
+    resampler: crate::resampler::Resampler,
     open_bus: u8,
     /// Internal 2A03 data bus (drives $4015 bit 5, not the external bus).
     internal_bus: u8,
@@ -173,10 +171,8 @@ impl System {
             shift: [0; 2],
             frame: vec![0; 256 * 240 * 4],
             audio: Vec::with_capacity(1024),
-            audio_accum: 0.0,
-            audio_count: 0,
-            audio_rate: 48_000.0,
-            sample_cycle: 0,
+            audio_rate: 44_100.0,
+            resampler: crate::resampler::Resampler::new(44_100, 1_789_773.0),
             open_bus: 0,
             internal_bus: 0,
             stall_cycles: 0,
@@ -199,6 +195,7 @@ impl System {
         cpu.reset(self);
         self.cpu = cpu;
         self.apu = Apu::new();
+        self.resampler.reset();
         self.ram = [0; 0x800];
     }
 
@@ -229,7 +226,8 @@ impl System {
     pub fn set_sample_rate(&mut self, rate: f32) {
         if rate > 0.0 {
             self.audio_rate = rate;
-            self.sample_cycle = (self.timing.cpu_hz() as f64 / f64::from(rate)).round() as u32;
+            self.resampler =
+                crate::resampler::Resampler::new(rate.round() as u32, self.timing.cpu_hz() as f64);
         }
     }
 
@@ -312,6 +310,7 @@ impl System {
             }
         }
         self.frame = self.ppu.render_frame();
+        self.resampler.drain_into(&mut self.audio);
         steps
     }
 
@@ -442,15 +441,8 @@ impl System {
     }
 
     fn mix_sample(&mut self) {
-        self.audio_accum += self.apu.output + self.cart.audio_mix();
-        self.audio_count += 1;
-        if self.audio_count >= self.sample_cycle.max(1) {
-            let sample = self.audio_accum / self.audio_count as f32;
-            // Normalise the mixer's 0..~95 range to -1..1 around the midpoint.
-            self.audio.push((sample / 50.0) - 1.0);
-            self.audio_accum = 0.0;
-            self.audio_count = 0;
-        }
+        self.resampler
+            .add_sample(self.apu.output + self.cart.audio_mix());
     }
 
     /// Starts or steps the DMA engine for one CPU cycle.
@@ -1179,6 +1171,31 @@ mod tests {
         // frames (the constant two-iteration start-up offset is present with
         // and without DMC, so it is not DMA-related).
         assert_eq!(without_dmc - with_dmc, 10126);
+    }
+
+    #[test]
+    fn system_audio_runs_at_the_requested_rate() {
+        // A trivial NROM loop; the audio stream should be produced at 44.1 kHz
+        // through the band-limited resampler (~734 samples per NTSC frame).
+        let mut prg = vec![0x4Cu8, 0x00, 0x80];
+        prg.resize(0x4000, 0xEA);
+        prg[0x3FFC] = 0x00;
+        prg[0x3FFD] = 0x80;
+        let mut rom = vec![0u8; 16 + prg.len() + 0x2000];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 1;
+        rom[5] = 1;
+        rom[16..16 + prg.len()].copy_from_slice(&prg);
+
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_sample_rate(44_100.0);
+        system.run_frame();
+        let n = system.audio().len();
+        assert!(
+            (700..=760).contains(&n),
+            "44.1 kHz frame produced {n} samples"
+        );
+        assert!(system.audio().iter().all(|s| s.is_finite()));
     }
 
     #[test]
