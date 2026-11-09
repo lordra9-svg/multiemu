@@ -882,9 +882,14 @@ the dots 1-64 clear phase, which provides the seed.
   introduced at a frame boundary, which changes where the audio drain slices
   fall relative to the APU write. This is consistent with the wrap-cycle
   measurements above and confirms that further CPU-timing work cannot close the
-  gap; only exact frame-boundary phase alignment can. Closing the gap requires a coupled master-clock CPU/PPU scheduler that
-  matches both the wrap cycle and the per-instruction access sub-cycle, not a
-  reset-phase adjustment. The coupled master-clock scheduler was also built
+  gap; only exact frame-boundary phase alignment can. An early frame-complete
+  latch (raise a completion epoch N dots before the pre-render wrap while
+  leaving the rendering dot phase untouched) was also swept over N=1..8:
+  every lead is worse than N=0 (SMB video 298 vs 299 and audio 206-224 vs 226;
+  Zelda audio 24-28 vs 28), so taking completion at the actual wrap remains
+  optimal. Closing the gap requires a coupled master-clock CPU/PPU scheduler
+  that matches both the wrap cycle and the per-instruction access sub-cycle,
+  not a reset-phase or latch adjustment. The coupled master-clock scheduler was also built
   and measured directly: installing the reference's per-bus-access split
   (reads 5/7, writes 7/5 master clocks) and sweeping the PPU master-clock
   offset over 0-3 gives SMB 297-298/300 video and 204-216/300 audio, versus
