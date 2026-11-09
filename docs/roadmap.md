@@ -14,8 +14,11 @@ The main effort is now the reference-parity accuracy core. Details in
       `oam_read`, `oam_stress` and `sprite_ram` pass.
 - [x] **A3** APU + DMC: all 13 blargg APU/DMC ROMs in the suite pass
       (length/IRQ/jitter/reset/halt/reload, DMC basics/rates). The nonlinear
-      mixer curves are implemented and unit-tested; DMC DMA cycle-stealing
-      remains as a follow-up.
+      mixer curves are implemented and unit-tested. DMC DMA cycle stealing is
+      validated by a synthetic reference benchmark: over 300 frames the same
+      10,126 loop iterations are stolen with and without DMC (the only
+      difference is a two-iteration start-up offset, present with DMC off too).
+      The abort/interleave edge cases remain.
 - [ ] **A4** top 30 mapper families + commercial oracle corpus. Progress:
       NROM/MMC1/UxROM/CNROM/MMC3(+IRQ)/AxROM/VRC(+IRQ)/Color Dreams/CPROM/
       GxROM/Camerica/UNROM-512/NINA/DxROM/Nanjing-163/Sunsoft-FME7/Sachen/

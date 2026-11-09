@@ -76,9 +76,14 @@ length counters with deferred reload/halt, mixer, and IRQ line.
 | `dmc_basics` | pass |
 | `dmc_rates` | pass |
 
-Remaining A3 follow-up: mixer-level scoring against the reference and the
-DMC DMA cycle-stealing tests (`dmc_latency`, `dmc_dma_*`), which need the
-system bus rather than the APU-only harness.
+Remaining A3 follow-up: mixer-level scoring against the reference. DMC DMA
+cycle stealing is now covered by a system-level differential benchmark: a
+synthetic NROM loops a 16-bit counter while the DMC loops a one-byte sample,
+and the reference (RustyNES) and this core steal exactly the same 10,126 loop
+iterations over 300 frames (64,388 without DMC vs 54,262 with DMC here,
+64,390 vs 54,264 in the reference; the constant two-iteration start-up offset
+is also present with DMC disabled). The `$4015` abort and OAM/DMC interleave
+edge cases remain.
 
 
 ## A4 — mappers (started)

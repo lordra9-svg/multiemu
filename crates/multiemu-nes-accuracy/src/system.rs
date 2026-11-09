@@ -1106,6 +1106,52 @@ mod tests {
     }
 
     #[test]
+    fn dmc_dma_stealing_matches_the_reference_benchmark() {
+        // A synthetic NROM that loops incrementing a 16-bit counter while the
+        // DMC plays a looping one-byte sample at the fastest rate. The loop
+        // count difference against the DMC-disabled variant is the number of
+        // CPU iterations eaten by DMC cycle stealing.
+        fn rom(enable: u8) -> Vec<u8> {
+            let mut prg = vec![0xEAu8; 0x4000];
+            let code = [
+                0x78, 0xD8, 0xA2, 0xFF, 0x9A, 0xA9, 0x00, 0x85, 0x00, 0x85, 0x01, 0xA9, 0x4F, 0x8D,
+                0x10, 0x40, 0xA9, 0x00, 0x8D, 0x11, 0x40, 0x8D, 0x12, 0x40, 0x8D, 0x13, 0x40, 0xA9,
+                enable, 0x8D, 0x15, 0x40, 0xE6, 0x00, 0xD0, 0xFC, 0xE6, 0x01, 0x4C, 0x20, 0x80,
+            ];
+            prg[..code.len()].copy_from_slice(&code);
+            prg[0x3FFA] = 0x00;
+            prg[0x3FFB] = 0x80;
+            prg[0x3FFC] = 0x00;
+            prg[0x3FFD] = 0x80;
+            prg[0x3FFE] = 0x00;
+            prg[0x3FFF] = 0x80;
+            let mut rom = vec![0u8; 16 + prg.len() + 0x2000];
+            rom[0..4].copy_from_slice(b"NES\x1a");
+            rom[4] = 1;
+            rom[5] = 1;
+            rom[16..16 + prg.len()].copy_from_slice(&prg);
+            rom
+        }
+
+        let mut enabled = System::from_ines(&rom(0x10)).expect("load");
+        let mut disabled = System::from_ines(&rom(0x00)).expect("load");
+        for _ in 0..300 {
+            enabled.run_frame();
+            disabled.run_frame();
+        }
+        let count =
+            |system: &System| u16::from(system.read_ram(0)) | (u16::from(system.read_ram(1)) << 8);
+        let with_dmc = count(&enabled);
+        let without_dmc = count(&disabled);
+        assert_eq!(without_dmc, 64388);
+        assert_eq!(with_dmc, 54262);
+        // The reference steals the same 10,126 loop iterations over 300
+        // frames (the constant two-iteration start-up offset is present with
+        // and without DMC, so it is not DMA-related).
+        assert_eq!(without_dmc - with_dmc, 10126);
+    }
+
+    #[test]
     fn mmc5_eight_by_sixteen_background_banks_are_separate() {
         let prg_len = 128 * 1024;
         let chr_len = 64 * 1024;
