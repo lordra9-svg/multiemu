@@ -816,13 +816,18 @@ the dots 1-64 clear phase, which provides the seed.
   and samples pass through a 256-phase/32-tap windowed-sinc BLEP decimator to
   44.1 kHz followed by the 90 Hz/440 Hz high-pass and 14 kHz low-pass stages
   (new `resampler` module with unit tests). Audio is no longer a DC-shifted
-  box average. The pulse duty sequencers now clock at the APU rate (every
-  other CPU cycle; they previously ran at the CPU rate for double pitch), so
-  pulse transition periods match the reference exactly. Sample counts align
-  over 120 frames with a one-frame drain offset and a zero-sample lag when
-  pairing frame N with the reference's N+1; the per-sample mean absolute
-  error is ~0.003, but exact audio hashes still differ because of a remaining
-  ~9-11 cycle per-channel phase offset.
+  box average. The pulse duty sequencers clock at the APU rate, the triangle
+  DAC always outputs the current sequencer step (the length/linear counters
+  only freeze stepping) and freezes on periods below 2, and the system models
+  the console power-on phase (PPU pre-render/dot 340) plus the one-frame
+  post-reset warm-up window that ignores `$2000`/`$2001`/`$2005`/`$2006`
+  writes. `run_frame` reports the reset's power-on frame without executing, so
+  frame indices match reference captures. The per-cycle channel outputs and
+  mixed value are now bit-identical on compared frames; audio samples are
+  bit-identical for the first 38 frames of a local commercial title, and the
+  NROM title reaches 242/300 identical audio hashes (298/300 video). The
+  remaining divergence follows a rare per-cycle event landing on a different
+  frame boundary.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the

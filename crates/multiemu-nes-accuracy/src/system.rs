@@ -48,6 +48,9 @@ pub struct System {
     /// Internal 2A03 data bus (drives $4015 bit 5, not the external bus).
     internal_bus: u8,
     stall_cycles: u32,
+    /// The reset sequence already completed the power-on frame, so the first
+    /// `run_frame` reports that frame without executing another one.
+    first_frame_pending: bool,
     rmw_dummy: bool,
     /// A DMA used the bus on the current CPU cycle.
     dma_event: bool,
@@ -131,6 +134,10 @@ impl System {
         let mirroring = matches!(cart.mirroring(), Mirroring::Vertical);
         let chr_ram = cart.chr_is_ram();
         let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], mirroring, chr_ram);
+        // The full system models the console's power-on phase: the PPU starts
+        // at the end of the pre-render line (matching the reference capture).
+        ppu.scanline = Timing::NTSC.scanlines - 1;
+        ppu.dot = 340;
         ppu.mirroring = cart.mirroring();
         for address in 0..0x2000u16 {
             ppu.chr[usize::from(address)] = cart.ppu_read(address);
@@ -176,6 +183,7 @@ impl System {
             open_bus: 0,
             internal_bus: 0,
             stall_cycles: 0,
+            first_frame_pending: true,
             rmw_dummy: false,
             dma_event: false,
             cpu_pc: 0,
@@ -298,6 +306,11 @@ impl System {
     pub fn run_frame(&mut self) -> u32 {
         self.sync_cartridge();
         self.audio.clear();
+        if self.first_frame_pending {
+            self.first_frame_pending = false;
+            self.frame = self.ppu.render_frame();
+            return 0;
+        }
         let start = self.ppu.frames;
         let mut steps = 0u32;
         while self.ppu.frames == start && steps < 2_000_000 {
@@ -996,6 +1009,9 @@ mod tests {
         let rom = fs::read(path).expect("rom");
         let mut system = System::from_ines(&rom).expect("load");
         assert_eq!(system.cart.mapper(), 0);
+        // The reset sequence already finished the power-on frame; the first
+        // call reports it without running.
+        system.run_frame();
         let start = system.ppu.frames;
         let steps = system.run_frame();
         assert!(steps > 0, "CPU stalled");
@@ -1157,7 +1173,10 @@ mod tests {
 
         let mut enabled = System::from_ines(&rom(0x10)).expect("load");
         let mut disabled = System::from_ines(&rom(0x00)).expect("load");
-        for _ in 0..300 {
+        // The first `run_frame` reports the power-on frame that the reset
+        // sequence already completed, so 301 calls cover 300 executed frames
+        // — the same window the reference capture measures.
+        for _ in 0..301 {
             enabled.run_frame();
             disabled.run_frame();
         }
@@ -1165,11 +1184,11 @@ mod tests {
             |system: &System| u16::from(system.read_ram(0)) | (u16::from(system.read_ram(1)) << 8);
         let with_dmc = count(&enabled);
         let without_dmc = count(&disabled);
-        assert_eq!(without_dmc, 64388);
-        assert_eq!(with_dmc, 54262);
+        assert_eq!(without_dmc, 64390);
+        assert_eq!(with_dmc, 54264);
         // The reference steals the same 10,126 loop iterations over 300
-        // frames (the constant two-iteration start-up offset is present with
-        // and without DMC, so it is not DMA-related).
+        // executed frames (the constant start-up offset is present with and
+        // without DMC, so it is not DMA-related).
         assert_eq!(without_dmc - with_dmc, 10126);
     }
 
@@ -1189,6 +1208,7 @@ mod tests {
 
         let mut system = System::from_ines(&rom).expect("load");
         system.set_sample_rate(44_100.0);
+        system.run_frame(); // power-on frame (no cycles)
         system.run_frame();
         let n = system.audio().len();
         assert!(

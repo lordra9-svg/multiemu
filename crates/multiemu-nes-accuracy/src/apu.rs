@@ -278,6 +278,10 @@ impl Triangle {
     }
 
     fn clock_timer(&mut self) {
+        // Periods below 2 freeze the sequencer (ultrasonic silence).
+        if self.timer < 2 {
+            return;
+        }
         if self.timer_counter == 0 {
             self.timer_counter = self.timer;
             if self.length > 0 && self.linear > 0 {
@@ -306,11 +310,9 @@ impl Triangle {
     }
 
     fn output(&self) -> f32 {
-        if !self.enabled || self.length == 0 || self.linear == 0 {
-            0.0
-        } else {
-            f32::from(TRIANGLE[usize::from(self.step)])
-        }
+        // The DAC always outputs the current sequencer step; the length and
+        // linear counters only gate whether the sequencer advances.
+        f32::from(TRIANGLE[usize::from(self.step)])
     }
 }
 

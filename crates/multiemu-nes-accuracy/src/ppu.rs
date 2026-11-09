@@ -130,6 +130,9 @@ pub struct Ppu {
     nt_rom: Vec<u8>,
     /// Two 1 KiB CHR nametable bank indices when ROM nametables are enabled.
     nt_banks: Option<[u16; 2]>,
+    /// PPU dots remaining in the post-reset warm-up window; while non-zero,
+    /// writes to `$2000`/`$2001`/`$2005`/`$2006` are ignored (NES model).
+    warmup_dots: u32,
     /// Whether CHR is writable RAM.
     pub chr_ram: bool,
     /// Nametable mirroring.
@@ -275,6 +278,13 @@ impl Ppu {
             scanline: 0,
             dot: 40,
             frames: 0,
+            // NTSC warms up for 29,658 CPU cycles, PAL/Dendy for 33,132;
+            // the PPU advances three dots per CPU cycle.
+            warmup_dots: (if timing.cpu_hz() > 1_700_000 {
+                29_658u32
+            } else {
+                33_132u32
+            }) * 3,
             vram: [0; 0x1000],
             palette: [0; 32],
             // Palette RAM powers on to index 0, so the backdrop starts as
@@ -496,8 +506,14 @@ impl Ppu {
         }
     }
 
+    /// Ends the post-reset warm-up window immediately.
+    pub fn end_warmup(&mut self) {
+        self.warmup_dots = 0;
+    }
+
     /// Advances one PPU dot.
     pub fn step_dot(&mut self) {
+        self.warmup_dots = self.warmup_dots.saturating_sub(1);
         if let Some(value) = self.pending_mask {
             if self.mask_delay == 0 {
                 self.mask = value;
@@ -839,6 +855,10 @@ impl Ppu {
     pub fn write_register(&mut self, index: u16, value: u8) {
         self.io_bus = value;
         self.io_bus_age = 0;
+        // The 2C02 ignores these writes for about one frame after reset.
+        if self.warmup_dots > 0 && matches!(index & 7, 0 | 1 | 5 | 6) {
+            return;
+        }
         match index & 7 {
             0 => {
                 let was_enabled = self.ctrl & 0x80 != 0;
@@ -1994,7 +2014,9 @@ mod tests {
     use super::*;
 
     fn ppu() -> Ppu {
-        Ppu::new(Timing::NTSC, vec![0; 0x2000], true, false)
+        let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], true, false);
+        ppu.end_warmup();
+        ppu
     }
 
     #[test]

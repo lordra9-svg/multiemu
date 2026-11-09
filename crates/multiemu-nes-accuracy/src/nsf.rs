@@ -137,7 +137,13 @@ impl Nsf {
 
     /// Builds a running [`System`] for this NSF.
     pub fn system(&self) -> Result<System, NsfError> {
-        System::from_ines(&self.rom).map_err(|err| NsfError::Cart(err.to_string()))
+        let mut system =
+            System::from_ines(&self.rom).map_err(|err| NsfError::Cart(err.to_string()))?;
+        // NSF playback starts the player immediately; the console power-on
+        // warm-up (which ignores PPU register writes for one frame) does not
+        // apply to a music driver.
+        system.ppu.end_warmup();
+        Ok(system)
     }
 }
 
@@ -320,7 +326,8 @@ mod tests {
     fn player_calls_init_and_play() {
         let nsf = Nsf::parse(&synthetic_nsf()).expect("parse");
         let mut system = nsf.system().expect("system");
-        for _ in 0..4 {
+        // The first call reports the reset's power-on frame without running.
+        for _ in 0..5 {
             system.run_frame();
         }
         assert_eq!(system.read_ram(0x0300), 0x5A, "INIT did not run");
