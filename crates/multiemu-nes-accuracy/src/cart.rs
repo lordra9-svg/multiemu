@@ -2454,6 +2454,10 @@ impl Mapper for Mmc3 {
 pub struct Mmc3_199 {
     inner: Mmc3,
     ex: [u8; 4],
+    /// 4 KiB PRG-RAM window at `$5000-$5FFF` (as on the Waixing FS303/FS309
+    /// class boards). The local FS309 games copy an NMI handler there and jump
+    /// to it, so reads/writes must hit this RAM instead of open bus.
+    low_ram: [u8; 0x1000],
 }
 
 impl Mmc3_199 {
@@ -2461,6 +2465,7 @@ impl Mmc3_199 {
         Self {
             inner: Mmc3::new_as(prg, chr, header, 199),
             ex: [0xFE, 0xFF, 1, 3],
+            low_ram: [0; 0x1000],
         }
     }
 
@@ -2487,6 +2492,7 @@ impl Mmc3_199 {
 impl Mapper for Mmc3_199 {
     fn prg_read(&self, address: u16) -> u8 {
         match address {
+            0x5000..=0x5FFF => self.low_ram[usize::from(address - 0x5000)],
             0xC000..=0xDFFF => {
                 let bank = usize::from(self.ex[0]) % self.prg8_banks();
                 self.inner.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
@@ -2500,6 +2506,10 @@ impl Mapper for Mmc3_199 {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x5000..=0x5FFF).contains(&address) {
+            self.low_ram[usize::from(address - 0x5000)] = value;
+            return;
+        }
         if address >= 0x8000 {
             let decoded = address & 0xE001;
             if decoded == 0xA000 {
@@ -2547,6 +2557,10 @@ impl Mapper for Mmc3_199 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.inner.prg_ram
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
     }
 
     fn irq_line(&self) -> bool {
@@ -14505,6 +14519,13 @@ mod tests {
         // Work RAM.
         cart.cpu_write(0x6000, 0x5A);
         assert_eq!(cart.cpu_read(0x6000), 0x5A);
+
+        // FS309 low window: 4 KiB PRG-RAM at $5000-$5FFF, which the games use
+        // for a copied NMI handler.
+        assert_eq!(cart.low_window(), Some((0x5000, 0x5FFF)));
+        cart.cpu_write(0x5C42, 0x5A);
+        assert_eq!(cart.cpu_read(0x5C42), 0x5A);
+        assert_eq!(cart.cpu_read(0x5FFF), 0);
     }
 
     #[test]
