@@ -1215,6 +1215,35 @@ mod tests {
     }
 
     #[test]
+    fn reset_phase_matches_the_reference_calibration() {
+        // A trivial NROM loop. The reset phase is parity-tuned: the PPU has
+        // completed the power-on frame and sits at (line 0, dot 23) with the
+        // APU at cycle 8. Pre-advancing the PPU further aligns the per-frame
+        // wrap cycles exactly (7 dots) but shifts the CPU/PPU relative phase
+        // and regresses oracle parity, so this exact state is the best
+        // measured configuration and must not drift.
+        let mut prg = vec![0x4Cu8, 0x00, 0x80]; // JMP $8000
+        prg.resize(0x4000, 0xEA);
+        prg[0x3FFC] = 0x00;
+        prg[0x3FFD] = 0x80;
+        let mut rom = vec![0u8; 16 + prg.len() + 0x2000];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 1;
+        rom[5] = 1;
+        rom[16..16 + prg.len()].copy_from_slice(&prg);
+
+        let system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cpu.registers.pc, 0x8000);
+        assert_eq!(system.apu.cycles(), 8, "reset APU phase");
+        assert_eq!(system.ppu.frames, 1, "power-on frame already latched");
+        assert_eq!(
+            (system.ppu.scanline, system.ppu.dot),
+            (0, 23),
+            "PPU reset phase"
+        );
+    }
+
+    #[test]
     fn system_audio_runs_at_the_requested_rate() {
         // A trivial NROM loop; the audio stream should be produced at 44.1 kHz
         // through the band-limited resampler (~734 samples per NTSC frame).

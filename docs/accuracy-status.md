@@ -851,7 +851,21 @@ the dots 1-64 clear phase, which provides the seed.
   sub-cycle frame-detection difference, not CPU instruction timing. Draining
   audio at the exact PPU frame dot was also implemented and measured
   identical to the instruction-boundary drain, confirming the residual
-  divergence is not a slice-boundary artefact.
+  divergence is not a slice-boundary artefact. A per-dot PPU state trace of
+  the reference pins the exact wrap cycles: over frames 1-12 the reference
+  wraps at CPU cycles 29,779 / 59,560 / 89,340 / 119,121 / ... while this core
+  wraps 2-3 cycles later, alternating (the two `29,780`-vs-`29,781`-cycle
+  frame-length patterns are phase-shifted by one frame, so the offset does not
+  accumulate). Advancing the PPU by seven dots before reset reproduces the
+  reference's wrap cycles exactly (12/12 frames, including the odd-skip
+  pattern), but it shifts the CPU/PPU relative phase and *regresses* oracle
+  parity: SMB video 299 -> 273, audio 226 -> 194 (and every other tested
+  pre-advance of 1-6 dots is worse still). The current reset phase
+  (APU cycle 8, PPU line 0 dot 23) is therefore the best measured
+  configuration, pinned by the `reset_phase_matches_the_reference_calibration`
+  test. Closing the gap requires a coupled master-clock CPU/PPU scheduler that
+  matches both the wrap cycle and the per-instruction access sub-cycle, not a
+  reset-phase adjustment.
 - Expansion-audio levels now use the documented per-chip scales instead of
   ad-hoc normalizations, so the per-channel mixing matches the reference:
   VRC6 is a centred linear 6-bit sum scaled so one full pulse equals a 2A03
