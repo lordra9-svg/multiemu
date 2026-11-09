@@ -155,13 +155,20 @@ Current local result with the canonical 2C02 palette:
 | Target | Identical frames |
 |---|---|
 | AccuracyCoin (60 frames) | 49/60 |
-| Commercial NROM title (300 frames) | 30/300 |
+| Commercial NROM title (300 frames) | 297/300 |
 
-The commercial title diverges at frame 33: the reference has logo/menu tile
-values (`$44`, `$48`, ...) in physical nametable rows 4-17 that our core never
-writes, while the level scenery and HUD match. The next PPU investigation is
-the `$2006`/`$2007` nametable upload path (or the NMI condition that gates it),
-not the palette.
+Two PPU defects were found and fixed with this harness:
+
+- `$2007` completed reads masked the address with `$2FFF`, so CHR addresses
+  above `$0FFF` read the wrong byte. A title-screen copy routine reading
+  `$1EC0` obtained `$02` instead of `$20`; with `& $3FFF` the copied buffer
+  and the whole title screen match the reference.
+- 8x8 sprites selected their pattern table with PPUCTRL bit 4 (the background
+  bit) instead of bit 3, garbling every sprite when the two tables differ.
+
+The commercial title now differs only on frames 0, 9 and 27, where the first
+scanline has a handful of backdrop-vs-black pixels while the PPU is still
+starting up.
 - `run <rom> --dump-ppu` / `--break <hex>` — per-frame CPU/PPU/APU state and a
   PC breakpoint.
 

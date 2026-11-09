@@ -777,10 +777,14 @@ the dots 1-64 clear phase, which provides the seed.
 - The differential oracle harness now compares per-frame RGBA8 hashes against
   a RustyNES capture (`trace --no-state` plus `diff`). Local results: the
   AccuracyCoin test image matches 49/60 frames; a commercial NROM title
-  matches 30/300 and diverges at frame 33 because the reference has
-  logo/menu nametable tiles in rows 4-17 that our core never writes. The
+  matches 297/300, differing only on frames 0/9/27 (a few first-scanline
+  backdrop pixels during start-up). The harness found two real PPU defects:
+  the completed-`$2007` read masked the address with `$2FFF` (breaking CHR
+  reads above `$0FFF`, which truncated a title-screen nametable upload), and
+  8x8 sprites selected their pattern table with PPUCTRL bit 4 instead of
+  bit 3 (garbling sprites when the background and sprite tables differ). The
   palette is now the canonical 2C02 table and palette RAM powers on to index
-  0, so the remaining difference is behaviour, not colour.
+  0.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the

@@ -681,7 +681,7 @@ impl Ppu {
                 self.read_buffer = if self.data_read_render && self.fetch_hold > 0 {
                     self.fetch_byte
                 } else {
-                    self.read_vram(self.data_read_address & 0x2FFF)
+                    self.read_vram(self.data_read_address & 0x3FFF)
                 };
                 if self.data_read_render {
                     self.increment_vram_address(true);
@@ -1498,7 +1498,8 @@ impl Ppu {
         let (bank, mut tile) = if height == 16 {
             ((u16::from(tile & 1)) << 12, tile & 0xFE)
         } else {
-            (if self.ctrl & 0x10 != 0 { 0x1000 } else { 0 }, tile)
+            // 8x8 sprites use PPUCTRL bit 3, unlike the background (bit 4).
+            (if self.ctrl & 0x08 != 0 { 0x1000 } else { 0 }, tile)
         };
         if height == 16 && row >= 8 {
             tile = tile.wrapping_add(1);
@@ -1923,6 +1924,33 @@ mod tests {
 
     fn ppu() -> Ppu {
         Ppu::new(Timing::NTSC, vec![0; 0x2000], true, false)
+    }
+
+    #[test]
+    fn ppu_data_read_uses_the_full_14_bit_address() {
+        let mut ppu = ppu();
+        ppu.chr[0x1EC0] = 0x5A;
+        ppu.chr[0x0EC0] = 0x11;
+        ppu.v = 0x1EC0;
+        ppu.mask = 0;
+        ppu.read_register(7);
+        for _ in 0..4 {
+            ppu.step_dot();
+        }
+        assert_eq!(ppu.read_buffer, 0x5A);
+    }
+
+    #[test]
+    fn eight_by_eight_sprites_use_ppuctrl_bit3() {
+        let mut ppu = ppu();
+        ppu.chr[0x1000] = 0xAA;
+        ppu.chr[0x0000] = 0x55;
+        ppu.ctrl = 0x08; // sprite pattern table 1, background table 0
+        ppu.scanline = 0;
+        ppu.secondary_oam[0..4].copy_from_slice(&[0, 0, 0, 0]);
+        ppu.oam_id[0] = 0;
+        ppu.latch_sprite(0);
+        assert_eq!(ppu.spr_lo[0], 0xAA);
     }
 
     #[test]
