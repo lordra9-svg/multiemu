@@ -109,7 +109,7 @@ writes, and MMC1 bank switching.
 | MMC1 (1) | complete (serial banking, PRG/CHR modes, mirroring, PRG-RAM) |
 | UxROM (2) | complete (16 KiB switchable + fixed last) |
 | CNROM (3) | complete (CHR banking) |
-| MMC3 (4) | PRG/CHR banking, mirroring, scanline IRQ |
+| MMC3 (4) | PRG/CHR banking, mirroring, scanline IRQ clocked at the PPU A12 rise (dot 260) |
 | AxROM (7) | 32 KiB banking, single-screen mirroring, bus conflicts |
 | VRC2/4 (21/22/23/25) | PRG/CHR banking, mirroring, scanline IRQ; audio missing |
 | Color Dreams (11) | 32 KiB PRG / 8 KiB CHR banking, bus conflicts |
@@ -793,6 +793,16 @@ the dots 1-64 clear phase, which provides the seed.
   bit 3 (garbling sprites when the background and sprite tables differ). The
   palette is now the canonical 2C02 table and palette RAM powers on to index
   0.
+- A long-standing IRQ bug is fixed: `System::end_cycle` compared against a
+  `cycle_before_scanline` field that was never updated, so after the first
+  scanline it saw a change on *every* CPU cycle and clocked the mapper ~94
+  times per line. MMC3/VRC/FME-7 IRQ counters therefore expired almost
+  immediately, which broke split-screen scroll effects completely. With the
+  fix and A12-window clocking, Super Mario Bros. 3's split-screen intro is
+  pixel-correct outside the sprite animation phase (frame 200: 7,030 -> 277
+  differing pixels; frame 299 matches the reference's next frame to within 8
+  pixels). The regression test `mmc3_irq_clocks_once_per_rendered_scanline`
+  pins the ~17-scanline latency of a latch of 16.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the
@@ -820,8 +830,10 @@ the dots 1-64 clear phase, which provides the seed.
   Super Mario Bros. FDS title screen renders correctly. Against the reference
   capture the 900-frame run matches 735/900 frames directly and 877/899 when
   allowing a single-frame phase offset (our boot completes one frame early).
-- IRQ counters are clocked once per rendered scanline rather than from exact
-  PPU A12 rises, so fine-grained split timing is approximate.
+- IRQ counters are clocked once per rendered scanline at the sprite-fetch A12
+  window (dot 260) rather than from every individual A12 transition, which is
+  sufficient for the standard split-screen case but still approximate for
+  games that toggle CHR tables mid-line.
 - AxROM titles that depend on exact PPU timing (e.g. Battletoads) do not boot yet.
 - The accuracy core does not implement save states and supports NTSC only.
 

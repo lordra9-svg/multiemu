@@ -60,7 +60,6 @@ pub struct System {
     /// PPU dots still owed at the end of a split CPU cycle.
     end_dots: u8,
     /// PPU scanline at the start of the current split cycle.
-    cycle_before_scanline: u16,
     dma: Option<Dma>,
 }
 
@@ -186,7 +185,6 @@ impl System {
             cpu_pc: 0,
             dmc_carry: 0,
             end_dots: 0,
-            cycle_before_scanline: 0,
             dma: None,
         };
         let mut cpu = system.cpu;
@@ -645,15 +643,20 @@ impl System {
     }
 
     /// Advances the PPU by `dots` and clocks scanline-based mappers.
+    ///
+    /// MMC3-family counters clock on the PPU A12 rise that opens the sprite
+    /// pattern fetch window, not at the scanline boundary. Clocking at dot 260
+    /// puts the IRQ handler's scroll write on the following line, matching the
+    /// hardware split position; clocking at dot 0 put the split one line early.
     fn advance_ppu_cycle(&mut self, dots: u32) {
-        let before = self.ppu.scanline;
+        let line = self.ppu.scanline;
+        let dot = self.ppu.dot;
         self.ppu.step_dots(dots);
-        let after = self.ppu.scanline;
-        if before != after {
-            let rendered = (after <= 239 || after == 261) && self.ppu.mask & 0x18 != 0;
-            if rendered {
-                self.cart.clock_scanline();
-            }
+        let line_after = self.ppu.scanline;
+        let dot_after = self.ppu.dot;
+        let rendered = (line_after <= 239 || line_after == 261) && self.ppu.mask & 0x18 != 0;
+        if rendered && line == line_after && dot < 260 && dot_after >= 260 {
+            self.cart.clock_scanline();
         }
     }
 
@@ -946,16 +949,9 @@ impl CpuBus for System {
         if self.end_dots == 0 {
             return;
         }
-        self.ppu.step_dots(u32::from(self.end_dots));
+        let dots = u32::from(self.end_dots);
         self.end_dots = 0;
-        let before = self.cycle_before_scanline;
-        let after = self.ppu.scanline;
-        if before != after {
-            let rendered = (after <= 239 || after == 261) && self.ppu.mask & 0x18 != 0;
-            if rendered {
-                self.cart.clock_scanline();
-            }
-        }
+        self.advance_ppu_cycle(dots);
     }
 
     fn set_rmw_dummy(&mut self, dummy: bool) {
@@ -1194,6 +1190,45 @@ mod tests {
         // frames (the constant two-iteration start-up offset is present with
         // and without DMC, so it is not DMA-related).
         assert_eq!(without_dmc - with_dmc, 10126);
+    }
+
+    #[test]
+    fn mmc3_irq_clocks_once_per_rendered_scanline() {
+        // A trivial MMC3 ROM whose reset code is an endless SEI/JMP loop. The
+        // mapper is driven directly; the test only watches when the IRQ line
+        // asserts. Clocking the mapper per CPU cycle (the old `end_cycle`
+        // behaviour) asserted it in a handful of cycles instead of after the
+        // ~17 scanlines the latch asks for.
+        let mut prg = vec![0xEAu8; 0x20000];
+        prg[..4].copy_from_slice(&[0x78, 0x4C, 0x00, 0x80]); // SEI; JMP $8000
+        prg[0x1FFFC] = 0x00;
+        prg[0x1FFFD] = 0x80;
+        let mut rom = vec![0u8; 16 + prg.len() + 0x10000];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8; // 128 KiB PRG
+        rom[5] = 8; // 64 KiB CHR
+        rom[6] = 0x40; // MMC3
+        rom[16..16 + prg.len()].copy_from_slice(&prg);
+
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 4);
+        system.ppu.mask = 0x1E; // background + sprites: A12 rises each line
+        system.cart.cpu_write(0xC000, 0x10); // latch = 16
+        system.cart.cpu_write(0xC001, 0x00); // reload
+        system.cart.cpu_write(0xE001, 0x00); // enable
+        assert!(!system.cart.irq_line());
+
+        let mut cycles = 0u32;
+        while !system.cart.irq_line() && cycles < 200_000 {
+            cycles += system.step_instruction().max(1);
+        }
+        assert!(system.cart.irq_line(), "MMC3 IRQ never asserted");
+        // 17 rendered lines at ~114 CPU cycles each. Per-cycle clocking would
+        // trip this in ~20 cycles; a scanline boundary clock in ~1800.
+        assert!(
+            (1_200..6_000).contains(&cycles),
+            "IRQ asserted after {cycles} CPU cycles"
+        );
     }
 
     #[test]

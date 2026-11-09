@@ -57,6 +57,15 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
 - **VRC2/VRC4 (21/22/23/25)** — corrected fixed PRG banks, eight 1 KiB CHR
   register pairs, per-board address decoding, swap/WRAM mode and CPU-cycle
   IRQ. 39/55 images render at 600 frames.
+- **MMC3 IRQ clocking (4 and derivatives)** — the system now clocks
+  scanline-IRQ mappers at the PPU A12 rise that opens the sprite pattern fetch
+  window (dot 260), once per rendered line. Previously `end_cycle` used a
+  stale `cycle_before_scanline` field and clocked the counter on nearly every
+  CPU cycle, so IRQ latches expired within a few instructions and split-screen
+  scroll effects were badly misplaced. Super Mario Bros. 3's curtain intro now
+  renders the split at the correct line (frame 200: 7,030 -> 277 differing
+  pixels, and the remaining difference is the sprite animation phase). The
+  regression test `mmc3_irq_clocks_once_per_rendered_scanline` pins it.
 - **Sachen JV001 (136)** — six-bit latch with adder/inverter; CHR from output
   bits 0-2, 32 KiB PRG from bit 4. **7/7** images render at 60 frames.
 - **Super Mega JV001 (172)** — the same latch with reversed CPU data bits and
