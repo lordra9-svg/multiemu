@@ -839,7 +839,19 @@ the dots 1-64 clear phase, which provides the seed.
   +1..+5 cycles from frame 3 — so the shipped 2-dot/1-dot split (frame starts
   within ±1) is retained. Closing the gap requires the frame boundary to land
   on the same CPU instruction as the reference, i.e., a master-clock CPU/PPU
-  scheduler rather than the current integer-dot split.
+  scheduler rather than the current integer-dot split. Further master-clock
+  tracing narrows this: with the reference's reset pre-advance (one CPU
+  divider of master clock before reset) and its (5,7)/(7,5) read/write split,
+  both the frame-start cycle and the PPU `(scanline, dot)` match the reference
+  exactly through frame 11 (frame 11: cycle 297,808, dot 5 in both). At frame
+  12 our boundary lands one CPU cycle later (dot 4 vs dot 1) while the CPU
+  instruction streams remain identical (10,276 PCs match); the reference
+  executes one additional instruction (`$8D26`) at the boundary. So the
+  frame-11 PPU boundary is reached three dots (one CPU cycle) later here — a
+  sub-cycle frame-detection difference, not CPU instruction timing. Draining
+  audio at the exact PPU frame dot was also implemented and measured
+  identical to the instruction-boundary drain, confirming the residual
+  divergence is not a slice-boundary artefact.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the
