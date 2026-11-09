@@ -806,7 +806,10 @@ the dots 1-64 clear phase, which provides the seed.
   registers and key-on/key-off/silence handling; its built-in instrument table
   is an approximation of the YM2413 patch ROM. The VRC7 CHR-RAM board shares
   its banked window with the PPU, and its local title matches the reference
-  video on 296/300 frames. FDS audio is still missing.
+  video on 296/300 frames. The FDS wavetable/modulation audio device is also
+  implemented (`FdsAudio`: wave RAM, volume/mod envelopes, modulation table,
+  `$4023` enable/reset) and unit-tested; the FDS board, BIOS and disk I/O
+  loader are the remaining step.
 - IRQ counters are clocked once per rendered scanline rather than from exact
   PPU A12 rises, so fine-grained split timing is approximate.
 - AxROM titles that depend on exact PPU timing (e.g. Battletoads) do not boot yet.
