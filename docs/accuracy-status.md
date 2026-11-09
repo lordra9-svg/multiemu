@@ -775,8 +775,9 @@ the dots 1-64 clear phase, which provides the seed.
 - MMC5 is partial: Castlevania III (US) now boots and runs its intro, but
   ExRAM/split-screen, extended attributes and expansion audio are missing.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
-  `$9003` halt/16x/256x scaling); VRC7/N163/FME-7/MMC5/FDS audio is still
-  missing.
+  `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
+  audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the
+  `$07` tone/noise mixer). VRC7/N163/MMC5/FDS audio is still missing.
 - IRQ counters are clocked once per rendered scanline rather than from exact
   PPU A12 rises, so fine-grained split timing is approximate.
 - AxROM titles that depend on exact PPU timing (e.g. Battletoads) do not boot yet.

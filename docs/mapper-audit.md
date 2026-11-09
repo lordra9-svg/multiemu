@@ -99,6 +99,11 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   accumulator reset) feed a linear 6-bit DAC (two 4-bit pulses + the saw's
   high 5 bits). Unit test covers duty peaks, the mode bit, channel summing and
   the saw ladder.
+- **Sunsoft 5B audio (69)** — YM2149F with three tone channels (CPU/16
+  prescaler), the 17-bit/13-tap LFSR noise generator, the 32-step envelope
+  generator and the `$07` tone/noise mixer; `$C000` selects an internal
+  register and `$E000` writes it. Unit test covers tone toggling, both
+  channels summing, constant-volume mixing and noise.
 - **PPU** — the backdrop no longer double-indirects the palette; all five
   mirroring modes are modelled with 4 KiB CIRAM; the `$2007` read buffer is
   fed by the per-dot background/sprite fetch with a four-dot data state

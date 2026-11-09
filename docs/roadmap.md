@@ -36,7 +36,8 @@ The main effort is now the reference-parity accuracy core. Details in
       Remaining: MMC5 extended attributes/expansion audio, VRC7/N163/FME-7/
       MMC5/FDS expansion audio, the Datach peripheral and the small six-image
       ASIC tail (triage in `docs/mapper-audit.md`). VRC6 expansion audio (two
-      pulses + sawtooth) is implemented with unit tests.
+      pulses + sawtooth) and Sunsoft 5B / YM2149 (three tones + noise +
+      envelope) are implemented with unit tests.
 - [x] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
       all 151 rows: **146 pass, 0 fail, 5 DRAW skips, 0 unrun** — every
       non-DRAW test passes. `$2007 Stress Test` was closed with the PPU data

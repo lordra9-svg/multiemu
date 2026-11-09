@@ -3832,8 +3832,215 @@ impl Mapper for Sachen150 {
     }
 }
 
+/// One YM2149 tone channel.
+#[derive(Debug, Default, Clone)]
+struct YmTone {
+    phase: u16,
+    output: bool,
+}
+
+/// The YM2149 noise generator (17-bit LFSR, taps at bits 16 and 13).
+#[derive(Debug, Clone)]
+struct YmNoise {
+    phase: u16,
+    lfsr: u32,
+}
+
+impl Default for YmNoise {
+    fn default() -> Self {
+        Self { phase: 0, lfsr: 1 }
+    }
+}
+
+impl YmNoise {
+    fn clock(&mut self, period: u16) {
+        if self.phase >= period.max(1) {
+            self.phase = 0;
+            let bit = (self.lfsr ^ (self.lfsr >> 3)) & 1;
+            self.lfsr = (self.lfsr >> 1) | (bit << 16);
+        } else {
+            self.phase += 1;
+        }
+    }
+
+    fn output(&self) -> bool {
+        self.lfsr & 1 != 0
+    }
+}
+
+/// The YM2149 envelope generator.
+#[derive(Debug, Default, Clone)]
+struct YmEnvelope {
+    period: u16,
+    phase: u16,
+    step: u8,
+    value: u8,
+    attack: bool,
+    alternate: bool,
+    hold: bool,
+    continue_: bool,
+    running: bool,
+}
+
+impl YmEnvelope {
+    fn reset(&mut self, shape: u8) {
+        self.continue_ = shape & 0x08 != 0;
+        self.attack = shape & 0x04 != 0;
+        self.alternate = shape & 0x02 != 0;
+        self.hold = shape & 0x01 != 0;
+        self.phase = 0;
+        self.step = 0;
+        // Attack=1 ramps up from 0; attack=0 ramps down from 31.
+        self.value = if self.attack { 0 } else { 31 };
+        self.running = true;
+    }
+
+    fn clock(&mut self) {
+        if !self.running {
+            return;
+        }
+        if self.phase < self.period.max(1) {
+            self.phase += 1;
+            return;
+        }
+        self.phase = 0;
+        if self.attack {
+            if self.value < 31 {
+                self.value += 1;
+            } else {
+                self.boundary();
+            }
+        } else if self.value > 0 {
+            self.value -= 1;
+        } else {
+            self.boundary();
+        }
+        self.step = self.step.wrapping_add(1);
+    }
+
+    fn boundary(&mut self) {
+        if !self.continue_ {
+            self.running = false;
+        } else if self.alternate {
+            self.attack = !self.attack;
+            if self.hold {
+                self.running = self.alternate;
+            }
+        } else if self.hold {
+            self.running = false;
+        } else {
+            // Continuous sawtooth: wrap to the opposite end.
+            self.value = if self.attack { 0 } else { 31 };
+        }
+    }
+
+    fn level(&self) -> u8 {
+        self.value
+    }
+}
+
+/// Sunsoft 5B (YM2149F) expansion audio used by FME-7 boards such as Gimmick!.
+#[derive(Debug, Default, Clone)]
+struct Sunsoft5b {
+    registers: [u8; 16],
+    selected: u8,
+    tone: [YmTone; 3],
+    noise: YmNoise,
+    envelope: YmEnvelope,
+    prescaler: u8,
+}
+
+impl Sunsoft5b {
+    fn select(&mut self, value: u8) {
+        if value & 0xF0 == 0 {
+            self.selected = value & 0x0F;
+        }
+    }
+
+    fn write(&mut self, value: u8) {
+        let register = usize::from(self.selected);
+        if register >= 0x0E {
+            return;
+        }
+        self.registers[register] = value;
+        match register {
+            0x0D => self.envelope.reset(value),
+            0x0B => self.envelope.period = (self.envelope.period & 0xFF00) | u16::from(value),
+            0x0C => {
+                self.envelope.period = (self.envelope.period & 0x00FF) | (u16::from(value) << 8);
+            }
+            _ => {}
+        }
+    }
+
+    fn tone_period(&self, channel: usize) -> u16 {
+        let low = u16::from(self.registers[channel * 2]);
+        let high = u16::from(self.registers[channel * 2 + 1] & 0x0F);
+        (high << 8) | low
+    }
+
+    fn noise_period(&self) -> u16 {
+        u16::from(self.registers[0x06] & 0x1F)
+    }
+
+    /// Advances one CPU cycle; the tone/noise/envelope counters run at
+    /// CPU/16.
+    fn tick(&mut self) {
+        self.prescaler += 1;
+        if self.prescaler < 16 {
+            return;
+        }
+        self.prescaler = 0;
+        for channel in 0..3 {
+            let period = self.tone_period(channel).max(1);
+            let tone = &mut self.tone[channel];
+            if tone.phase >= period {
+                tone.phase = 0;
+                tone.output = !tone.output;
+            } else {
+                tone.phase += 1;
+            }
+        }
+        self.noise.clock(self.noise_period());
+        self.envelope.clock();
+    }
+
+    fn channel_output(&self, channel: usize) -> u8 {
+        let mixer = self.registers[0x07];
+        let tone_disabled = mixer & (1 << channel) != 0;
+        let noise_disabled = mixer & (1 << (channel + 3)) != 0;
+        let tone = self.tone[channel].output;
+        let noise = self.noise.output();
+        let signal = match (tone_disabled, noise_disabled) {
+            (true, true) => true,
+            (false, true) => tone,
+            (true, false) => noise,
+            (false, false) => tone & noise,
+        };
+        let control = self.registers[0x08 + channel];
+        let volume = if control & 0x10 != 0 {
+            self.envelope.level() >> 1
+        } else {
+            control & 0x0F
+        };
+        if signal {
+            volume
+        } else {
+            0
+        }
+    }
+
+    fn mix(&self) -> f32 {
+        let sum: u16 = (0..3)
+            .map(|channel| u16::from(self.channel_output(channel)))
+            .sum();
+        f32::from(sum) / 45.0
+    }
+}
+
 /// Sunsoft FME-7 / 5A / 5B (mapper 69): 8 KiB PRG and 1 KiB CHR banking,
-/// switchable nametables and a CPU-cycle IRQ counter.
+/// switchable nametables, a CPU-cycle IRQ counter and YM2149 audio on 5B
+/// boards such as Gimmick!.
 #[derive(Debug)]
 pub struct Fme7 {
     prg: Vec<u8>,
@@ -3848,6 +4055,7 @@ pub struct Fme7 {
     irq_line: bool,
     irq_counter: u16,
     irq_reload: u16,
+    audio: Sunsoft5b,
 }
 
 impl Fme7 {
@@ -3865,6 +4073,7 @@ impl Fme7 {
             irq_line: false,
             irq_counter: 0,
             irq_reload: 0,
+            audio: Sunsoft5b::default(),
         }
     }
 
@@ -3944,6 +4153,8 @@ impl Mapper for Fme7 {
             }
             0x8000..=0x9FFF => self.command = value & 0x0F,
             0xA000..=0xBFFF => self.write_parameter(value),
+            0xC000..=0xDFFF => self.audio.select(value),
+            0xE000..=0xFFFF => self.audio.write(value),
             _ => {}
         }
     }
@@ -3982,6 +4193,7 @@ impl Mapper for Fme7 {
     }
 
     fn clock_cpu(&mut self) {
+        self.audio.tick();
         if !self.irq_enabled {
             return;
         }
@@ -3991,6 +4203,10 @@ impl Mapper for Fme7 {
         } else {
             self.irq_counter -= 1;
         }
+    }
+
+    fn audio_mix(&self) -> f32 {
+        self.audio.mix()
     }
 }
 
@@ -11939,6 +12155,65 @@ mod tests {
         cart.cpu_write(0x8001, 0x00);
         cart.ppu_write(0x0200, 0x33);
         assert_eq!(cart.ppu_read(0x0200), 0x33);
+    }
+
+    #[test]
+    fn sunsoft5b_audio_tone_noise_and_mixer() {
+        let rom = synth_banked(69, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.audio_mix(), 0.0);
+
+        let write = |cart: &mut Cartridge, register: u8, value: u8| {
+            cart.cpu_write(0xC000, register);
+            cart.cpu_write(0xE000, value);
+        };
+
+        // Mixer: all tones enabled, noise disabled. Tone A/B period 1, volume
+        // 15; channel C silent.
+        write(&mut cart, 0x07, 0x38);
+        write(&mut cart, 0x00, 0x01);
+        write(&mut cart, 0x01, 0x00);
+        write(&mut cart, 0x02, 0x01);
+        write(&mut cart, 0x03, 0x00);
+        write(&mut cart, 0x08, 0x0F);
+        write(&mut cart, 0x09, 0x0F);
+        write(&mut cart, 0x0A, 0x00);
+        let mut low = 0.0f32;
+        let mut high = 0.0f32;
+        for _ in 0..512 {
+            cart.clock_cpu();
+            let sample = cart.audio_mix();
+            low = low.min(sample);
+            high = high.max(sample);
+        }
+        assert_eq!(low, 0.0);
+        assert!((high - 30.0 / 45.0).abs() < 1e-4, "tone peak {high}");
+
+        // Disabling both tone and noise holds the channel at its volume.
+        write(&mut cart, 0x07, 0x3F);
+        for _ in 0..64 {
+            cart.clock_cpu();
+        }
+        assert!((cart.audio_mix() - 30.0 / 45.0).abs() < 1e-4);
+
+        // Volume 0 is silent even with a constant signal.
+        write(&mut cart, 0x08, 0x00);
+        write(&mut cart, 0x09, 0x00);
+        assert_eq!(cart.audio_mix(), 0.0);
+
+        // Noise-only output must produce both LFSR states.
+        write(&mut cart, 0x07, 0x07); // tone off on all channels, noise on A
+        write(&mut cart, 0x08, 0x0F);
+        write(&mut cart, 0x06, 0x01);
+        let mut saw_low = false;
+        let mut saw_high = false;
+        for _ in 0..2048 {
+            cart.clock_cpu();
+            let sample = cart.audio_mix();
+            saw_low |= sample == 0.0;
+            saw_high |= (sample - 15.0 / 45.0).abs() < 1e-4;
+        }
+        assert!(saw_low && saw_high, "noise did not toggle");
     }
 
     #[test]
