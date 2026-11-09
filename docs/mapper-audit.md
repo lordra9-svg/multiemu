@@ -124,7 +124,10 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   behaviour, and a motor stop rewinds the head to the start of the side. The
   real BIOS boots a local commercial FDS title to the licence screen and, after
   Start, into the game (Super Mario Bros. title screen renders). The disk write
-  path is not implemented yet. Multi-side images are parsed from the fwNES
+  path now handles write-mode transfers: each `$4024` byte is landed on the
+  wire image at the head and advances it, with the byte-transfer flag/IRQ
+  raised as in read mode. The 2C33's automatic CRC regeneration and saving
+  modified sides back to the raw image are not modelled. Multi-side images are parsed from the fwNES
   header and can be swapped at runtime (`Cartridge::insert_disk_side` /
   `System::insert_disk_side`), which resets the head, re-opens the spin-up
   window and rebuilds the wire image for the new side.

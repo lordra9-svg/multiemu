@@ -43,7 +43,7 @@ The main effort is now the reference-parity accuracy core. Details in
       image (lead-in/inter-block gaps, `$80` start marks, per-block CRC-16) at
       the ~149-cycle byte cadence, and the real BIOS boots a local
       commercial `.fds` title to its licence screen and game title. Remaining
-      FDS work: the disk write path and byte-identical
+      FDS work: CRC regeneration/persistence for disk writes and byte-identical
       audio parity. MMC5 now covers the full CHR range (the extended-attribute
       path carries physical offsets, so >256 KiB CHR works). Remaining overall:
       the Datach peripheral and the small six-image ASIC tail (triage in

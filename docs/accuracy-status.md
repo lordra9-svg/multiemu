@@ -871,7 +871,10 @@ the dots 1-64 clear phase, which provides the seed.
   Multi-side images are parsed from the fwNES header and can be swapped at
   runtime (`Cartridge::insert_disk_side`, `System::insert_disk_side`), which
   resets the head, re-opens the spin-up window and rebuilds the wire image;
-  ejecting reports the drive as not ready. The disk write path remains.
+  ejecting reports the drive as not ready. Write-mode transfers also work:
+  `$4024` bytes are stored into the wire image at the head and advance it,
+  raising the byte-transfer flag/IRQ. Automatic CRC regeneration and writing
+  modified sides back to the raw image are not modelled.
 - IRQ counters are clocked once per rendered scanline at the sprite-fetch A12
   window (dot 260) rather than from every individual A12 transition, which is
   sufficient for the standard split-screen case but still approximate for

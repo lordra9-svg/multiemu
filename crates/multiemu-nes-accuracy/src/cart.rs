@@ -10033,6 +10033,22 @@ impl Fds {
         self.byte_transfer_flag = true;
     }
 
+    /// Write-mode transfer: lands the byte last written to `$4024` on the
+    /// wire image and advances the head. The BIOS emits the full gap/mark/
+    /// block/CRC stream itself, so storing the wire bytes verbatim is the
+    /// faithful model; the 2C33's automatic CRC regeneration is not modelled.
+    fn store_byte(&mut self) {
+        if self.head < self.wire.len() {
+            self.wire[self.head] = self.write_data;
+            self.head += 1;
+        }
+        if self.head >= self.wire.len() {
+            self.end_of_head = true;
+            self.motor_on = false;
+        }
+        self.byte_transfer_flag = true;
+    }
+
     fn write_control(&mut self, value: u8) {
         let was_motor_on = self.motor_on;
         let was_reset = self.transfer_reset;
@@ -10249,14 +10265,18 @@ impl Mapper for Fds {
                 self.update_transfer_state();
             }
         }
-        if !self.transfer_active || !self.read_mode {
+        if !self.transfer_active {
             return;
         }
         if self.transfer_timer > 0 {
             self.transfer_timer -= 1;
         }
         if self.transfer_timer == 0 {
-            self.deliver_byte();
+            if self.read_mode {
+                self.deliver_byte();
+            } else {
+                self.store_byte();
+            }
             self.transfer_timer = FDS_BYTE_CYCLES;
         }
     }
@@ -13984,6 +14004,42 @@ mod tests {
             saw_high |= (sample - 15.0 / 45.0).abs() < 1e-4;
         }
         assert!(saw_low && saw_high, "noise did not toggle");
+    }
+
+    #[test]
+    fn fds_write_mode_stores_bytes_in_the_wire_image() {
+        let mut side = vec![0u8; 65_500];
+        side[0] = 0x01;
+        side[1..15].copy_from_slice(b"*NINTENDO-HVC*");
+        side[56] = 0x02;
+        let mut fds = Fds::new(&side, &vec![0xEA; 0x2000]);
+
+        fds.prg_write(0x4023, 0x83); // disk + sound I/O enabled
+        fds.prg_write(0x4025, 0x60); // write mode, motor on, CRC control+enable
+        assert_eq!(fds.drive_status_4032() & 0x04, 0, "drive is writable");
+        while fds.drive_status_4032() & 0x02 != 0 {
+            fds.clock_cpu();
+        }
+
+        let head0 = fds.head;
+        fds.prg_write(0x4024, 0x5A);
+        let mut guard = 0;
+        while fds.head == head0 && guard < 1_000 {
+            fds.clock_cpu();
+            guard += 1;
+        }
+        assert!(guard < 1_000, "write transfer never advanced");
+        assert_eq!(fds.wire[head0], 0x5A);
+
+        let head1 = fds.head;
+        fds.prg_write(0x4024, 0xA5);
+        guard = 0;
+        while fds.head == head1 && guard < 1_000 {
+            fds.clock_cpu();
+            guard += 1;
+        }
+        assert_eq!(fds.wire[head1], 0xA5);
+        assert_eq!(fds.status_4030() & 0x80, 0x80, "byte-transfer flag");
     }
 
     #[test]
