@@ -41,6 +41,7 @@ pub struct Mmc5Aux {
     rom: Vec<u8>,
     ram: bool,
     slots: [u16; 8],
+    bg_slots: [u16; 8],
     split_enabled: bool,
     split_right: bool,
     split_threshold: u8,
@@ -60,6 +61,7 @@ impl Mmc5Aux {
             rom,
             ram,
             slots: [0, 1, 2, 3, 4, 5, 6, 7],
+            bg_slots: [0, 1, 2, 3, 4, 5, 6, 7],
             split_enabled: false,
             split_right: false,
             split_threshold: 0,
@@ -85,6 +87,10 @@ impl Mmc5Aux {
 
     fn set_slots(&mut self, slots: [u16; 8]) {
         self.slots = slots;
+    }
+
+    fn set_bg_slots(&mut self, slots: [u16; 8]) {
+        self.bg_slots = slots;
     }
 
     fn set_split(&mut self, enabled: bool, right: bool, threshold: u8, scroll: u8, bank: u8) {
@@ -225,6 +231,18 @@ impl Mmc5Aux {
 
     pub(crate) fn chr_read(&self, address: u16, local: &[u8]) -> u8 {
         let offset = self.chr_offset(address);
+        if self.ram {
+            local.get(offset).copied().unwrap_or(0)
+        } else {
+            self.rom.get(offset).copied().unwrap_or(0)
+        }
+    }
+
+    /// Background CHR read: in 8x16 sprite mode the MMC5 uses the
+    /// `$5128-$512B` background banks instead of the sprite banks.
+    pub(crate) fn bg_chr_read(&self, address: u16, local: &[u8]) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let offset = usize::from(self.bg_slots[slot]) * 0x400 + usize::from(address & 0x3FF);
         if self.ram {
             local.get(offset).copied().unwrap_or(0)
         } else {
@@ -506,6 +524,9 @@ pub trait Mapper: fmt::Debug {
     fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
         None
     }
+
+    /// Notification of a fully decoded PPUCTRL write (MMC5 8x16 mode).
+    fn set_ppu_ctrl(&mut self, _value: u8) {}
 
     /// Expansion-audio contribution for the current CPU cycle (0.0 for boards
     /// without expansion audio).
@@ -805,6 +826,11 @@ impl Cartridge {
     #[must_use]
     pub fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
         self.mapper.vrc7_chr()
+    }
+
+    /// Notifies the mapper of a fully decoded PPUCTRL write.
+    pub fn set_ppu_ctrl(&mut self, value: u8) {
+        self.mapper.set_ppu_ctrl(value);
     }
 
     /// Expansion-audio contribution for the current CPU cycle.
@@ -2754,7 +2780,8 @@ pub struct Mmc5 {
     aux: Option<Rc<RefCell<Mmc5Aux>>>,
     mirroring: Mirroring,
     prg_banks: [u8; 4],
-    chr_banks: [u8; 8],
+    chr_banks: [u8; 12],
+    ppu_ctrl: u8,
     mul_a: u8,
     mul_b: u8,
     protect1: u8,
@@ -2795,7 +2822,8 @@ impl Mmc5 {
             chr_mode: 3,
             mirroring: header.mirroring,
             prg_banks: [0, 0, 0, 0xFF],
-            chr_banks: [0, 1, 2, 3, 4, 5, 6, 7],
+            chr_banks: [0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 0],
+            ppu_ctrl: 0,
             mul_a: 0,
             mul_b: 0,
             protect1: 0x01,
@@ -2838,10 +2866,25 @@ impl Mmc5 {
             self.split_bank,
         );
         let mut slots = [0u16; 8];
+        let mut bg_slots = [0u16; 8];
         for (slot, value) in slots.iter_mut().enumerate() {
             *value = self.chr_bank(slot) as u16;
         }
+        if self.ppu_ctrl & 0x20 != 0 {
+            // 8x16 sprites: $5128-$512B apply to background tiles. Each
+            // register covers the corresponding slot in both pattern tables.
+            for (slot, value) in bg_slots.iter_mut().enumerate() {
+                let register = 8 + (slot & 0x03);
+                let bank = ((usize::from(self.chr_upper) << 8)
+                    | usize::from(self.chr_banks[register]))
+                    % self.chr_bank_count();
+                *value = bank as u16;
+            }
+        } else {
+            bg_slots = slots;
+        }
         aux.set_slots(slots);
+        aux.set_bg_slots(bg_slots);
     }
 
     fn prg_bank_count(&self) -> usize {
@@ -2968,7 +3011,7 @@ impl Mmc5 {
                 let index = usize::from(address - 0x5114);
                 self.prg_banks[index] = value;
             }
-            0x5120..=0x5127 => {
+            0x5120..=0x512B => {
                 let index = usize::from(address - 0x5120);
                 self.chr_banks[index] = value;
                 self.refresh_aux();
@@ -3103,6 +3146,11 @@ impl Mapper for Mmc5 {
 
     fn mmc5_aux(&self) -> Option<Rc<RefCell<Mmc5Aux>>> {
         self.aux.clone()
+    }
+
+    fn set_ppu_ctrl(&mut self, value: u8) {
+        self.ppu_ctrl = value;
+        self.refresh_aux();
     }
 
     fn irq_line(&self) -> bool {

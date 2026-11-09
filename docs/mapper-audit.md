@@ -95,8 +95,10 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   takes the palette from ExRAM bits 6-7 and the 4 KiB CHR bank from bits 0-5
   for every background tile, with `$5130` supplying the two upper bank bits
   (the PPU address API is 16-bit today, so boards above 256 KiB CHR still need
-  a wider path). 12/37 render at 20 frames, 17/37 at 600. Still missing:
-  accurate per-page CIRAM mapping and the PCM read-mode IRQ.
+  a wider path). 8x16 sprite mode keeps separate background banks:
+  `$5128-$512B` drive background fetches while `$5120-$5127` drive sprites.
+  12/37 render at 20 frames, 17/37 at 600. Still missing: accurate per-page
+  CIRAM mapping and the PCM read-mode IRQ.
 - **VRC6 audio (24/26)** — the two pulse channels (16-step duty generator,
   `$9003` halt/16x/256x frequency scaling) and the sawtooth (14-step
   accumulator reset) feed a linear 6-bit DAC (two 4-bit pulses + the saw's

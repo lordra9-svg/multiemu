@@ -440,6 +440,12 @@ impl Ppu {
         self.chr_byte(address)
     }
 
+    /// Test-only background CHR read hook.
+    #[cfg(test)]
+    pub(crate) fn debug_bg_chr_byte(&self, address: u16) -> u8 {
+        self.chr_byte_background(address)
+    }
+
     /// Test-only framebuffer pixel hook.
     #[cfg(test)]
     pub(crate) fn debug_pixel(&self, x: usize, y: usize) -> [u8; 4] {
@@ -1617,7 +1623,7 @@ impl Ppu {
                 let clean = if physical {
                     self.split_chr_byte(address)
                 } else {
-                    self.chr_byte(address)
+                    self.chr_byte_background(address)
                 };
                 if corrupt {
                     self.ale_countdown = None;
@@ -1625,7 +1631,7 @@ impl Ppu {
                     self.pat_lo = if physical {
                         self.split_chr_byte(bus_address)
                     } else {
-                        self.chr_byte(bus_address)
+                        self.chr_byte_background(bus_address)
                     };
                 } else {
                     self.pat_lo = clean;
@@ -1642,7 +1648,7 @@ impl Ppu {
                 self.pat_hi = if physical {
                     self.split_chr_byte(address)
                 } else {
-                    self.chr_byte(address)
+                    self.chr_byte_background(address)
                 };
                 self.note_chr_fetch(address);
                 self.fetch_byte = self.pat_hi;
@@ -1675,6 +1681,14 @@ impl Ppu {
             return (address, true);
         }
         (self.pattern_address(self.nt_byte, high), false)
+    }
+
+    /// Background CHR read: MMC5 8x16 mode uses its background bank set.
+    fn chr_byte_background(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.mmc5_aux {
+            return aux.borrow().bg_chr_read(address, &self.chr);
+        }
+        self.chr_byte(address)
     }
 
     /// CHR address for a split fetch, where `address` is already the physical

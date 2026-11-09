@@ -880,6 +880,9 @@ impl CpuBus for System {
             }
             0x2000..=0x3FFF => {
                 self.ppu.write_register(address, value);
+                if address == 0x2000 {
+                    self.cart.set_ppu_ctrl(value);
+                }
             }
             0x4000..=0x4013 | 0x4015 | 0x4017 => {
                 // `self.phase` has already toggled to the next cycle, so the
@@ -1100,6 +1103,26 @@ mod tests {
         assert_eq!(system.cart.ppu_read(0x0000), 0xCD);
         system.cart.cpu_write(0xA000, 2);
         assert_eq!(system.cart.ppu_read(0x0000), 0xAB);
+    }
+
+    #[test]
+    fn mmc5_eight_by_sixteen_background_banks_are_separate() {
+        let prg_len = 128 * 1024;
+        let chr_len = 64 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 8;
+        rom[6] = 0x50;
+        for (bank, chunk) in rom[16 + prg_len..].chunks_mut(0x400).enumerate() {
+            chunk.fill(0x80 | bank as u8);
+        }
+        let mut system = System::from_ines(&rom).expect("load");
+        system.cart.cpu_write(0x5120, 1); // sprite slot 0
+        system.cart.cpu_write(0x5128, 2); // background slot 0 in 8x16 mode
+        system.cart.set_ppu_ctrl(0x20);
+        assert_eq!(system.ppu.debug_chr_byte(0x0000), 0x81);
+        assert_eq!(system.ppu.debug_bg_chr_byte(0x0000), 0x82);
     }
 
     #[test]
