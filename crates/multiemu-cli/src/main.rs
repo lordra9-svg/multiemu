@@ -562,6 +562,21 @@ fn run() -> Result<(), Box<dyn Error>> {
         "diff" => {
             let a_path = args.next().ok_or_else(usage)?;
             let b_path = args.next().ok_or_else(usage)?;
+            let mut skip = 0usize;
+            let mut video_only = false;
+            while let Some(flag) = args.next() {
+                match flag.as_str() {
+                    "--video" => video_only = true,
+                    "--skip" => {
+                        skip = args
+                            .next()
+                            .ok_or("--skip needs a number")?
+                            .parse()
+                            .map_err(|_| "--skip needs a number")?;
+                    }
+                    other => return Err(format!("unknown option {other}").into()),
+                }
+            }
             let a = fs::read_to_string(&a_path)?;
             let b = fs::read_to_string(&b_path)?;
             let (frames_a, state_a) = parse_trace(&a)?;
@@ -575,10 +590,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                 )
                 .into());
             }
-            for index in 0..count {
+            let start = skip.min(count);
+            for index in start..count {
                 let (video_a, audio_a) = frames_a[index];
                 let (video_b, audio_b) = frames_b[index];
-                if video_a != video_b || audio_a != audio_b {
+                if video_a != video_b || (!video_only && audio_a != audio_b) {
                     return Err(format!(
                         "divergence at frame {index}: video {video_a:016x}/{video_b:016x}, \
                          audio {audio_a:016x}/{audio_b:016x}"
@@ -590,9 +606,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                 if a != b {
                     return Err(format!("final state differs: {a:016x} vs {b:016x}").into());
                 }
-                println!("ok: {count} frames, state match");
+                println!("ok: {} frames (from {start}), state match", count - start);
             } else {
-                println!("ok: {count} frames (state not compared)");
+                println!(
+                    "ok: {} frames (from {start}, state not compared)",
+                    count - start
+                );
             }
         }
         "bench" => {
@@ -661,7 +680,7 @@ fn usage() -> String {
   multiemu run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID]
   multiemu verify <rom|archive> [frames]
   multiemu trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state]
-  multiemu diff <a.trace> <b.trace>
+  multiemu diff <a.trace> <b.trace> [--skip N] [--video]
   multiemu bench <rom|archive> [frames]"
         .into()
 }

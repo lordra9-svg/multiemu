@@ -133,9 +133,11 @@ gating:
   frame of every image and compares against a local manifest, reporting
   changed/new/missing titles.
 - `trace <rom> --frames N --out trace.txt [--no-state]` and
-  `diff a.trace b.trace` — per-frame video/audio hashes and the first divergent
-  frame for one image. `--no-state` omits the save-state hash so a trace can be
-  compared with a reference capture that has no state.
+  `diff a.trace b.trace [--skip N] [--video]` — per-frame video/audio hashes
+  and the first divergent frame for one image. `--no-state` omits the
+  save-state hash so a trace can be compared with a reference capture that has
+  no state; `--skip N` ignores start-up frames and `--video` compares video
+  only while the audio mixers are still being aligned.
 
 ### Differential oracle
 
@@ -168,7 +170,16 @@ Two PPU defects were found and fixed with this harness:
 
 The commercial title now differs only on frames 0, 9 and 27, where the first
 scanline has a handful of backdrop-vs-black pixels while the PPU is still
-starting up.
+starting up. Skipping those frames proves the long run explicitly:
+
+```
+multiemu diff video.trace reference.trace --skip 28 --video
+ok: 272 frames (from 28, state not compared)
+```
+
+Audio hashes do not match the reference yet: the two cores use different
+sample rates and mixer output scaling, so audio parity remains a separate
+task even when every video frame matches.
 - `run <rom> --dump-ppu` / `--break <hex>` — per-frame CPU/PPU/APU state and a
   PC breakpoint.
 
