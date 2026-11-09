@@ -2556,6 +2556,143 @@ impl Mapper for Vrc {
     }
 }
 
+/// MMC5 length-counter table (7-bit counts, lowest bit always zero).
+const MMC5_LENGTH: [u8; 32] = [
+    0x0A, 0xFE, 0x14, 0x02, 0x28, 0x04, 0x50, 0x06, 0xA0, 0x08, 0x3C, 0x0A, 0x0E, 0x0C, 0x1A, 0x0E,
+    0x0C, 0x10, 0x18, 0x12, 0x30, 0x14, 0x60, 0x16, 0xC0, 0x18, 0x48, 0x1A, 0x10, 0x1C, 0x20, 0x1E,
+];
+
+/// APU-style pulse duty sequences (ones-complement for duty 2/3).
+const MMC5_DUTY: [[u8; 8]; 4] = [
+    [0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 1, 1, 0, 0, 0, 0, 0],
+    [0, 1, 1, 1, 1, 0, 0, 0],
+    [0, 1, 0, 0, 1, 1, 1, 1],
+];
+
+/// One MMC5 pulse channel.
+#[derive(Debug, Default, Clone)]
+struct Mmc5Pulse {
+    duty: u8,
+    halt: bool,
+    constant: bool,
+    volume: u8,
+    timer_period: u16,
+    timer: u16,
+    step: u8,
+    length: u8,
+    envelope_start: bool,
+    envelope_divider: u8,
+    envelope_volume: u8,
+}
+
+impl Mmc5Pulse {
+    fn write(&mut self, register: u16, value: u8) {
+        match register {
+            0 => {
+                self.duty = value >> 6;
+                self.halt = value & 0x20 != 0;
+                self.constant = value & 0x10 != 0;
+                self.volume = value & 0x0F;
+            }
+            2 => self.timer_period = (self.timer_period & 0x0700) | u16::from(value),
+            3 => {
+                self.timer_period = (self.timer_period & 0x00FF) | (u16::from(value & 0x07) << 8);
+                let index = usize::from(value >> 3) & 0x1F;
+                self.length = MMC5_LENGTH[index];
+                self.envelope_start = true;
+                self.step = 0;
+            }
+            _ => {}
+        }
+    }
+
+    fn clock_timer(&mut self) {
+        if self.timer == 0 {
+            self.timer = self.timer_period;
+            self.step = (self.step + 1) & 0x07;
+        } else {
+            self.timer -= 1;
+        }
+    }
+
+    /// Envelope and length run at the fixed ~240 Hz MMC5 rate.
+    fn clock_frame(&mut self) {
+        let period = self.volume;
+        if self.envelope_start {
+            self.envelope_start = false;
+            self.envelope_divider = period;
+            self.envelope_volume = 15;
+        } else if self.envelope_divider == 0 {
+            self.envelope_divider = period;
+            if self.envelope_volume > 0 {
+                self.envelope_volume -= 1;
+            } else if self.halt {
+                self.envelope_volume = 15;
+            }
+        } else {
+            self.envelope_divider -= 1;
+        }
+        if !self.halt && self.length > 0 {
+            self.length -= 1;
+        }
+    }
+
+    fn output(&self) -> u8 {
+        if self.length == 0 {
+            return 0;
+        }
+        let volume = if self.constant {
+            self.volume
+        } else {
+            self.envelope_volume
+        };
+        if MMC5_DUTY[usize::from(self.duty & 0x03)][usize::from(self.step)] != 0 {
+            volume
+        } else {
+            0
+        }
+    }
+}
+
+/// MMC5 expansion audio: two pulses and the 8-bit PCM DAC.
+#[derive(Debug, Default, Clone)]
+struct Mmc5Audio {
+    pulse1: Mmc5Pulse,
+    pulse2: Mmc5Pulse,
+    pcm: u8,
+    frame_divider: u32,
+}
+
+impl Mmc5Audio {
+    fn write(&mut self, address: u16, value: u8) {
+        match address {
+            0x5000..=0x5003 => self.pulse1.write(address - 0x5000, value),
+            0x5004..=0x5007 => self.pulse2.write(address - 0x5004, value),
+            0x5011 if value != 0 => self.pcm = value,
+            _ => {}
+        }
+    }
+
+    fn clock(&mut self) {
+        self.pulse1.clock_timer();
+        self.pulse2.clock_timer();
+        self.frame_divider += 1;
+        // ~241 Hz: the MMC5 clocks envelope and length at M2/7424.
+        if self.frame_divider >= 7424 {
+            self.frame_divider = 0;
+            self.pulse1.clock_frame();
+            self.pulse2.clock_frame();
+        }
+    }
+
+    fn mix(&self) -> f32 {
+        let pulses = u16::from(self.pulse1.output()) + u16::from(self.pulse2.output());
+        // Two APU-equivalent pulses plus the held PCM DAC level.
+        pulses as f32 * 0.0086 + f32::from(self.pcm) / 255.0 * 0.25
+    }
+}
+
 /// MMC5 (mapper 5), partial: PRG/CHR banking, mirroring and scanline IRQ.
 ///
 /// ExRAM, split-screen mode, the multiplier and expansion audio are not
@@ -2591,6 +2728,7 @@ pub struct Mmc5 {
     irq_counter: u8,
     irq_enabled: bool,
     irq_pending: bool,
+    audio: Mmc5Audio,
 }
 
 impl Mmc5 {
@@ -2631,6 +2769,7 @@ impl Mmc5 {
             irq_counter: 0,
             irq_enabled: false,
             irq_pending: false,
+            audio: Mmc5Audio::default(),
         };
         mmc5.refresh_aux();
         mmc5
@@ -2791,6 +2930,7 @@ impl Mmc5 {
                 self.chr_upper = value & 0x03;
                 self.refresh_aux();
             }
+            0x5000..=0x5007 | 0x5011 => self.audio.write(address, value),
             0x5203 => self.irq_latch = value,
             0x5204 => {
                 if value & 0x80 != 0 {
@@ -2935,6 +3075,14 @@ impl Mapper for Mmc5 {
 
     fn acknowledge_irq(&mut self) {
         self.irq_pending = false;
+    }
+
+    fn clock_cpu(&mut self) {
+        self.audio.clock();
+    }
+
+    fn audio_mix(&self) -> f32 {
+        self.audio.mix()
     }
 }
 
@@ -12218,6 +12366,44 @@ mod tests {
         cart.cpu_write(0x8001, 0x00);
         cart.ppu_write(0x0200, 0x33);
         assert_eq!(cart.ppu_read(0x0200), 0x33);
+    }
+
+    #[test]
+    fn mmc5_expansion_audio_pulses_and_length() {
+        let rom = synth_banked(5, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+
+        // Pulse 1: 50% duty, length halt, constant volume 15.
+        cart.cpu_write(0x5000, 0xBF);
+        cart.cpu_write(0x5002, 0x00);
+        cart.cpu_write(0x5003, 0x00); // length index 0 -> 10
+        let mut peak = 0.0f32;
+        for _ in 0..64 {
+            cart.clock_cpu();
+            peak = peak.max(cart.audio_mix());
+        }
+        assert!((peak - 15.0 * 0.0086).abs() < 1e-4, "pulse peak {peak}");
+
+        // Pulse 2 adds to the same DAC sum.
+        cart.cpu_write(0x5004, 0xBF);
+        cart.cpu_write(0x5006, 0x00);
+        cart.cpu_write(0x5007, 0x00);
+        let mut peak = 0.0f32;
+        for _ in 0..64 {
+            cart.clock_cpu();
+            peak = peak.max(cart.audio_mix());
+        }
+        assert!((peak - 30.0 * 0.0086).abs() < 1e-4, "two-pulse {peak}");
+
+        // Clearing the halt bit lets the length counter expire (~240 Hz).
+        cart.cpu_write(0x5000, 0x8F);
+        cart.cpu_write(0x5003, 0x00);
+        cart.cpu_write(0x5004, 0x8F);
+        cart.cpu_write(0x5007, 0x00);
+        for _ in 0..(7424 * 11) {
+            cart.clock_cpu();
+        }
+        assert_eq!(cart.audio_mix(), 0.0);
     }
 
     #[test]

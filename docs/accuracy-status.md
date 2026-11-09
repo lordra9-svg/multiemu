@@ -780,7 +780,10 @@ the dots 1-64 clear phase, which provides the seed.
   `$07` tone/noise mixer). The Namco 163 (mapper 19) wave channels are also
   implemented: up to eight channels cycle every 15 CPU cycles from the shared
   `$40-$7F` sound RAM, with 24-bit phase accumulation, waveform length/offset
-  and the `$E000` sound-disable bit. VRC7/MMC5/FDS audio is still missing.
+  and the `$E000` sound-disable bit. MMC5 audio (mapper 5) is also
+  implemented: two APU-style pulses with the 7-bit length table, envelope and
+  the fixed ~240 Hz frame clock, plus the held `$5011` PCM DAC. VRC7/FDS audio
+  is still missing.
 - IRQ counters are clocked once per rendered scanline rather than from exact
   PPU A12 rises, so fine-grained split timing is approximate.
 - AxROM titles that depend on exact PPU timing (e.g. Battletoads) do not boot yet.

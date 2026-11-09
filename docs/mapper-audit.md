@@ -99,6 +99,10 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   accumulator reset) feed a linear 6-bit DAC (two 4-bit pulses + the saw's
   high 5 bits). Unit test covers duty peaks, the mode bit, channel summing and
   the saw ladder.
+- **MMC5 audio (5)** — two APU-style pulse channels (`$5000-$5007`) using the
+  7-bit MMC5 length table, a fixed ~240 Hz envelope/length clock and four duty
+  sequences, plus the held 8-bit `$5011` PCM DAC. No sweep unit. Unit test
+  covers the pulse peak, both channels summing and length expiration.
 - **Sunsoft 5B audio (69)** — YM2149F with three tone channels (CPU/16
   prescaler), the 17-bit/13-tap LFSR noise generator, the 32-step envelope
   generator and the `$07` tone/noise mixer; `$C000` selects an internal

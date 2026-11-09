@@ -37,8 +37,8 @@ The main effort is now the reference-parity accuracy core. Details in
       MMC5/FDS expansion audio, the Datach peripheral and the small six-image
       ASIC tail (triage in `docs/mapper-audit.md`). VRC6 expansion audio (two
       pulses + sawtooth), Sunsoft 5B / YM2149 (three tones + noise + envelope)
-      and Namco 163 (up to eight wave channels, shared $40-$7F sound RAM) are
-      implemented with unit tests.
+      Namco 163 (up to eight wave channels, shared $40-$7F sound RAM) and MMC5
+      (two pulses + PCM DAC) are implemented with unit tests.
 - [x] **A5** AccuracyCoin gate and divergence ledger. Isolated runner exercises
       all 151 rows: **146 pass, 0 fail, 5 DRAW skips, 0 unrun** — every
       non-DRAW test passes. `$2007 Stress Test` was closed with the PPU data
