@@ -857,8 +857,8 @@ impl CpuBus for System {
                     .low_window()
                     .is_some_and(|(lo, hi)| (lo..=hi).contains(&address))
                 {
-                    // A mapper PRG-RAM board (e.g. Waixing FS303 at $5000).
-                    self.cart.cpu_read(address)
+                    // A mapper board register/RAM window (FDS, Waixing FS303).
+                    self.cart.cpu_read_io(address)
                 } else {
                     drives_bus = false;
                     self.open_bus
@@ -1132,7 +1132,9 @@ mod tests {
         CpuBus::write(&mut system, 0x6000, 0x5A);
         assert_eq!(system.cart.cpu_read(0x6000), 0x5A);
 
-        // Wave RAM and master volume through the board window.
+        // Wave RAM and master volume through the board window. $4023 bit 1
+        // enables the sound registers, as the BIOS does with $83.
+        CpuBus::write(&mut system, 0x4023, 0x83);
         CpuBus::write(&mut system, 0x4089, 0x83);
         for i in 0..64u16 {
             CpuBus::write(&mut system, 0x4040 + i, if i < 32 { 63 } else { 0 });

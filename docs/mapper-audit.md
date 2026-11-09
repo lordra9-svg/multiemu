@@ -99,6 +99,17 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   `$5128-$512B` drive background fetches while `$5120-$5127` drive sprites.
   12/37 render at 20 frames, 17/37 at 600. Still missing: accurate per-page
   CIRAM mapping and the PCM read-mode IRQ.
+- **Famicom Disk System (20)** — raw `.fds` loader plus a BIOS (both
+  user-supplied): the 8 KiB BIOS maps at `$E000-$FFFF`, 32 KiB work RAM at
+  `$6000-$DFFF`, and `$4020-$4097` carries the disk timer IRQ, disk/sound
+  enables, control/status registers and the FDS audio. Reads are delivered
+  from a synthesized wire image (lead-in/inter-block gaps, `$80` start marks,
+  per-block CRC-16/KERMIT) at the ~149-cycle byte cadence; the byte-transfer,
+  end-of-head and drive-ready flags follow the documented `$4030`/`$4032`
+  behaviour, and a motor stop rewinds the head to the start of the side. The
+  real BIOS boots a local commercial FDS title to the licence screen and, after
+  Start, into the game (Super Mario Bros. title screen renders). The disk write
+  path and multi-side insertion are not implemented yet.
 - **VRC6 audio (24/26)** — the two pulse channels (16-step duty generator,
   `$9003` halt/16x/256x frequency scaling) and the sawtooth (14-step
   accumulator reset) feed a linear 6-bit DAC (two 4-bit pulses + the saw's

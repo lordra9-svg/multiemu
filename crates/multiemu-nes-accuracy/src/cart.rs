@@ -468,6 +468,10 @@ impl HybridChr {
 pub trait Mapper: fmt::Debug {
     /// Reads a PRG address in `$4020..=$FFFF`.
     fn prg_read(&self, address: u16) -> u8;
+    /// Reads an address in `$4020..=$5FFF` with side effects (FDS disk status).
+    fn read_io(&mut self, address: u16) -> u8 {
+        self.prg_read(address)
+    }
     /// Writes a PRG address in `$4020..=$FFFF`.
     fn prg_write(&mut self, address: u16, value: u8);
     /// Reads a CHR address in `$0000..=$1FFF`.
@@ -771,10 +775,15 @@ impl Cartridge {
         self.chr_is_ram
     }
 
-    /// CPU read in `$4020..=$FFFF`.
+    /// CPU read in `$4020..=$FFFF` without side effects.
     #[must_use]
     pub fn cpu_read(&self, address: u16) -> u8 {
         self.mapper.prg_read(address)
+    }
+
+    /// CPU read with side effects (FDS `$4030`/`$4031` acknowledgement).
+    pub fn cpu_read_io(&mut self, address: u16) -> u8 {
+        self.mapper.read_io(address)
     }
 
     /// CPU write in `$4020..=$FFFF`.
@@ -9659,45 +9668,373 @@ impl FdsAudio {
     }
 }
 
-/// Famicom Disk System board (mapper 20), BIOS/disk skeleton.
+/// CPU cycles between disk byte transfers (~96.4 kHz bit rate / 8 bits).
+const FDS_BYTE_CYCLES: u32 = 149;
+/// Lead-in gap (zero bytes) synthesized before the first block of a side.
+const FDS_LEAD_IN_GAP: usize = 200;
+/// Inter-block gap (zero bytes) synthesized between consecutive blocks.
+const FDS_BLOCK_GAP: usize = 100;
+/// The FDS block start mark: a single 1 bit, stored little-endian as `$80`.
+const FDS_START_MARK: u8 = 0x80;
+/// Deterministic spin-up window after the motor turns on.
+const FDS_MOTOR_SPIN_UP: u32 = 50_000;
+/// Head re-seek window on a motor restart after the first spin-up.
+const FDS_HEAD_RESEEK: u32 = 8_000;
+
+/// CRC-16/KERMIT over the start mark and block payload, matching the RP2C33
+/// block CRC (reflected, poly `$8408`).
+fn fds_block_crc(block: &[u8]) -> u16 {
+    let mut crc: u16 = 0;
+    let update = |byte: u8, crc: &mut u16| {
+        *crc ^= u16::from(byte);
+        for _ in 0..8 {
+            let carry = *crc & 1 != 0;
+            *crc >>= 1;
+            if carry {
+                *crc ^= 0x8408;
+            }
+        }
+    };
+    update(FDS_START_MARK, &mut crc);
+    for &byte in block {
+        update(byte, &mut crc);
+    }
+    crc
+}
+
+/// Walks a raw `.fds` side and returns `(offset, length)` for each block.
+fn fds_side_blocks(side: &[u8]) -> Vec<(usize, usize)> {
+    let mut blocks = Vec::new();
+    let mut pos = 0usize;
+    let mut pending_size: Option<usize> = None;
+    while pos < side.len() {
+        let len = match side[pos] {
+            0x01 => 56,
+            0x02 => 2,
+            0x03 => {
+                let size = if pos + 15 <= side.len() {
+                    usize::from(side[pos + 13]) | (usize::from(side[pos + 14]) << 8)
+                } else {
+                    0
+                };
+                pending_size = Some(size);
+                16
+            }
+            0x04 => 1 + pending_size.take().unwrap_or(0),
+            _ => break,
+        };
+        if pos + len > side.len() {
+            blocks.push((pos, side.len() - pos));
+            break;
+        }
+        blocks.push((pos, len));
+        pos += len;
+    }
+    blocks
+}
+
+/// Synthesizes the wire image for one raw `.fds` side:
+/// `[gap $00] [$80 mark] [block] [crc lo] [crc hi]` per block, with a trailing
+/// gap so the head reads `$00` past the last block.
+fn fds_side_wire(side: &[u8]) -> Vec<u8> {
+    let blocks = fds_side_blocks(side);
+    let mut wire = Vec::with_capacity(side.len() + blocks.len() * 32 + FDS_LEAD_IN_GAP);
+    for (index, &(offset, len)) in blocks.iter().enumerate() {
+        let gap = if index == 0 {
+            FDS_LEAD_IN_GAP
+        } else {
+            FDS_BLOCK_GAP
+        };
+        wire.resize(wire.len() + gap, 0x00);
+        wire.push(FDS_START_MARK);
+        let block = &side[offset..offset + len];
+        wire.extend_from_slice(block);
+        let crc = fds_block_crc(block);
+        wire.push(crc as u8);
+        wire.push((crc >> 8) as u8);
+    }
+    wire.resize(wire.len() + FDS_BLOCK_GAP, 0x00);
+    wire
+}
+
+/// Famicom Disk System board (mapper 20).
 ///
-/// The 8 KiB BIOS is mapped at `$E000-$FFFF`, 32 KiB of work RAM at
-/// `$6000-$DFFF`, and the `$4020-$4032` disk registers plus `$4040-$408A`
-/// audio window are routed to the board. Disk-sector handshaking is not
-/// modelled yet; `$4024` returns the image bytes sequentially so a test BIOS
-/// can exercise the loader and audio path.
+/// Maps the 8 KiB BIOS at `$E000-$FFFF`, 32 KiB of work RAM at `$6000-$DFFF`,
+/// and the `$4020-$4032` disk registers / `$4040-$4097` audio window. The disk
+/// is presented as a synthesized wire image (gaps, `$80` start marks and
+/// per-block CRC-16), and bytes are delivered to `$4031` every [`FDS_BYTE_CYCLES`]
+/// CPU cycles while a read transfer is armed — the handshake the real BIOS
+/// loader polls through `$4030`/`$4032`.
 #[derive(Debug)]
 pub struct Fds {
     bios: Vec<u8>,
+    /// Raw `.fds` bytes of every side, concatenated.
     disk: Vec<u8>,
+    sides: usize,
+    side: usize,
+    wire: Vec<u8>,
     ram: Vec<u8>,
     chr: Vec<u8>,
-    disk_pos: usize,
+    head: usize,
+    insert_not_ready: u32,
+    spun_up: bool,
+
+    irq_reload: u16,
+    irq_counter: u16,
+    irq_enabled: bool,
+    irq_repeat: bool,
+    timer_irq_flag: bool,
+
+    disk_enabled: bool,
+    sound_enabled: bool,
+    write_data: u8,
+    read_data: u8,
+    motor_on: bool,
+    transfer_reset: bool,
+    read_mode: bool,
+    crc_control: bool,
+    crc_enabled: bool,
+    irq_on_transfer: bool,
+    ext_con: u8,
+    byte_transfer_flag: bool,
+    end_of_head: bool,
+    transfer_timer: u32,
+    transfer_active: bool,
+    skipping_gap: bool,
+
     mirroring: Mirroring,
-    irq: bool,
     audio: FdsAudio,
 }
 
 impl Fds {
     fn new(disk: &[u8], bios: &[u8]) -> Self {
-        Self {
+        let (sides, body) = if disk.len() >= 16 && &disk[0..4] == b"FDS\x1a" {
+            (usize::from(disk[4]).max(1), &disk[16..])
+        } else {
+            ((disk.len() / 65500).max(1), disk)
+        };
+        let mut fds = Self {
             bios: bios.to_vec(),
-            disk: disk.to_vec(),
+            disk: body.to_vec(),
+            sides,
+            side: 0,
+            wire: Vec::new(),
             ram: vec![0; 0x8000],
             chr: vec![0; 0x2000],
-            disk_pos: 0,
-            mirroring: Mirroring::Horizontal,
-            irq: false,
+            head: 0,
+            insert_not_ready: FDS_BYTE_CYCLES,
+            spun_up: false,
+            irq_reload: 0,
+            irq_counter: 0,
+            irq_enabled: false,
+            irq_repeat: false,
+            timer_irq_flag: false,
+            disk_enabled: false,
+            sound_enabled: false,
+            write_data: 0,
+            read_data: 0,
+            motor_on: false,
+            transfer_reset: true,
+            read_mode: true,
+            crc_control: false,
+            crc_enabled: false,
+            irq_on_transfer: false,
+            ext_con: 0x7F,
+            byte_transfer_flag: false,
+            end_of_head: false,
+            transfer_timer: FDS_BYTE_CYCLES,
+            transfer_active: false,
+            skipping_gap: true,
+            mirroring: Mirroring::Vertical,
             audio: FdsAudio::default(),
+        };
+        fds.rebuild_wire();
+        fds
+    }
+
+    fn side_bytes(&self) -> &[u8] {
+        let start = (self.side * 65500).min(self.disk.len());
+        let end = (start + 65500).min(self.disk.len());
+        &self.disk[start..end]
+    }
+
+    fn rebuild_wire(&mut self) {
+        self.wire = fds_side_wire(self.side_bytes());
+        self.head = 0;
+        self.end_of_head = false;
+        self.skipping_gap = true;
+    }
+
+    /// Inserts a disk side (or ejects), resetting the head and opening a short
+    /// not-ready window.
+    pub fn set_side(&mut self, side: Option<usize>) {
+        match side {
+            Some(index) if index < self.sides => {
+                self.side = index;
+                self.insert_not_ready = FDS_MOTOR_SPIN_UP;
+                self.spun_up = false;
+                self.rebuild_wire();
+            }
+            Some(_) => {}
+            None => {
+                self.wire.clear();
+                self.head = 0;
+                self.motor_on = false;
+                self.end_of_head = true;
+            }
         }
+        self.update_transfer_state();
+    }
+
+    fn update_transfer_state(&mut self) {
+        let ready = self.insert_not_ready == 0;
+        let crc_armed = self.crc_enabled && self.crc_control;
+        let active = ready && crc_armed && self.disk_enabled && (!self.read_mode || self.motor_on);
+        // Only a transition into an active read re-arms the gap skip; the
+        // BIOS toggles CRC between individual data bytes during a block, and
+        // re-arming there would swallow leading `$00` payload bytes.
+        if active != self.transfer_active {
+            self.transfer_active = active;
+            if active {
+                self.transfer_timer = FDS_BYTE_CYCLES;
+                if self.read_mode {
+                    self.skipping_gap = true;
+                }
+            }
+        }
+    }
+
+    fn deliver_byte(&mut self) {
+        if self.skipping_gap {
+            // A resync bit-shifts past the gap (zero run) and its terminating
+            // `$80` start mark without raising a byte-transfer event; the first
+            // event delivers the byte that follows the mark. A non-zero,
+            // non-mark byte (e.g. the previous block's CRC) is real data, so
+            // stop skipping and deliver it.
+            while self.head < self.wire.len() && self.wire[self.head] == 0x00 {
+                self.head += 1;
+            }
+            if self.head < self.wire.len() && self.wire[self.head] == FDS_START_MARK {
+                self.head += 1;
+            }
+            self.skipping_gap = false;
+        }
+        if self.head < self.wire.len() {
+            self.read_data = self.wire[self.head];
+            self.head += 1;
+        } else {
+            self.read_data = 0;
+            self.end_of_head = true;
+            self.motor_on = false;
+        }
+        self.byte_transfer_flag = true;
+    }
+
+    fn write_control(&mut self, value: u8) {
+        let was_motor_on = self.motor_on;
+        let was_reset = self.transfer_reset;
+        self.transfer_reset = value & 0x01 != 0;
+        self.motor_on = value & 0x02 == 0;
+        self.read_mode = value & 0x04 != 0;
+        self.crc_control = value & 0x20 != 0;
+        self.crc_enabled = value & 0x40 != 0;
+        self.irq_on_transfer = value & 0x80 != 0;
+        self.mirroring = if value & 0x08 != 0 {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        };
+        if self.motor_on && !was_motor_on {
+            if self.spun_up {
+                if self.head == 0 {
+                    self.insert_not_ready = self.insert_not_ready.max(FDS_HEAD_RESEEK);
+                }
+            } else {
+                self.insert_not_ready = FDS_MOTOR_SPIN_UP;
+                self.spun_up = true;
+            }
+        }
+        if !self.motor_on && was_motor_on {
+            // The belt-driven drive rewinds to the start of the side.
+            self.head = 0;
+            self.end_of_head = false;
+            self.skipping_gap = true;
+        }
+        if self.transfer_reset && !was_reset {
+            self.skipping_gap = true;
+            self.transfer_timer = FDS_BYTE_CYCLES;
+        }
+        // Writing $4025 acknowledges disk IRQs.
+        self.byte_transfer_flag = false;
+        self.update_transfer_state();
+    }
+
+    fn clock_timer(&mut self) {
+        if !self.irq_enabled {
+            return;
+        }
+        if self.irq_counter == 0 {
+            self.timer_irq_flag = true;
+            self.irq_counter = self.irq_reload;
+            if !self.irq_repeat {
+                self.irq_enabled = false;
+            }
+        } else {
+            self.irq_counter -= 1;
+        }
+    }
+
+    fn status_4030(&mut self) -> u8 {
+        let mut value = 0u8;
+        if self.timer_irq_flag {
+            value |= 0x01;
+        }
+        if self.mirroring == Mirroring::Horizontal {
+            value |= 0x08;
+        }
+        if self.end_of_head {
+            value |= 0x40;
+        }
+        if self.byte_transfer_flag {
+            value |= 0x80;
+        }
+        // Reading $4030 acknowledges the timer IRQ but not the byte-transfer
+        // flag.
+        self.timer_irq_flag = false;
+        value
+    }
+
+    fn drive_status_4032(&self) -> u8 {
+        let mut value = 0u8;
+        if self.insert_not_ready > 0 || self.end_of_head || !self.motor_on {
+            value |= 0x02;
+        }
+        value
     }
 }
 
 impl Mapper for Fds {
     fn prg_read(&self, address: u16) -> u8 {
         match address {
-            0x4024 => self.disk.get(self.disk_pos).copied().unwrap_or(0),
-            0x4020..=0x4032 => 0,
+            0x4090..=0x4097 => self.audio.read(address),
+            0x6000..=0xDFFF => self.ram[usize::from(address - 0x6000)],
+            0xE000..=0xFFFF => self.bios[usize::from(address - 0xE000) % self.bios.len().max(1)],
+            _ => 0,
+        }
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        match address {
+            0x4030 => self.status_4030(),
+            0x4031 => {
+                self.byte_transfer_flag = false;
+                self.read_data
+            }
+            0x4032 => self.drive_status_4032(),
+            0x4033 => {
+                let battery = if self.wire.is_empty() { 0 } else { 0x80 };
+                battery | (self.ext_con & 0x7F)
+            }
             0x4090..=0x4097 => self.audio.read(address),
             0x6000..=0xDFFF => self.ram[usize::from(address - 0x6000)],
             0xE000..=0xFFFF => self.bios[usize::from(address - 0xE000) % self.bios.len().max(1)],
@@ -9707,12 +10044,70 @@ impl Mapper for Fds {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         match address {
-            0x4020..=0x4032 => {
-                if address == 0x4023 {
-                    self.audio.write(address, value);
+            0x4020 => {
+                self.irq_reload = (self.irq_reload & 0xFF00) | u16::from(value);
+            }
+            0x4021 => {
+                self.irq_reload = (self.irq_reload & 0x00FF) | (u16::from(value) << 8);
+            }
+            0x4022 => {
+                if !self.disk_enabled {
+                    return;
+                }
+                self.irq_repeat = value & 0x01 != 0;
+                self.irq_enabled = value & 0x02 != 0;
+                if self.irq_enabled {
+                    self.irq_counter = self.irq_reload;
+                } else {
+                    self.timer_irq_flag = false;
                 }
             }
-            0x4040..=0x4097 => self.audio.write(address, value),
+            0x4023 => {
+                let was_enabled = self.disk_enabled;
+                self.disk_enabled = value & 0x01 != 0;
+                self.sound_enabled = value & 0x02 != 0;
+                self.audio.write(0x4023, value);
+                if was_enabled && !self.disk_enabled {
+                    self.irq_enabled = false;
+                    self.timer_irq_flag = false;
+                    self.byte_transfer_flag = false;
+                    self.transfer_reset = true;
+                    self.motor_on = false;
+                    self.read_mode = true;
+                    self.crc_control = false;
+                    self.crc_enabled = false;
+                    self.irq_on_transfer = false;
+                    self.end_of_head = false;
+                    self.mirroring = Mirroring::Vertical;
+                    self.ext_con = 0x7F;
+                }
+                self.update_transfer_state();
+            }
+            0x4024 => {
+                if !self.disk_enabled {
+                    return;
+                }
+                self.write_data = value;
+                self.byte_transfer_flag = false;
+            }
+            0x4025 => {
+                if self.disk_enabled {
+                    self.write_control(value);
+                }
+            }
+            0x4026 => {
+                if self.disk_enabled {
+                    self.ext_con = value & 0x7F;
+                }
+            }
+            0x4040..=0x408A => {
+                // Wave volume, mod counter and mod-table writes are ignored
+                // while the sound registers are reset.
+                if !self.sound_enabled && matches!(address, 0x4080 | 0x4085 | 0x4088) {
+                    return;
+                }
+                self.audio.write(address, value);
+            }
             0x6000..=0xDFFF => self.ram[usize::from(address - 0x6000)] = value,
             _ => {}
         }
@@ -9734,12 +10129,33 @@ impl Mapper for Fds {
         20
     }
 
+    fn prg_ram(&self) -> &[u8] {
+        &self.ram
+    }
+
     fn low_window(&self) -> Option<(u16, u16)> {
         Some((0x4020, 0x4097))
     }
 
     fn clock_cpu(&mut self) {
         self.audio.clock();
+        self.clock_timer();
+        if self.insert_not_ready > 0 {
+            self.insert_not_ready -= 1;
+            if self.insert_not_ready == 0 {
+                self.update_transfer_state();
+            }
+        }
+        if !self.transfer_active || !self.read_mode {
+            return;
+        }
+        if self.transfer_timer > 0 {
+            self.transfer_timer -= 1;
+        }
+        if self.transfer_timer == 0 {
+            self.deliver_byte();
+            self.transfer_timer = FDS_BYTE_CYCLES;
+        }
     }
 
     fn audio_mix(&self) -> f32 {
@@ -9747,15 +10163,13 @@ impl Mapper for Fds {
     }
 
     fn irq_line(&self) -> bool {
-        self.irq
+        self.timer_irq_flag || (self.byte_transfer_flag && self.irq_on_transfer)
     }
 
-    fn acknowledge_irq(&mut self) {
-        self.irq = false;
-    }
+    fn acknowledge_irq(&mut self) {}
 }
 
-/// VRC7 built-in instrument patches (approximation of the YM2413 patch
+/// VRC7 built-in instrument patches/// VRC7 built-in instrument patches (approximation of the YM2413 patch
 /// ROM). Index 0 is the user patch, which is built from registers $00-$07.
 const VRC7_PATCHES: [[u8; 8]; 16] = [
     [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
@@ -13449,6 +13863,108 @@ mod tests {
             saw_high |= (sample - 15.0 / 45.0).abs() < 1e-4;
         }
         assert!(saw_low && saw_high, "noise did not toggle");
+    }
+
+    #[test]
+    fn fds_disk_reads_a_block_and_resyncs_after_the_gap() {
+        // Synthetic side: disk-info block (56 bytes), file-amount block (2),
+        // then a file header (16) and one byte of file data.
+        let mut side = vec![0u8; 65500];
+        side[0] = 0x01;
+        side[1..15].copy_from_slice(b"*NINTENDO-HVC*");
+        for (i, byte) in side.iter_mut().enumerate().take(56).skip(15) {
+            *byte = 0xA0 | (i as u8 & 0x1F);
+        }
+        side[56] = 0x02;
+        side[57] = 0x02;
+        side[58] = 0x03;
+        side[71] = 1; // file size low
+        side[74] = 0x04;
+        side[75] = 0x5A;
+
+        let mut cart = Cartridge::from_fds(&side, &vec![0xEA; 0x2000]).expect("fds");
+
+        // Enable disk I/O and sound, then start the motor in read mode with
+        // CRC enabled ($4025 = 0110_0100: bit6 CRC enable, bit5 CRC control,
+        // bit2 read, bit1 motor on, bit0 no reset).
+        cart.cpu_write(0x4023, 0x83);
+        assert_eq!(
+            cart.cpu_read_io(0x4032) & 0x02,
+            0x02,
+            "not ready at power-on"
+        );
+        cart.cpu_write(0x4025, 0x64);
+        while cart.cpu_read_io(0x4032) & 0x02 != 0 {
+            cart.clock_cpu();
+        }
+        // The first byte lands one cadence after the drive reports ready; the
+        // controller has skipped the lead-in gap and $80 start mark, so it is
+        // the block code.
+        for _ in 0..FDS_BYTE_CYCLES {
+            cart.clock_cpu();
+        }
+        assert_eq!(cart.cpu_read_io(0x4030) & 0x80, 0x80);
+        assert_eq!(cart.cpu_read_io(0x4031), 0x01);
+
+        // Read the rest of the info block, one cadence per byte.
+        for (i, expected) in side.iter().enumerate().take(56).skip(1) {
+            for _ in 0..FDS_BYTE_CYCLES {
+                cart.clock_cpu();
+            }
+            assert_eq!(cart.cpu_read_io(0x4030) & 0x80, 0x80);
+            assert_eq!(cart.cpu_read_io(0x4031), *expected, "info block byte {i}");
+        }
+
+        // Let the head run past the CRC into the inter-block gap, then assert
+        // transfer reset so the next delivery re-syncs to block 2.
+        for _ in 0..FDS_BYTE_CYCLES * 4 {
+            cart.clock_cpu();
+        }
+        cart.cpu_write(0x4025, 0x65); // same, plus transfer reset
+        for _ in 0..FDS_BYTE_CYCLES {
+            cart.clock_cpu();
+        }
+        assert_eq!(cart.cpu_read_io(0x4031), 0x02, "file-amount block code");
+
+        // Stop the motor: the drive rewinds to the start of the side, so a
+        // restart re-reads block 1.
+        cart.cpu_write(0x4025, 0x66);
+        assert_eq!(
+            cart.cpu_read_io(0x4032) & 0x02,
+            0x02,
+            "stopped -> not ready"
+        );
+        cart.cpu_write(0x4025, 0x64);
+        while cart.cpu_read_io(0x4032) & 0x02 != 0 {
+            cart.clock_cpu();
+        }
+        for _ in 0..FDS_BYTE_CYCLES {
+            cart.clock_cpu();
+        }
+        assert_eq!(cart.cpu_read_io(0x4031), 0x01, "rewound to block 1");
+    }
+
+    #[test]
+    fn fds_timer_irq_reloads_and_clears_on_status_read() {
+        let mut cart = Cartridge::from_fds(&vec![0u8; 65500], &vec![0xEA; 0x2000]).expect("fds");
+        cart.cpu_write(0x4023, 0x83);
+        cart.cpu_write(0x4020, 0x03);
+        cart.cpu_write(0x4021, 0x00);
+        cart.cpu_write(0x4022, 0x03); // enable + repeat
+        for _ in 0..4 {
+            cart.clock_cpu();
+        }
+        assert!(cart.irq_line(), "timer did not fire");
+        assert_eq!(cart.cpu_read_io(0x4030) & 0x01, 0x01);
+        assert!(!cart.irq_line(), "reading $4030 acknowledges the timer");
+        // Repeat keeps it firing.
+        for _ in 0..4 {
+            cart.clock_cpu();
+        }
+        assert!(cart.irq_line());
+        // Disabling clears it.
+        cart.cpu_write(0x4022, 0x00);
+        assert!(!cart.irq_line());
     }
 
     #[test]

@@ -138,6 +138,10 @@ gating:
   save-state hash so a trace can be compared with a reference capture that has
   no state; `--skip N` ignores start-up frames and `--video` compares video
   only while the audio mixers are still being aligned.
+- `trace <disk.fds> --bios disksys.rom ... [--press-start N]` — traces a raw
+  FDS disk image with a user-supplied BIOS. `--press-start N` holds Start for
+  12 frames from frame `N` so a licence screen can be dismissed deterministically.
+  The BIOS is never bundled or committed.
 
 ### Differential oracle
 

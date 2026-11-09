@@ -809,10 +809,17 @@ the dots 1-64 clear phase, which provides the seed.
   video on 296/300 frames. The FDS wavetable/modulation audio device is also
   implemented (`FdsAudio`: wave RAM, volume/mod envelopes, modulation table,
   `$4023` enable/reset) and unit-tested. A raw loader (`System::from_fds`)
-  and mapper 20 board map the 8 KiB BIOS at `$E000-$FFFF`, 32 KiB work RAM,
-  the `$4020-$4097` window and the audio registers; `$4024` currently returns
-  image bytes sequentially. Real disk-sector handshaking and BIOS boot are the
-  remaining FDS step.
+  and a complete mapper 20 board map the 8 KiB BIOS at `$E000-$FFFF`, 32 KiB
+  work RAM, and the `$4020-$4097` window. The disk model synthesizes the wire
+  image (lead-in/inter-block gaps, `$80` start marks, per-block CRC-16/KERMIT)
+  and delivers bytes to `$4031` every ~149 CPU cycles while a read transfer is
+  armed; `$4030` reports the byte-transfer/end-of-head/timer flags, `$4032`
+  reports drive readiness, and the `$4020-$4022` timer IRQ and `$4023`
+  disk/sound enables are implemented. The real BIOS boots a local FDS title
+  to its licence screen, and pressing Start loads and starts the game: the
+  Super Mario Bros. FDS title screen renders correctly. Against the reference
+  capture the 900-frame run matches 735/900 frames directly and 877/899 when
+  allowing a single-frame phase offset (our boot completes one frame early).
 - IRQ counters are clocked once per rendered scanline rather than from exact
   PPU A12 rises, so fine-grained split timing is approximate.
 - AxROM titles that depend on exact PPU timing (e.g. Battletoads) do not boot yet.

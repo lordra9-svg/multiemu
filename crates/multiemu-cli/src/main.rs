@@ -518,6 +518,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut core_id: Option<String> = None;
             let mut out: Option<String> = None;
             let mut with_state = true;
+            let mut bios: Option<String> = None;
+            let mut press_start: Option<u32> = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--frames" => {
@@ -530,8 +532,53 @@ fn run() -> Result<(), Box<dyn Error>> {
                     "--core" => core_id = Some(args.next().ok_or("--core needs an id")?),
                     "--out" => out = Some(args.next().ok_or("--out needs a path")?),
                     "--no-state" => with_state = false,
+                    "--bios" => bios = Some(args.next().ok_or("--bios needs a path")?),
+                    "--press-start" => {
+                        press_start = Some(
+                            args.next()
+                                .ok_or("--press-start needs a frame")?
+                                .parse()
+                                .map_err(|_| "--press-start needs a frame")?,
+                        );
+                    }
                     other => return Err(format!("unknown option {other}").into()),
                 }
+            }
+            if let Some(bios) = bios {
+                let disk = fs::read(&path)?;
+                let bios = fs::read(&bios)?;
+                let mut system = multiemu_nes_accuracy::System::from_fds(&disk, &bios)
+                    .map_err(|e| e.to_string())?;
+                let mut text = String::from("# multiemu trace v1\n");
+                text.push_str("core multiemu-nes-accuracy\n");
+                text.push_str(&format!("frames {frames}\n"));
+                for frame in 0..frames {
+                    if let Some(start) = press_start {
+                        let pressed = frame >= start && frame < start + 12;
+                        system.set_controller(
+                            0,
+                            if pressed {
+                                multiemu_core::InputState::START
+                            } else {
+                                0
+                            },
+                        );
+                    }
+                    system.run_frame();
+                    let video = fnv1a(FNV_OFFSET, system.video());
+                    let mut audio = FNV_OFFSET;
+                    for sample in system.audio() {
+                        audio = fnv1a(audio, &sample.to_bits().to_le_bytes());
+                    }
+                    text.push_str(&format!("frame {frame} {video:016x} {audio:016x}\n"));
+                }
+                if let Some(path) = out {
+                    fs::write(&path, &text)?;
+                    println!("wrote {path} ({frames} frames)");
+                } else {
+                    print!("{text}");
+                }
+                return Ok(());
             }
             let (_, rom) = load_arg(&path)?;
             let registry = registry();
@@ -679,7 +726,7 @@ fn usage() -> String {
   multiemu signatures <dir> [--frames N] [--mapper ID] [--limit N] [--check FILE]
   multiemu run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID]
   multiemu verify <rom|archive> [frames]
-  multiemu trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state]
+  multiemu trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N]
   multiemu diff <a.trace> <b.trace> [--skip N] [--video]
   multiemu bench <rom|archive> [frames]"
         .into()
