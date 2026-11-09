@@ -74,17 +74,18 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   pair selected while a CHR low nibble is 4 or 5 (unless the `$88` signature
   forces CHR-ROM). **6/6 images load, 3/6 render at 600 frames**; Dragon Ball Z
   reaches its title screen correctly.
-- **Waixing FS309 (199, partial)** — MMC3 plus four extra registers written
-  through `$8001` when `$8000` bit 3 is set: they force 8 KiB PRG slots 2/3
+- **Waixing FS309 (199)** — MMC3 plus four extra registers written through
+  `$8001` when `$8000` bit 3 is set: they force 8 KiB PRG slots 2/3
   (`$C000`/`$E000`) and 1 KiB CHR slots 1/3, while slots 0/2 use R0/R1. `$A000`
   selects four mirroring modes; the board has 8 KiB CHR-RAM. The general MMC3
   core also gained the Mesen `ResetMmc3` power-on register values and now keeps
-  PRG-RAM readable when `$A001` bit 7 gates writes only. **6/6 images load, 1/6
-  renders at 600 frames**. Tracing the stalls shows the local games only ever
-  write the *normal* MMC3 registers R0-R7 (never the extra ones), then jump to
-  `$5C42`/`$602A` in the `$4020-$7FFF` window; that region is open bus/WRAM
-  here, so they execute zeroed bytes. Resolving it needs the FS309 low-window
-  mapping (Mapper 195 has a `$5000` PRG-RAM window) or a Mesen reference run.
+  PRG-RAM readable when `$A001` bit 7 gates writes only. Critically, the FS309
+  has the same **4 KiB PRG-RAM window at `$5000-$5FFF`** as the FS303 (mapper
+  195): the games copy an NMI handler there and jump to `$5C42`, which
+  previously executed open bus/zeros. Adding `low_window() = $5000-$5FFF`
+  raised the board from 1/6 to **6/6 images rendering at 600 frames**
+  (Genghis Khan, Sanguo Waizhuan, Datang Fengyun VI and the Wind Fantasy /
+  Tangmu titles), verified by framebuffer dumps.
 - **Daou DIS23C01 (156)** — 16 KiB PRG banking (`$C010`, last bank fixed at
   `$C000`), eight 1 KiB CHR banks whose 16-bit registers are split across low
   and high nibble writes (`$C000-$C00F`, Mesen2's slot decode), 8 KiB work RAM
@@ -317,7 +318,6 @@ list is capped at 80 IDs and covers 302 of the 446. Top families: **157
 | 157 | 7 | Datach Joint ROM (barcode reader) | blocked on the peripheral |
 | 164 | 6 | Dongda PEC-9588 educational computer, CHR RAM | small/medium |
 | 168 | 6 | Racermate Challenge II + exercise bike | low value; peripheral |
-| 199 | 6 | Waixing FS309, MMC3-like + CHR RAM + IRQ | implemented (partial: 1/6 render) |
 | 216 | 6 | Bonza / Magic Jewelry II (Dendy) | small; Dendy timing |
 | 222 | 6 | Dragon Ninja (CTC-31) / Super Bros. 8 | medium; two submappers |
 | 234 | 6 | Maxi 15 multicart, discrete logic + bus conflicts | small |
