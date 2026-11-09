@@ -866,7 +866,14 @@ the dots 1-64 clear phase, which provides the seed.
   configuration, pinned by the `reset_phase_matches_the_reference_calibration`
   test. Closing the gap requires a coupled master-clock CPU/PPU scheduler that
   matches both the wrap cycle and the per-instruction access sub-cycle, not a
-  reset-phase adjustment.
+  reset-phase adjustment. The coupled master-clock scheduler was also built
+  and measured directly: installing the reference's per-bus-access split
+  (reads 5/7, writes 7/5 master clocks) and sweeping the PPU master-clock
+  offset over 0-3 gives SMB 297-298/300 video and 204-216/300 audio, versus
+  the current integer 2-dot/1-dot split's 299/300 video and 226/300 audio.
+  The additional fidelity of the master-clock model does not translate into
+  better oracle agreement here, so it was reverted rather than shipped as a
+  regression.
 - Expansion-audio levels now use the documented per-chip scales instead of
   ad-hoc normalizations, so the per-channel mixing matches the reference:
   VRC6 is a centred linear 6-bit sum scaled so one full pulse equals a 2A03
