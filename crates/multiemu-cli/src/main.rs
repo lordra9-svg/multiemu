@@ -517,6 +517,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut frames = 600u32;
             let mut core_id: Option<String> = None;
             let mut out: Option<String> = None;
+            let mut with_state = true;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--frames" => {
@@ -528,6 +529,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     }
                     "--core" => core_id = Some(args.next().ok_or("--core needs an id")?),
                     "--out" => out = Some(args.next().ok_or("--out needs a path")?),
+                    "--no-state" => with_state = false,
                     other => return Err(format!("unknown option {other}").into()),
                 }
             }
@@ -545,9 +547,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                 let audio = hash_audio(FNV_OFFSET, core.as_ref());
                 text.push_str(&format!("frame {frame} {video:016x} {audio:016x}\n"));
             }
-            let mut state = Vec::new();
-            core.save_state(&mut state)?;
-            text.push_str(&format!("state {:016x}\n", fnv1a(FNV_OFFSET, &state)));
+            if with_state {
+                let mut state = Vec::new();
+                core.save_state(&mut state)?;
+                text.push_str(&format!("state {:016x}\n", fnv1a(FNV_OFFSET, &state)));
+            }
             if let Some(path) = out {
                 fs::write(&path, &text)?;
                 println!("wrote {path} ({frames} frames)");
@@ -582,15 +586,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                     .into());
                 }
             }
-            if state_a != state_b {
-                return Err(format!(
-                    "final state differs: {:016x} vs {:016x}",
-                    state_a.unwrap_or(0),
-                    state_b.unwrap_or(0)
-                )
-                .into());
+            if let (Some(a), Some(b)) = (state_a, state_b) {
+                if a != b {
+                    return Err(format!("final state differs: {a:016x} vs {b:016x}").into());
+                }
+                println!("ok: {count} frames, state match");
+            } else {
+                println!("ok: {count} frames (state not compared)");
             }
-            println!("ok: {count} frames, state match");
         }
         "bench" => {
             let path = args.next().ok_or_else(usage)?;
@@ -657,7 +660,7 @@ fn usage() -> String {
   multiemu signatures <dir> [--frames N] [--mapper ID] [--limit N] [--check FILE]
   multiemu run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID]
   multiemu verify <rom|archive> [frames]
-  multiemu trace <rom|archive> [--frames N] [--core ID] [--out trace.txt]
+  multiemu trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state]
   multiemu diff <a.trace> <b.trace>
   multiemu bench <rom|archive> [frames]"
         .into()

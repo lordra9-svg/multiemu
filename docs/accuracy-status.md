@@ -774,6 +774,13 @@ the dots 1-64 clear phase, which provides the seed.
 
 - MMC5 is partial: Castlevania III (US) now boots and runs its intro, but
   ExRAM/split-screen, extended attributes and expansion audio are missing.
+- The differential oracle harness now compares per-frame RGBA8 hashes against
+  a RustyNES capture (`trace --no-state` plus `diff`). Local results: the
+  AccuracyCoin test image matches 49/60 frames; a commercial NROM title
+  matches 30/300 and diverges at frame 33 because the reference has
+  logo/menu nametable tiles in rows 4-17 that our core never writes. The
+  palette is now the canonical 2C02 table and palette RAM powers on to index
+  0, so the remaining difference is behaviour, not colour.
 - VRC6 (24/26) expansion audio is implemented (two pulses + sawtooth, with
   `$9003` halt/16x/256x scaling), as is the Sunsoft 5B (mapper 69) YM2149
   audio (three tone channels, 17-bit LFSR noise, 32-step envelope and the

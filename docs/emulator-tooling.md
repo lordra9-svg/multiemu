@@ -132,8 +132,36 @@ gating:
 - `signatures <dir> [--frames N] [--mapper ID] [--check FILE]` — hashes every
   frame of every image and compares against a local manifest, reporting
   changed/new/missing titles.
-- `trace <rom> --frames N --out trace.txt` and `diff a.trace b.trace` —
-  per-frame video/audio hashes and the first divergent frame for one image.
+- `trace <rom> --frames N --out trace.txt [--no-state]` and
+  `diff a.trace b.trace` — per-frame video/audio hashes and the first divergent
+  frame for one image. `--no-state` omits the save-state hash so a trace can be
+  compared with a reference capture that has no state.
+
+### Differential oracle
+
+`trace` emits the `# multiemu trace v1` format: one `frame <index> <video>
+<audio>` line per frame using FNV-1a-64 over the RGBA8 framebuffer and over the
+`f32` audio samples. A reference emulator only needs to emit the same records;
+`diff` compares them frame by frame and reports the first divergent video or
+audio hash.
+
+The RustyNES adapter used for validation is a local, uncommitted black-box
+tool (the GPL reference checkout never enters the repository): it loads the
+ROM with `Nes::from_rom`, calls `run_frame`, and hashes the returned RGBA8
+framebuffer and `drain_audio()` samples with the same FNV-1a constants.
+
+Current local result with the canonical 2C02 palette:
+
+| Target | Identical frames |
+|---|---|
+| AccuracyCoin (60 frames) | 49/60 |
+| Commercial NROM title (300 frames) | 30/300 |
+
+The commercial title diverges at frame 33: the reference has logo/menu tile
+values (`$44`, `$48`, ...) in physical nametable rows 4-17 that our core never
+writes, while the level scenery and HUD match. The next PPU investigation is
+the `$2006`/`$2007` nametable upload path (or the NMI condition that gates it),
+not the palette.
 - `run <rom> --dump-ppu` / `--break <hex>` — per-frame CPU/PPU/APU state and a
   PC breakpoint.
 
