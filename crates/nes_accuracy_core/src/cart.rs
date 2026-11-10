@@ -920,8 +920,10 @@ impl Cartridge {
             519 => Box::new(Eh8813A::new(prg_rom, chr, header)),
             513 => Box::new(Sachen9602::new(prg_rom, chr, header)),
             533 => Box::new(Sachen3014::new(prg_rom, chr, header)),
+            535 => Box::new(Lh53::new(prg_rom, chr, prg_ram, header)),
             529 => Box::new(T230::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
+            399 => Box::new(Batmap399::new(prg_rom, chr, header)),
             552 => Box::new(Taito552::new(prg_rom, chr, header)),
             5 => Box::new(Mmc5::new(prg_rom, chr, header)),
             11 => Box::new(ColorDreams::new(prg_rom, chr, header)),
@@ -941,6 +943,7 @@ impl Cartridge {
             226 => Box::new(Multicart226::new(prg_rom, chr, header)),
             240 => Box::new(Gnrom240::new(prg_rom, chr, prg_ram, header)),
             178 => Box::new(Fs305::new(prg_rom, chr, prg_ram, header)),
+            548 => Box::new(Ctc15::new(prg_rom, chr, prg_ram)),
             551 => Box::new(Fs305::new_551(prg_rom, chr, prg_ram, header)),
             16 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 16)),
             153 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 153)),
@@ -3815,6 +3818,395 @@ impl Mapper for Sachen3014 {
 
     fn number(&self) -> u16 {
         533
+    }
+}
+
+/// BATMAP-000 (mapper 399): fixed first/last 8 KiB PRG banks, two switchable
+/// 8 KiB windows, two 4 KiB CHR-RAM banks and an MMC3-style A12 IRQ.
+#[derive(Debug)]
+pub struct Batmap399 {
+    prg: Vec<u8>,
+    chr_aux: Option<Rc<RefCell<Vrc7Chr>>>,
+    prg_a: u8,
+    prg_c: u8,
+    chr0: u8,
+    chr1: u8,
+    mirroring: Mirroring,
+    irq_latch: u8,
+    irq_counter: u8,
+    irq_reload: bool,
+    irq_enabled: bool,
+    irq_pending: bool,
+}
+
+impl Batmap399 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        let mut ram = vec![0; 0x8000];
+        let keep = chr.len().min(ram.len());
+        ram[..keep].copy_from_slice(&chr[..keep]);
+        let mut aux = Vrc7Chr::new(ram);
+        aux.set_banks([0, 1, 2, 3, 4, 5, 6, 7]);
+        Self {
+            prg,
+            chr_aux: Some(Rc::new(RefCell::new(aux))),
+            prg_a: 0,
+            prg_c: 0,
+            chr0: 0,
+            chr1: 4,
+            mirroring: header.mirroring,
+            irq_latch: 0,
+            irq_counter: 0,
+            irq_reload: false,
+            irq_enabled: false,
+            irq_pending: false,
+        }
+    }
+
+    fn refresh_chr(&self) {
+        if let Some(aux) = &self.chr_aux {
+            let mut banks = [0u8; 8];
+            for (slot, bank) in banks.iter_mut().enumerate() {
+                let page = if slot < 4 { self.chr0 } else { self.chr1 };
+                *bank = page * 4 + (slot as u8 & 3);
+            }
+            aux.borrow_mut().set_banks(banks);
+        }
+    }
+
+    fn prg_8k(&self, bank: u8, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((usize::from(bank) % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Batmap399 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let last = ((self.prg.len() / 0x2000).max(1) - 1) as u8;
+        match address {
+            0x8000..=0x9FFF => self.prg_8k(0, address),
+            0xA000..=0xBFFF => self.prg_8k(self.prg_a, address),
+            0xC000..=0xDFFF => self.prg_8k(self.prg_c, address),
+            0xE000..=0xFFFF => self.prg_8k(last, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0xE001 {
+            0x8000 => {
+                if value & 0x80 == 0 {
+                    self.chr0 = value & 0x07;
+                } else {
+                    self.chr1 = value & 0x07;
+                }
+                self.refresh_chr();
+            }
+            0x8001 => {
+                let bank = value & 0x7F;
+                if value & 0x80 == 0 {
+                    self.prg_a = bank;
+                } else {
+                    self.prg_c = bank;
+                }
+            }
+            _ => {}
+        }
+        if (0xA000..=0xBFFE).contains(&address) && address & 1 == 0 {
+            self.mirroring = if value & 0x01 != 0 {
+                Mirroring::Horizontal
+            } else {
+                Mirroring::Vertical
+            };
+        }
+        if address >= 0xC000 {
+            match address & 0xE001 {
+                0xC000 => self.irq_latch = value,
+                0xC001 => {
+                    self.irq_counter = 0;
+                    self.irq_reload = true;
+                }
+                0xE000 => {
+                    self.irq_enabled = false;
+                    self.irq_pending = false;
+                }
+                0xE001 => self.irq_enabled = true,
+                _ => {}
+            }
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.chr_aux {
+            return aux.borrow().read(address);
+        }
+        0
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(aux) = &self.chr_aux {
+            aux.borrow_mut().write(address, value);
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        399
+    }
+
+    fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
+        self.chr_aux.clone()
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_scanline(&mut self) {
+        if self.irq_counter == 0 || self.irq_reload {
+            self.irq_counter = self.irq_latch;
+            self.irq_reload = false;
+        } else {
+            self.irq_counter = self.irq_counter.wrapping_sub(1);
+        }
+        if self.irq_counter == 0 && self.irq_enabled {
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// Whirlwind Manu LH53 (mapper 535): an FDS conversion with an 8 KiB
+/// switchable PRG bank, a fixed 32 KiB tail, an 8 KiB WRAM window and a
+/// 7560-cycle timer.
+#[derive(Debug)]
+pub struct Lh53 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_bank: u8,
+    mirroring: Mirroring,
+    irq_enabled: bool,
+    irq_counter: u32,
+    irq_pending: bool,
+}
+
+impl Lh53 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            prg_bank: 0,
+            mirroring: header.mirroring,
+            irq_enabled: false,
+            irq_counter: 0,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn fixed_offset(&self, address: u16) -> usize {
+        let base = self.prg.len().saturating_sub(0x8000);
+        (base + usize::from(address - 0x8000)) % self.prg.len().max(1)
+    }
+}
+
+impl Mapper for Lh53 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.prg_8k(usize::from(self.prg_bank), address),
+            0xB800..=0xD7FF => self.prg_ram[usize::from(address - 0xB800)],
+            0x8000..=0xFFFF => self
+                .prg
+                .get(self.fixed_offset(address))
+                .copied()
+                .unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0xB800..=0xD7FF => self.prg_ram[usize::from(address - 0xB800)] = value,
+            0xE000..=0xEFFF => {
+                self.irq_enabled = value & 0x02 != 0;
+                self.irq_counter = 0;
+                self.irq_pending = false;
+            }
+            0xF000..=0xFFFF => self.prg_bank = value,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        535
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        true
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if !self.irq_enabled || self.irq_pending {
+            return;
+        }
+        self.irq_counter += 1;
+        if self.irq_counter >= 7560 {
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// Co Tung CTC-15 (mapper 548): an FDS-conversion board with an 8 KiB PRG-RAM
+/// window, a latched 16 KiB PRG bank and a fixed bank 3 at `$C000`.
+#[derive(Debug)]
+pub struct Ctc15 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    latch: u8,
+    bank: u8,
+    irq_enabled: bool,
+    irq_counter: u32,
+    irq_pending: bool,
+}
+
+impl Ctc15 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>) -> Self {
+        prg_ram.resize(0x2000, 0);
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            latch: 0x07,
+            bank: 0x07,
+            irq_enabled: false,
+            irq_counter: 0,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_16k(&self, bank: usize, address: u16) -> u8 {
+        let count = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % count) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Ctc15 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000)],
+            0x8000..=0xBFFF => self.prg_16k(usize::from(self.bank), address),
+            0xC000..=0xFFFF => self.prg_16k(3, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000)] = value,
+            0x4800..=0x4FFF => {
+                let a = address;
+                self.latch = (((a >> 5) & 1) << 2 | ((a >> 3) & 1) << 1 | ((a >> 2) & 1)) as u8;
+                self.irq_enabled = a & 0x04 == 0;
+                if !self.irq_enabled {
+                    self.irq_counter = 0;
+                    self.irq_pending = false;
+                }
+            }
+            0x5000..=0x57FF => self.bank = self.latch ^ 0x05,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        Mirroring::Horizontal
+    }
+
+    fn number(&self) -> u16 {
+        548
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if !self.irq_enabled {
+            return;
+        }
+        self.irq_counter = self.irq_counter.wrapping_add(1);
+        self.irq_pending = (self.irq_counter / 640) & 37 == 37;
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
     }
 }
 
@@ -22057,6 +22449,73 @@ mod tests {
             cart.set_cpu_cycle(100 + bit * 2);
             cart.cpu_write(base, (value >> bit) & 1);
         }
+    }
+
+    #[test]
+    fn batmap_399_banks_and_chr() {
+        // 128 KiB PRG, 32 KiB CHR.
+        let rom = synth_banked(399, 128, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 399);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xA000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 0);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+        cart.cpu_write(0x8001, 5);
+        assert_eq!(cart.cpu_read(0xA000), 5);
+        cart.cpu_write(0x8001, 0x85);
+        assert_eq!(cart.cpu_read(0xC000), 5);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        assert_eq!(cart.ppu_read(0x1000), 0x84);
+        cart.cpu_write(0x8000, 1);
+        assert_eq!(cart.ppu_read(0x0000), 0x84);
+        cart.cpu_write(0x8000, 0x83);
+        assert_eq!(cart.ppu_read(0x1000), 0x8C);
+        cart.cpu_write(0xA000, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn lh53_banks_and_timer() {
+        // 128 KiB PRG, CHR-RAM.
+        let rom = synth_banked(535, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 535);
+        assert_eq!(cart.cpu_read(0x8000), 12, "fixed last 32 KiB");
+        assert_eq!(cart.cpu_read(0x6000), 0);
+        cart.cpu_write(0xF000, 5);
+        assert_eq!(cart.cpu_read(0x6000), 5);
+        cart.cpu_write(0xB800, 0x42);
+        assert_eq!(cart.cpu_read(0xB800), 0x42);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+        cart.cpu_write(0xE000, 0x02);
+        for _ in 0..7559 {
+            cart.clock_cpu();
+        }
+        assert!(!cart.mapper.irq_line());
+        cart.clock_cpu();
+        assert!(cart.mapper.irq_line());
+    }
+
+    #[test]
+    fn ctc15_latch_apply_and_fixed_bank() {
+        // 128 KiB PRG (8 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(548, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 548);
+        assert_eq!(cart.cpu_read(0x8000), 14, "power-on bank 7");
+        assert_eq!(cart.cpu_read(0xC000), 6, "fixed bank 3");
+        cart.cpu_write(0x4800, 0); // latch 0, IRQ enabled
+        cart.cpu_write(0x5000, 0); // apply latch ^ 5 = 5
+        assert_eq!(cart.cpu_read(0x8000), 10);
+        cart.cpu_write(0x482C, 0); // latch 7
+        cart.cpu_write(0x5000, 0); // apply 7 ^ 5 = 2
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        cart.cpu_write(0x6000, 0x42);
+        assert_eq!(cart.cpu_read(0x6000), 0x42);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
     }
 
     #[test]

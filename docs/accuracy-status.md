@@ -301,7 +301,7 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,907 loaded (97.1%), 3,762 rendering (52.8%), 3,145 blank (44.3%), 166
+6,913 loaded (97.1%), 3,766 rendering (52.8%), 3,147 blank (44.3%), 160
 unsupported (2.9%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. The remaining 80 unsupported IDs
 are led by 256/515/551 (5 images each) and 355/446/547/594 (4 each); Datach
@@ -1026,10 +1026,20 @@ the dots 1-64 clear phase, which provides the seed.
   reference-blind (the RustyNES oracle does not implement them): **122**
   (JY043, separate even/odd 4 KiB CHR windows), **516** (AX5202P MMC3 clone
   with the address-as-data `$8010` 128 KiB outer register), **533** (Sachen
-  3014 latch readback through the `$E000` bus conflict) and **551** (the
-  Jncota variant of 178 with a `$4803` CHR bank and hard-wired mirroring).
-  Unit tests pin the register behaviour; all 1/2/2/5 local images load and
-  render at 120 frames.
+  3014 latch readback through the `$E000` bus conflict), **551** (the Jncota
+  variant of 178 with a `$4803` CHR bank and hard-wired mirroring), **548**
+  (Co Tung CTC-15), **535** (Whirlwind Manu LH53) and **399** (BATMAP-000).
+  Unit tests pin the register behaviour; the local images load, and 548/535
+  render by 120 frames while 399 reaches its title by 600. **554**
+  (KS-7010) is deferred: its read-trigger mask is not documented, and the
+  best-effort port still halts in the wrong bank.
+
+The second-reference hosts are now functional outside the repository:
+`refs/refcap/mesen-refcap` drives the rebuilt `MesenCore.so` capture exports
+(256x240 RGBA8, mono f32 audio, FNV hashes) and `refs/refcap/ares-refcap`
+runs the patched ares desktop-ui under cage's headless wlroots backend,
+cropping the Famicom 283x242 canvas to 256x240. Both emit the same trace
+contract as the RustyNES oracle.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
@@ -1037,7 +1047,7 @@ the dots 1-64 clear phase, which provides the seed.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **6,907 loaded, 3,762 rendering, 3,145 blank, 166 unsupported
+  audit is **6,913 loaded, 3,766 rendering, 3,147 blank, 160 unsupported
   (80+ IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.

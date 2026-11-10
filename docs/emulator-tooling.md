@@ -231,6 +231,35 @@ match; frame-boundary alignment is within ±1 cycle (previously ±5).
 Manifests and traces are local artifacts (they derive from game content) and
 are never committed.
 
+## Second-reference capture hosts
+
+Both references are patched to emit the same trace contract as the RustyNES
+oracle (`# unko trace v1`, per-frame FNV video/audio hashes), so either can be
+used as `UNKO_ORACLE`:
+
+```
+refs/refcap/mesen-refcap <rom> <frames> [raw-prefix]
+refs/refcap/ares-refcap  <rom> <frames> [--system NAME]
+```
+
+- **MesenCE**: `InteropDLL` now exports `InitializeCapture`, the per-frame
+  `Capture*` hash/copy functions and `CaptureSetMaximumSpeed`. The library is
+  rebuilt with `make core USE_GCC=true STATICLINK=false`; the host seeds the
+  default NES palette (`NesDefaultVideoFilter::GetDefaultPalette`) because a
+  GUI config normally supplies it. Output is 256x240 RGBA8 plus mono f32
+  audio at the configured rate; optional `raw-prefix` writes
+  `<prefix>.frame.rgba` and `<prefix>.audio.f32`.
+- **ares**: `desktop-ui` accepts `--frames N`, `--dump-trace PATH`,
+  `--dump-frame PATH` and `--dump-audio PATH`; the wrapper runs it under
+  `cage` with `WLR_BACKENDS=headless`/`pixman` and crops the Famicom
+  283x242 canvas to the 256x240 viewport.
+
+The reference palettes and audio mixers differ from RustyNES, so their hashes
+are not byte-identical to the primary oracle. Use them for board behaviour,
+boot/render checks, frame counts and the oracle-blind mappers, not as a
+replacement for the RustyNES parity gate. The hosts live outside the
+repository with the reference trees and take ROM paths only at runtime.
+
 ## Build status summary
 
 | Emulator | Status | Binary |
