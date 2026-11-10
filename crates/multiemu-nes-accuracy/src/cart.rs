@@ -293,6 +293,10 @@ pub enum HybridKind {
     /// resolved 1 KiB MMC3 bank selects the memory (set = CHR-RAM, low three
     /// bits index the 8 KiB; clear = CHR-ROM, low six bits index the 64 KiB).
     Tqrom,
+    /// Waixing MMC3 boards with a small CHR-RAM overlay: a resolved bank in
+    /// the board's RAM window reads the overlay instead of CHR-ROM. The
+    /// payload is the mapper number (74, 191, 192 or 194).
+    Mmc3Overlay(u16),
 }
 
 /// Shared hybrid CHR state: full CHR ROM, 4 KiB CHR-RAM, the current MMC3
@@ -317,6 +321,8 @@ impl HybridChr {
             HybridKind::Mmc2 => 0x1000,
             HybridKind::Tqrom => 0x2000,
             HybridKind::Waixing195 => 0x8000,
+            HybridKind::Mmc3Overlay(192) => 0x1000,
+            HybridKind::Mmc3Overlay(_) => 0x800,
         };
         Self {
             kind,
@@ -430,6 +436,24 @@ impl HybridChr {
                     (true, (bank & 0x07) * 0x400 + offset)
                 } else {
                     (false, (bank & 0x3F) * 0x400 + offset)
+                }
+            }
+            HybridKind::Mmc3Overlay(number) => {
+                let slot = usize::from(address) / 0x400;
+                let bank = self.mmc3_slot_bank(slot);
+                let offset = usize::from(address) & 0x3FF;
+                let ram = match number {
+                    74 => matches!(bank, 8 | 9),
+                    191 => bank & 0x80 != 0,
+                    192 => (8..=11).contains(&bank),
+                    194 => bank <= 1,
+                    _ => false,
+                };
+                if ram {
+                    let mask = self.ram.len() / 0x400 - 1;
+                    (true, (bank & mask) * 0x400 + offset)
+                } else {
+                    (false, bank * 0x400 + offset)
                 }
             }
         }
@@ -748,12 +772,43 @@ impl Cartridge {
             45 => Box::new(Mmc3::new_as(prg_rom, chr, header, 45)),
             116 => Box::new(Mmc3::new_as(prg_rom, chr, header, 116)),
             118 => Box::new(Mmc3::new_txsrom(prg_rom, chr, header)),
+            74 => Box::new(Mmc3::new_hybrid(
+                prg_rom,
+                chr,
+                header,
+                74,
+                HybridKind::Mmc3Overlay(74),
+            )),
             119 => Box::new(Mmc3::new_hybrid(
                 prg_rom,
                 chr,
                 header,
                 119,
                 HybridKind::Tqrom,
+            )),
+            123 => Box::new(Mmc3_123::new(prg_rom, chr, header)),
+            187 => Box::new(Mmc3_187::new(prg_rom, chr, header)),
+            245 => Box::new(Mmc3_245::new(prg_rom, chr, header)),
+            191 => Box::new(Mmc3::new_hybrid(
+                prg_rom,
+                chr,
+                header,
+                191,
+                HybridKind::Mmc3Overlay(191),
+            )),
+            192 => Box::new(Mmc3::new_hybrid(
+                prg_rom,
+                chr,
+                header,
+                192,
+                HybridKind::Mmc3Overlay(192),
+            )),
+            194 => Box::new(Mmc3::new_hybrid(
+                prg_rom,
+                chr,
+                header,
+                194,
+                HybridKind::Mmc3Overlay(194),
             )),
             196 => Box::new(Mmc3::new_196(prg_rom, chr, header)),
             133 => Box::new(Sachen133::new(prg_rom, chr, header)),
@@ -778,6 +833,7 @@ impl Cartridge {
             240 => Box::new(Gnrom240::new(prg_rom, chr, prg_ram, header)),
             178 => Box::new(Fs305::new(prg_rom, chr, prg_ram, header)),
             16 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 16)),
+            157 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 157)),
             159 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 159)),
             112 => Box::new(Txc112::new(prg_rom, chr, header)),
             235 => Box::new(Multicart235::new(prg_rom, chr, header)),
@@ -3580,6 +3636,361 @@ impl Mapper for Mmc3 {
         if self.irq_counter == 0 && self.irq_enabled {
             self.irq_pending = true;
         }
+    }
+}
+
+/// MMC3 clone with a PRG-address scrambler and security key (mapper 123).
+#[derive(Debug)]
+pub struct Mmc3_123 {
+    inner: Mmc3,
+    ex: [u8; 2],
+}
+
+impl Mmc3_123 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 123),
+            ex: [0; 2],
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = self.inner.prg_banks();
+        let mode = self.inner.select & 0x40;
+        let last = banks - 1;
+        let second = banks.saturating_sub(2);
+        if self.ex[0] & 0x40 != 0 {
+            let bank = usize::from(
+                (self.ex[0] & 0x05) | ((self.ex[0] & 0x08) >> 2) | ((self.ex[0] & 0x20) >> 2),
+            );
+            let page = if self.ex[0] & 0x02 != 0 {
+                ((bank & 0xFE) << 1) + slot
+            } else {
+                (bank << 1) + (slot & 1)
+            };
+            return page % banks;
+        }
+        let page = match (mode, slot) {
+            (0, 0) => usize::from(self.inner.bank_data[6]),
+            (0, 1) => usize::from(self.inner.bank_data[7]),
+            (0, 2) => second,
+            (0, _) => last,
+            (_, 0) => second,
+            (_, 1) => usize::from(self.inner.bank_data[7]),
+            (_, 2) => usize::from(self.inner.bank_data[6]),
+            (_, _) => last,
+        };
+        page % banks
+    }
+}
+
+impl Mapper for Mmc3_123 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot);
+        self.inner.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address < 0x8000 {
+            if address & 0x0800 != 0 {
+                if address & 1 != 0 {
+                    self.ex[1] = value;
+                } else {
+                    self.ex[0] = value;
+                }
+            }
+            return;
+        }
+        if address < 0xA000 {
+            const SECURITY: [u8; 8] = [0, 3, 1, 5, 6, 7, 2, 4];
+            match address & 0x8001 {
+                0x8000 => {
+                    let value = (value & 0xC0) | SECURITY[usize::from(value & 0x07)];
+                    self.inner.prg_write(0x8000, value);
+                }
+                0x8001 => self.inner.prg_write(0x8001, value),
+                _ => {}
+            }
+            return;
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        123
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// MMC3 clone with an outer 512 KiB PRG window and a readback key (mapper
+/// 187).
+#[derive(Debug)]
+pub struct Mmc3_187 {
+    inner: Mmc3,
+    ex: [u8; 2],
+}
+
+impl Mmc3_187 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 187),
+            ex: [0; 2],
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = self.inner.prg_banks();
+        let mode = self.inner.select & 0x40;
+        let last = banks - 1;
+        let second = banks.saturating_sub(2);
+        if self.ex[0] & 0x80 == 0 {
+            let page = match (mode, slot) {
+                (0, 0) => usize::from(self.inner.bank_data[6] & 0x3F),
+                (0, 1) => usize::from(self.inner.bank_data[7] & 0x3F),
+                (0, 2) => second,
+                (0, _) => last,
+                (_, 0) => second,
+                (_, 1) => usize::from(self.inner.bank_data[7] & 0x3F),
+                (_, 2) => usize::from(self.inner.bank_data[6] & 0x3F),
+                (_, _) => last,
+            };
+            return page % banks;
+        }
+        let ex = usize::from(self.ex[0] & 0x1F);
+        let page = if self.ex[0] & 0x20 != 0 {
+            if self.ex[0] & 0x40 != 0 {
+                (ex & 0xFC) + slot
+            } else {
+                (ex & 0xFE) * 2 + slot
+            }
+        } else if slot == 0 || slot == 2 {
+            ex * 2
+        } else {
+            ex * 2 + 1
+        };
+        page % banks
+    }
+}
+
+impl Mapper for Mmc3_187 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot);
+        self.inner.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0x5000..=0x5FFF).contains(&address) {
+            const SECURITY: [u8; 4] = [0x83, 0x83, 0x42, 0x00];
+            return SECURITY[usize::from(self.ex[1] & 0x03)];
+        }
+        self.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address < 0x8000 {
+            if address == 0x5000 || address == 0x6000 {
+                self.ex[0] = value;
+            }
+            return;
+        }
+        if address == 0x8000 {
+            self.ex[1] = 1;
+            self.inner.prg_write(address, value);
+        } else if address == 0x8001 {
+            if self.ex[1] == 1 {
+                self.inner.prg_write(address, value);
+            }
+        } else {
+            self.inner.prg_write(address, value);
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let mut bank = self.inner.chr_bank(slot);
+        if slot >= 4 {
+            bank |= 0x100;
+        }
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        self.inner.chr[bank % banks * 0x400 + usize::from(address & 0x3FF)]
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let mut bank = self.inner.chr_bank(slot);
+        if slot >= 4 {
+            bank |= 0x100;
+        }
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let index = bank % banks * 0x400 + usize::from(address & 0x3FF);
+        if let Some(byte) = self.inner.chr.get_mut(index) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        187
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// MMC3 clone with the PRG block ORed into R6/R7 (mapper 245).
+#[derive(Debug)]
+pub struct Mmc3_245 {
+    inner: Mmc3,
+}
+
+impl Mmc3_245 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 245),
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = self.inner.prg_banks();
+        let or = if self.inner.bank_data[0] & 0x02 != 0 {
+            0x40
+        } else {
+            0x00
+        };
+        let r6 = usize::from((self.inner.bank_data[6] & 0x3F) | or);
+        let r7 = usize::from((self.inner.bank_data[7] & 0x3F) | or);
+        let last = if banks >= 0x40 {
+            0x3F | usize::from(or)
+        } else {
+            banks - 1
+        };
+        let second = last.saturating_sub(1);
+        let mode = self.inner.select & 0x40;
+        let page = match (mode, slot) {
+            (0, 0) => r6,
+            (0, 1) => r7,
+            (0, 2) => second,
+            (0, _) => last,
+            (_, 0) => second,
+            (_, 1) => r7,
+            (_, 2) => r6,
+            (_, _) => last,
+        };
+        page % banks
+    }
+}
+
+impl Mapper for Mmc3_245 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot);
+        self.inner.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        245
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
     }
 }
 
@@ -8263,6 +8674,44 @@ impl Mapper for BandaiFcg {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
+        if self.number == 157 {
+            // Datach: $6000-$7FFF is the scanner/EEPROM control window, not
+            // RAM, and $8000-$8007 drive the external chip's clock rather
+            // than CHR banks (the board has unbanked CHR-RAM).
+            if (0x6000..=0x7FFF).contains(&address) || address < 0x8000 {
+                return;
+            }
+            match address & 0x0F {
+                0x00..=0x07 => {}
+                0x08 => self.prg_bank = value & 0x0F,
+                0x09 => {
+                    self.mirroring = match value & 0x03 {
+                        0 => Mirroring::Vertical,
+                        1 => Mirroring::Horizontal,
+                        2 => Mirroring::SingleLower,
+                        _ => Mirroring::SingleUpper,
+                    };
+                }
+                0x0A => {
+                    self.irq_enabled = value & 0x01 != 0;
+                    self.irq_pending = false;
+                    self.irq_counter = self.irq_latch;
+                    if self.irq_enabled && self.irq_counter == 0 {
+                        self.irq_pending = true;
+                    }
+                }
+                0x0B => {
+                    self.irq_latch = (self.irq_latch & 0xFF00) | u16::from(value);
+                    self.irq_counter = self.irq_latch;
+                }
+                0x0C => {
+                    self.irq_latch = (self.irq_latch & 0x00FF) | (u16::from(value) << 8);
+                    self.irq_counter = self.irq_latch;
+                }
+                _ => {}
+            }
+            return;
+        }
         if (0x6000..=0x7FFF).contains(&address) {
             let index = usize::from(address - 0x6000) % self.prg_ram.len();
             self.prg_ram[index] = value;
@@ -8302,6 +8751,14 @@ impl Mapper for BandaiFcg {
     }
 
     fn chr_read(&self, address: u16) -> u8 {
+        if self.number == 157 {
+            // Datach has 8 KiB of unbanked CHR-RAM.
+            return self
+                .chr
+                .get(usize::from(address & 0x1FFF))
+                .copied()
+                .unwrap_or(0);
+        }
         let slot = usize::from(address / 0x400) & 0x07;
         let banks = self.chr_bank_count();
         let bank = usize::from(self.chr_banks[slot]) % banks;
@@ -8309,6 +8766,12 @@ impl Mapper for BandaiFcg {
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
+        if self.number == 157 {
+            if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+                *byte = value;
+            }
+            return;
+        }
         let slot = usize::from(address / 0x400) & 0x07;
         let banks = self.chr_bank_count();
         let bank = usize::from(self.chr_banks[slot]) % banks;
@@ -16783,6 +17246,82 @@ mod tests {
         // $A000 (even) flips mirroring; value comes from the address low byte.
         cart.cpu_write(0xA001, 0x00);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn mmc3_overlay_74_uses_chr_ram_for_banks_8_and_9() {
+        // 128 KiB PRG (8 x 16 KiB), 128 KiB CHR (128 x 1 KiB).
+        let rom = synth_banked(74, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 74);
+
+        // Select 1 KiB register 2 and point it at bank 8: CHR-RAM bank 0.
+        cart.cpu_write(0x8000, 0x02);
+        cart.cpu_write(0x8001, 8);
+        assert_eq!(cart.ppu_read(0x1000), 0, "bank 8 maps the overlay RAM");
+        cart.ppu_write(0x1000, 0xAB);
+        assert_eq!(cart.ppu_read(0x1000), 0xAB);
+
+        // Bank 7 stays in CHR-ROM.
+        cart.cpu_write(0x8001, 7);
+        assert_eq!(cart.ppu_read(0x1000), 0x87);
+    }
+
+    #[test]
+    fn mmc3_187_outer_prg_window_and_security_read() {
+        // 256 KiB PRG (16 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(187, 256, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 187);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+
+        cart.cpu_write(0x8000, 0x00);
+        assert_eq!(cart.cpu_read_io(0x5000), 0x83);
+
+        // Outer register bit 7 duplicates the selected 16 KiB bank in both
+        // halves of the 32 KiB window.
+        cart.cpu_write(0x5000, 0x80);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xA000), 1);
+        assert_eq!(cart.cpu_read(0xC000), 0);
+        assert_eq!(cart.cpu_read(0xE000), 1);
+    }
+
+    #[test]
+    fn mmc3_245_ors_the_prg_block_bit() {
+        // 1 MiB PRG (128 x 8 KiB), CHR-RAM: the block OR needs bank bit 6.
+        let rom = synth_banked(245, 1024, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 245);
+
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x01);
+        assert_eq!(cart.cpu_read(0x8000), 1);
+
+        // R0 bit 1 sets PRG A22, so R6 becomes 0x41.
+        cart.cpu_write(0x8000, 0x00);
+        cart.cpu_write(0x8001, 0x02);
+        assert_eq!(cart.cpu_read(0x8000), 0x41);
+    }
+
+    #[test]
+    fn mmc3_123_security_table_and_outer_bank() {
+        // 256 KiB PRG (16 x 16 KiB), 256 KiB CHR.
+        let rom = synth_banked(123, 256, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 123);
+
+        // The $8000 index is permuted through the security table
+        // (5 -> 7), so $8001 now loads R7.
+        cart.cpu_write(0x8000, 0x05);
+        cart.cpu_write(0x8001, 0x02);
+        assert_eq!(cart.cpu_read(0xA000), 2);
+
+        // Outer register bit 6 shows bank 0 in slots 0/2 and 1 in 1/3.
+        cart.cpu_write(0x4800, 0x40);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xA000), 1);
+        assert_eq!(cart.cpu_read(0xC000), 0);
     }
 
     #[test]
