@@ -836,6 +836,7 @@ impl Cartridge {
             106 => Box::new(Mapper106::new(prg_rom, chr, prg_ram, header)),
             107 => Box::new(MagicDragon107::new(prg_rom, chr, header)),
             117 => Box::new(Unl117::new(prg_rom, chr, header)),
+            167 => Box::new(Subor166::new(prg_rom, chr, header)),
             168 => Box::new(Racermate168::new(prg_rom, chr, header)),
             180 => Box::new(Nichibutsu180::new(prg_rom, chr, header)),
             228 => Box::new(Action52::new(prg_rom, chr)),
@@ -903,6 +904,7 @@ impl Cartridge {
             187 => Box::new(Mmc3_187::new(prg_rom, chr, header)),
             198 => Box::new(Mmc3_198::new(prg_rom, chr, header)),
             245 => Box::new(Mmc3_245::new(prg_rom, chr, header)),
+            190 => Box::new(MagicKid190::new(prg_rom, chr, header)),
             191 => Box::new(Mmc3::new_hybrid(
                 prg_rom,
                 chr,
@@ -962,11 +964,14 @@ impl Cartridge {
             306 => Box::new(KaiserMisc::new(prg_rom, chr, header, 306)),
             312 => Box::new(KaiserMisc::new(prg_rom, chr, header, 312)),
             313 => Box::new(Mmc3_313::new(prg_rom, chr, header)),
+            314 => Box::new(Bmc64in1::new(prg_rom, chr, header)),
             519 => Box::new(Eh8813A::new(prg_rom, chr, header)),
             512 => Box::new(Si512::new(prg_rom, chr, header)),
             513 => Box::new(Sachen9602::new(prg_rom, chr, header)),
             533 => Box::new(Sachen3014::new(prg_rom, chr, header)),
-            534 => Box::new(Mmc3_534::new(prg_rom, chr, header)),
+            126 => Box::new(Tec9719::new(prg_rom, chr, header, 126)),
+            422 => Box::new(Tec9719::new(prg_rom, chr, header, 422)),
+            534 => Box::new(Tec9719::new(prg_rom, chr, header, 534)),
             535 => Box::new(Lh53::new(prg_rom, chr, prg_ram, header)),
             529 => Box::new(T230::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
@@ -1012,6 +1017,7 @@ impl Cartridge {
             185 => Box::new(CnRom185::new(prg_rom, chr, header)),
             189 => Box::new(Mmc3_32k::new(prg_rom, chr, header)),
             224 => Box::new(Coolboy::new(prg_rom, chr, prg_ram, header, 0x5000)),
+            266 => Box::new(CityFighter266::new(prg_rom, chr, header)),
             268 => {
                 let base = if header.submapper == 0 {
                     0x6000
@@ -5749,6 +5755,466 @@ impl Mapper for Smb2j304 {
     }
 }
 
+/// Subor learning computer (mapper 167): four address-decoded registers feed
+/// an outer/inner bank XOR with NROM, UNROM and inverted-UNROM modes.
+#[derive(Debug)]
+pub struct Subor166 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    regs: [u8; 4],
+    mirroring: Mirroring,
+}
+
+impl Subor166 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        let mut this = Self {
+            prg,
+            chr,
+            regs: [0; 4],
+            mirroring: header.mirroring,
+        };
+        this.write_reg(0x8000, 0);
+        this
+    }
+
+    fn prg_16k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % banks) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn page(&self) -> usize {
+        let outer = usize::from((self.regs[0] ^ self.regs[1]) & 0x10) << 1;
+        outer | usize::from(self.regs[2] ^ self.regs[3])
+    }
+
+    fn write_reg(&mut self, address: u16, value: u8) {
+        match address & 0xE000 {
+            0x8000 => self.regs[0] = value & 0x10,
+            0xA000 => self.regs[1] = value & 0x1C,
+            0xC000 => self.regs[2] = value & 0x1F,
+            0xE000 => self.regs[3] = value & 0x1F,
+            _ => {}
+        }
+    }
+
+    fn banks(&self) -> (usize, usize) {
+        if self.regs[1] & 0x08 != 0 {
+            let bank = self.page() & 0xFE;
+            (bank + 1, bank)
+        } else if self.regs[1] & 0x04 != 0 {
+            (0x1F, self.page())
+        } else {
+            (self.page(), 0x20)
+        }
+    }
+}
+
+impl Mapper for Subor166 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let (low, high) = self.banks();
+        match address {
+            0x8000..=0xBFFF => self.prg_16k(low, address),
+            0xC000..=0xFFFF => self.prg_16k(high, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            self.write_reg(address, value);
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        167
+    }
+}
+
+/// Magic Kid Goo Goo (mapper 190): two 16 KiB PRG windows and four 2 KiB CHR
+/// pages selected by address ranges.
+#[derive(Debug)]
+pub struct MagicKid190 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg0: u8,
+    chr_pages: [u8; 4],
+}
+
+impl MagicKid190 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg0: 0,
+            chr_pages: [0, 1, 2, 3],
+        }
+    }
+
+    fn prg_16k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % banks) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for MagicKid190 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x8000..=0xBFFF => self.prg_16k(usize::from(self.prg0), address),
+            0xC000..=0xFFFF => self.prg_16k(0, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x8000..=0x9FFF).contains(&address) {
+            self.prg0 = value & 0x07;
+        } else if (0xC000..=0xDFFF).contains(&address) {
+            self.prg0 = (value & 0x07) | 0x08;
+        } else if address & 0xA000 == 0xA000 {
+            self.chr_pages[usize::from(address & 0x03)] = value;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x800).max(1);
+        let slot = usize::from(address) / 0x800;
+        let bank = usize::from(self.chr_pages[slot]) % banks;
+        self.chr
+            .get(bank * 0x800 + usize::from(address & 0x7FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x800).max(1);
+        let slot = usize::from(address) / 0x800;
+        let bank = usize::from(self.chr_pages[slot]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x800 + usize::from(address & 0x7FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        Mirroring::Vertical
+    }
+
+    fn number(&self) -> u16 {
+        190
+    }
+}
+
+/// City Fighter IV (mapper 266): 8 KiB PRG / 1 KiB CHR banking with a
+/// decrementing cycle IRQ.
+#[derive(Debug)]
+pub struct CityFighter266 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_reg: u8,
+    prg_mode: u8,
+    mirroring: Mirroring,
+    chr_regs: [u8; 8],
+    irq_enabled: bool,
+    irq_counter: u16,
+    irq_pending: bool,
+}
+
+impl CityFighter266 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_reg: 0,
+            prg_mode: 0,
+            mirroring: header.mirroring,
+            chr_regs: [0; 8],
+            irq_enabled: false,
+            irq_counter: 0,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn set_low(reg: &mut u8, value: u8) {
+        *reg = (*reg & 0xF0) | (value & 0x0F);
+    }
+
+    fn set_high(reg: &mut u8, value: u8) {
+        *reg = (*reg & 0x0F) | ((value << 4) & 0xF0);
+    }
+}
+
+impl Mapper for CityFighter266 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let base = usize::from(self.prg_reg);
+        match address {
+            0x8000..=0x9FFF => self.prg_8k(base, address),
+            0xA000..=0xBFFF => self.prg_8k(base + 1, address),
+            0xC000..=0xDFFF => {
+                self.prg_8k(if self.prg_mode != 0 { base + 2 } else { base }, address)
+            }
+            0xE000..=0xFFFF => self.prg_8k(base + 3, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0xF00C {
+            0x9000 => {
+                self.prg_reg = value & 0x0C;
+                self.mirroring = match value & 0x03 {
+                    0 => Mirroring::Vertical,
+                    1 => Mirroring::Horizontal,
+                    2 => Mirroring::SingleLower,
+                    _ => Mirroring::SingleUpper,
+                };
+            }
+            0x9004 | 0x9008 | 0x900C => {
+                if address & 0x800 == 0 {
+                    self.prg_reg = value & 0x0C;
+                }
+            }
+            0xC000 | 0xC004 | 0xC008 | 0xC00C => self.prg_mode = value & 0x01,
+            0xD000 => Self::set_low(&mut self.chr_regs[0], value),
+            0xD004 => Self::set_high(&mut self.chr_regs[0], value),
+            0xD008 => Self::set_low(&mut self.chr_regs[1], value),
+            0xD00C => Self::set_high(&mut self.chr_regs[1], value),
+            0xA000 => Self::set_low(&mut self.chr_regs[2], value),
+            0xA004 => Self::set_high(&mut self.chr_regs[2], value),
+            0xA008 => Self::set_low(&mut self.chr_regs[3], value),
+            0xA00C => Self::set_high(&mut self.chr_regs[3], value),
+            0xB000 => Self::set_low(&mut self.chr_regs[4], value),
+            0xB004 => Self::set_high(&mut self.chr_regs[4], value),
+            0xB008 => Self::set_low(&mut self.chr_regs[5], value),
+            0xB00C => Self::set_high(&mut self.chr_regs[5], value),
+            0xE000 => Self::set_low(&mut self.chr_regs[6], value),
+            0xE004 => Self::set_high(&mut self.chr_regs[6], value),
+            0xE008 => Self::set_low(&mut self.chr_regs[7], value),
+            0xE00C => Self::set_high(&mut self.chr_regs[7], value),
+            0xF000 => {
+                self.irq_counter = (self.irq_counter & 0x1E0) | ((u16::from(value) & 0x0F) << 1);
+            }
+            0xF004 => {
+                self.irq_counter = (self.irq_counter & 0x1E) | ((u16::from(value) & 0x0F) << 5);
+            }
+            0xF008 => {
+                self.irq_enabled = value & 0x02 != 0;
+                self.irq_pending = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_regs[slot]) % banks;
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_regs[slot]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        266
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0xFFFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if !self.irq_enabled {
+            return;
+        }
+        self.irq_counter = self.irq_counter.wrapping_sub(1);
+        if self.irq_counter == 0 {
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// BMC 64-in-1 no-repeat (mapper 314): four `$5000` registers select the
+/// 16 KiB PRG windows, mirroring and the 8 KiB CHR page.
+#[derive(Debug)]
+pub struct Bmc64in1 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    regs: [u8; 4],
+    prg0: u8,
+    prg1: u8,
+    mirroring: Mirroring,
+    chr_page: u8,
+}
+
+impl Bmc64in1 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        let mut this = Self {
+            prg,
+            chr,
+            regs: [0; 4],
+            prg0: 0,
+            prg1: 0,
+            mirroring: Mirroring::Vertical,
+            chr_page: 0,
+        };
+        this.reset_state();
+        this
+    }
+
+    fn reset_state(&mut self) {
+        self.regs = [0x80, 0x43, 0, 0];
+        self.update();
+    }
+
+    fn prg_16k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % banks) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn update(&mut self) {
+        let low = self.regs[1] & 0x1F;
+        if self.regs[0] & 0x80 != 0 {
+            if self.regs[1] & 0x80 != 0 {
+                self.prg0 = low << 1;
+                self.prg1 = (low << 1) + 1;
+            } else {
+                let bank = (low << 1) | ((self.regs[1] >> 6) & 0x01);
+                self.prg0 = bank;
+                self.prg1 = bank;
+            }
+        } else {
+            self.prg1 = (low << 1) | ((self.regs[1] >> 6) & 0x01);
+        }
+        self.mirroring = if self.regs[0] & 0x20 != 0 {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        };
+        self.chr_page = (self.regs[2] << 2) | ((self.regs[0] >> 1) & 0x03);
+    }
+}
+
+impl Mapper for Bmc64in1 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x8000..=0xBFFF => self.prg_16k(usize::from(self.prg0), address),
+            0xC000..=0xFFFF => self.prg_16k(usize::from(self.prg1), address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x5000..=0x5003).contains(&address) {
+            let index = usize::from(address & 0x03);
+            // Bit 7 of the first register enables the other three latches.
+            if index == 0 || self.regs[0] & 0x80 != 0 {
+                self.regs[index] = value;
+            }
+        } else if address >= 0x8000 {
+            self.regs[3] = value;
+        } else {
+            return;
+        }
+        self.update();
+    }
+
+    fn soft_reset(&mut self) {
+        self.reset_state();
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_page) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_page) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        314
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x5000..=0x5003).contains(&address) || address >= 0x8000
+    }
+}
+
 /// UnlDripGame (mapper 284): 16 KiB PRG pages, four 2 KiB CHR pages, an M2
 /// down-counter IRQ, per-quadrant mirroring and the extended-attribute RAM
 /// at `$C000-$FFFF` (video expansion is installed separately).
@@ -7631,50 +8097,74 @@ impl Mapper for Si512 {
     }
 }
 
-/// TEC9719 / ING-022 multicarts (mapper 534): an MMC3 core with four outer
-/// registers in the WRAM window and an inverted IRQ latch.
+/// TEC9719 / ING003C / ING-022 multicarts (mappers 126, 422 and 534): an
+/// MMC3 core with four outer registers in the WRAM window, the shared
+/// outer PRG/CHR transform and a normal or inverted IRQ latch (534).
 #[derive(Debug)]
-pub struct Mmc3_534 {
+pub struct Tec9719 {
     inner: Mmc3,
-    outer: u8,
-    misc: u8,
-    chr8: u8,
-    mode: u8,
+    board: u16,
+    ex: [u8; 4],
 }
 
-impl Mmc3_534 {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+impl Tec9719 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header, board: u16) -> Self {
         Self {
-            inner: Mmc3::new_as(prg, chr, header, 534),
-            outer: 0,
-            misc: 0,
-            chr8: 0,
-            mode: 0,
+            inner: Mmc3::new_as(prg, chr, header, board),
+            board,
+            ex: [0; 4],
         }
+    }
+
+    /// Apply the outer PRG transform to an inner 8 KiB MMC3 page.
+    fn outer_prg(&self, inner_page: usize) -> usize {
+        let reg = usize::from(self.ex[0]);
+        let mut page = inner_page;
+        let keep_a17 = if self.ex[0] & 0x40 == 0 { 0x10 } else { 0 };
+        page &= keep_a17 | 0x0F;
+        let mut bits = reg & 0x06;
+        if self.ex[0] & 0x40 != 0 {
+            bits |= reg & 0x01;
+        }
+        page |= bits << 4;
+        page |= (reg & 0x10) << 3;
+        page
     }
 
     fn prg_bank(&self, slot: usize) -> usize {
         let banks = (self.inner.prg.len() / 0x2000).max(1);
-        let base = self.inner.prg_slot(slot);
-        let p = usize::from(self.outer & 0x03);
-        let mut bank = (base & 0x1F) | (p & 0x01) << 5 | ((p >> 1) & 0x01) << 6;
-        // Y=1 replaces PRG A17 with the outer register's inverted b bit.
-        if self.outer & 0x40 != 0 {
-            bank = (bank & !0x10) | ((!self.outer >> 5 & 1) as usize) << 4;
-        }
-        bank % banks
+        let mode = self.ex[3] & 0x03;
+        let trigger = if self.inner.select & 0x40 != 0 { 2 } else { 0 };
+        let page = match mode {
+            0 => self.outer_prg(self.inner.prg_slot(slot)),
+            3 => self.outer_prg(self.inner.prg_slot(trigger)) + slot,
+            _ => self.outer_prg(self.inner.prg_slot(trigger)) + (slot & 0x01),
+        };
+        page % banks
+    }
+
+    fn chr_outer(&self) -> usize {
+        let reg = usize::from(self.ex[0]);
+        let ex2 = usize::from(self.ex[2]);
+        ((!reg & 0x80) & ex2)
+            | (((reg << 4) & 0x80) & reg)
+            | ((reg << 3) & 0x0100)
+            | ((reg << 5) & 0x0200)
     }
 
     fn chr_bank(&self, slot: usize) -> usize {
         let banks = (self.inner.chr.len() / 0x400).max(1);
-        let base = self.inner.chr_bank(slot);
-        let c = usize::from((self.outer >> 2) & 0x03);
-        let b = usize::from((self.outer >> 4) & 0x01);
-        ((base & 0x7F) | (c & 0x01) << 8 | ((c >> 1) & 0x01) << 9 | b << 10) % banks
+        let page = if self.ex[3] & 0x10 != 0 {
+            (self.chr_outer() | ((usize::from(self.ex[2]) & 0x0F) << 3)) + slot
+        } else {
+            let mask = if self.ex[0] & 0x80 != 0 { 0x7F } else { 0xFFFF };
+            self.chr_outer() | (self.inner.chr_bank(slot) & mask)
+        };
+        page % banks
     }
 }
 
-impl Mapper for Mmc3_534 {
+impl Mapper for Tec9719 {
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -7689,17 +8179,18 @@ impl Mapper for Mmc3_534 {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        if (0x6000..=0x6003).contains(&address) && self.inner.ram_enabled {
-            match address & 0xE003 {
-                0x6000 => self.outer = value,
-                0x6001 => self.misc = value,
-                0x6002 => self.chr8 = value,
-                0x6003 => self.mode = value,
-                _ => {}
+        if (0x6000..=0x7FFF).contains(&address) {
+            if !self.inner.ram_enabled {
+                return;
+            }
+            let index = usize::from(address & 0x03);
+            let locked = self.ex[3] & 0x80 != 0;
+            if index == 1 || index == 2 || ((index == 0 || index == 3) && !locked) {
+                self.ex[index] = value;
             }
             return;
         }
-        if address & 0xE001 == 0xC000 {
+        if self.board == 534 && address & 0xE001 == 0xC000 {
             self.inner.irq_latch = value ^ 0xFF;
             return;
         }
@@ -7733,7 +8224,7 @@ impl Mapper for Mmc3_534 {
     }
 
     fn number(&self) -> u16 {
-        534
+        self.board
     }
 
     fn prg_ram(&self) -> &[u8] {
@@ -26846,6 +27337,90 @@ mod tests {
     }
 
     #[test]
+    fn subor_167_banking_modes() {
+        // 128 KiB PRG (8 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(167, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 167);
+        let page = |n: usize| rom[16 + n * 0x4000];
+        assert_eq!(cart.cpu_read(0x8000), page(0));
+        assert_eq!(cart.cpu_read(0xC000), page(0));
+        // NROM-32: outer bit makes the pair odd-aligned before masking.
+        cart.cpu_write(0x8000, 0x10);
+        cart.cpu_write(0xA000, 0x0C);
+        assert_eq!(cart.cpu_read(0x8000), page(1));
+        assert_eq!(cart.cpu_read(0xC000), page(0));
+    }
+
+    #[test]
+    fn magic_kid_190_prg_chr_windows() {
+        // 256 KiB PRG (16 x 16 KiB), 32 KiB CHR.
+        let rom = synth_banked(190, 256, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 190);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16]);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        assert_eq!(cart.ppu_read(0x0800), 0x82);
+        cart.cpu_write(0x8000, 5);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x4000]);
+        cart.cpu_write(0xC003, 3);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 11 * 0x4000]);
+        cart.cpu_write(0xA002, 0x03);
+        assert_eq!(cart.ppu_read(0x1000), 0x86);
+    }
+
+    #[test]
+    fn city_fighter_266_banks_and_irq() {
+        // 128 KiB PRG (16 x 8 KiB), 128 KiB CHR.
+        let rom = synth_banked(266, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 266);
+        let p = |n: usize| rom[16 + n * 0x2000];
+        assert_eq!(cart.cpu_read(0x8000), p(0));
+        assert_eq!(cart.cpu_read(0xA000), p(1));
+        assert_eq!(cart.cpu_read(0xC000), p(0));
+        assert_eq!(cart.cpu_read(0xE000), p(3));
+        cart.cpu_write(0x9000, 0x0C);
+        assert_eq!(cart.cpu_read(0x8000), p(12));
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0xC000, 1);
+        assert_eq!(cart.cpu_read(0xC000), p(14));
+        cart.cpu_write(0xD000, 0x05);
+        cart.cpu_write(0xD004, 0x01);
+        assert_eq!(cart.ppu_read(0x0000), 0x95);
+        cart.cpu_write(0xF000, 1);
+        cart.cpu_write(0xF004, 0);
+        cart.cpu_write(0xF008, 2);
+        cart.clock_cpu();
+        cart.clock_cpu();
+        assert!(cart.irq_line());
+    }
+
+    #[test]
+    fn bmc_64in1_314_enable_latch() {
+        // 1 MiB PRG (64 x 16 KiB), 256 KiB CHR.
+        let rom = synth_banked(314, 1024, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 314);
+        let page = |n: usize| rom[16 + n * 0x4000];
+        assert_eq!(cart.cpu_read(0x8000), page(7));
+        assert_eq!(cart.cpu_read(0xC000), page(7));
+        // Clearing bit 7 disables the bank latches until it is set again.
+        cart.cpu_write(0x5000, 0x00);
+        cart.cpu_write(0x5001, 0x00);
+        assert_eq!(cart.cpu_read(0xC000), page(7));
+        cart.cpu_write(0x5000, 0x80);
+        cart.cpu_write(0x5001, 0xC2);
+        assert_eq!(cart.cpu_read(0x8000), page(4));
+        assert_eq!(cart.cpu_read(0xC000), page(5));
+        cart.cpu_write(0x5002, 0x01);
+        assert_eq!(cart.ppu_read(0x0000), 0xA0);
+        cart.cpu_write(0x5000, 0xA0);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
     fn mapper_170_readback_latch() {
         let rom = synth_banked(170, 32, 8);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
@@ -27114,11 +27689,24 @@ mod tests {
         assert_eq!(cart.mapper(), 534);
         assert_eq!(cart.cpu_read(0x8000), 0);
         assert_eq!(cart.cpu_read(0xC000), 30);
-        cart.cpu_write(0x6000, 0x01);
+        cart.cpu_write(0x6000, 0x02);
         assert_eq!(cart.cpu_read(0x8000), 32);
         assert_eq!(cart.cpu_read(0xC000), 62);
         // The ING-022 IRQ latch inversion is exercised in the system tests;
         // here the outer-bank transform is the observable part.
+    }
+
+    #[test]
+    fn tec9719_422_outer_prg_bits() {
+        // 512 KiB PRG, 512 KiB CHR.
+        let rom = synth_banked(422, 512, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 422);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 30);
+        cart.cpu_write(0x6000, 0x02);
+        assert_eq!(cart.cpu_read(0x8000), 32);
+        assert_eq!(cart.cpu_read(0xC000), 62);
     }
 
     #[test]
