@@ -754,6 +754,7 @@ impl Cartridge {
             228 => Box::new(Action52::new(prg_rom, chr)),
             246 => Box::new(FongShenBang::new(prg_rom, chr, header)),
             250 => Box::new(Nitra250::new(prg_rom, chr, header)),
+            263 => Box::new(Mmc3_263::new(prg_rom, chr, header)),
             140 => Box::new(Jaleco140::new(prg_rom, chr, header)),
             147 => Box::new(Sachen147::new(prg_rom, chr, header)),
             149 => Box::new(Sachen149::new(prg_rom, chr, header)),
@@ -5147,6 +5148,78 @@ impl Mapper for Mmc3_198 {
 
     fn low_window(&self) -> Option<(u16, u16)> {
         Some((0x5000, 0x5FFF))
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// MMC3 clone used by King of Fighters '97 pirates (mapper 263): the written
+/// value is bit-scrambled and three registers are aliased.
+#[derive(Debug)]
+pub struct Mmc3_263 {
+    inner: Mmc3,
+}
+
+impl Mmc3_263 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 263),
+        }
+    }
+}
+
+impl Mapper for Mmc3_263 {
+    fn prg_read(&self, address: u16) -> u8 {
+        self.inner.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        let value = (value & 0xD8)
+            | ((value & 0x20) >> 4)
+            | ((value & 0x04) << 3)
+            | ((value & 0x02) >> 1)
+            | ((value & 0x01) << 2);
+        let address = match address {
+            0x9000 => 0x8001,
+            0xD000 => 0xC001,
+            0xF000 => 0xE001,
+            other => other,
+        };
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        263
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
     }
 
     fn chr_mapping_write(&self, address: u16) -> bool {
@@ -18692,6 +18765,22 @@ mod tests {
         assert!(!cart.irq_line());
         cart.clock_scanline();
         assert!(cart.irq_line());
+    }
+
+    #[test]
+    fn mmc3_263_scrambles_register_values() {
+        // 128 KiB PRG (16 x 8 KiB), 64 KiB CHR (64 x 1 KiB).
+        let rom = synth_banked(263, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 263);
+        // Scramble(0x21) = 6 selects R6; scramble(0x03) = 5 loads it.
+        cart.cpu_write(0x8000, 0x21);
+        cart.cpu_write(0x8001, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), 5);
+        // Scramble(0x00) = 0 selects R0; the 2 KiB pair starts at bank 4.
+        cart.cpu_write(0x8000, 0x00);
+        cart.cpu_write(0x8001, 0x03);
+        assert_eq!(cart.ppu_read(0x0000), 0x84);
     }
 
     #[test]
