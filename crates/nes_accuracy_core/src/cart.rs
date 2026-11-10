@@ -941,6 +941,7 @@ impl Cartridge {
             226 => Box::new(Multicart226::new(prg_rom, chr, header)),
             240 => Box::new(Gnrom240::new(prg_rom, chr, prg_ram, header)),
             178 => Box::new(Fs305::new(prg_rom, chr, prg_ram, header)),
+            551 => Box::new(Fs305::new_551(prg_rom, chr, prg_ram, header)),
             16 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 16)),
             153 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 153)),
             157 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 157)),
@@ -11939,6 +11940,8 @@ pub struct Fs305 {
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
     regs: [u8; 4],
+    mirroring: Mirroring,
+    number: u16,
 }
 
 impl Fs305 {
@@ -11950,6 +11953,22 @@ impl Fs305 {
             chr,
             prg_ram,
             regs: [0; 4],
+            mirroring: Mirroring::Horizontal,
+            number: 178,
+        }
+    }
+
+    /// Mapper 551: the same font/PRG core with hard-wired mirroring and a
+    /// switchable CHR-ROM bank at `$4803`.
+    fn new_551(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            regs: [0; 4],
+            mirroring: header.mirroring,
+            number: 551,
         }
     }
 
@@ -12013,19 +12032,31 @@ impl Mapper for Fs305 {
     }
 
     fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = if self.number == 551 {
+            usize::from(self.regs[3]) % banks
+        } else {
+            0
+        };
         self.chr
-            .get(usize::from(address) & 0x1FFF)
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
             .copied()
             .unwrap_or(0)
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
+        if self.number == 551 {
+            return;
+        }
         if let Some(byte) = self.chr.get_mut(usize::from(address) & 0x1FFF) {
             *byte = value;
         }
     }
 
     fn mirroring(&self) -> Mirroring {
+        if self.number == 551 {
+            return self.mirroring;
+        }
         if self.regs[0] & 0x01 != 0 {
             Mirroring::Horizontal
         } else {
@@ -12034,7 +12065,7 @@ impl Mapper for Fs305 {
     }
 
     fn number(&self) -> u16 {
-        178
+        self.number
     }
 
     fn prg_ram(&self) -> &[u8] {
@@ -22026,6 +22057,19 @@ mod tests {
             cart.set_cpu_cycle(100 + bit * 2);
             cart.cpu_write(base, (value >> bit) & 1);
         }
+    }
+
+    #[test]
+    fn mapper_551_chr_bank_and_hardwired_mirroring() {
+        // 128 KiB PRG, 16 KiB CHR.
+        let rom = synth_banked(551, 128, 16);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 551);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+        cart.cpu_write(0x4803, 1);
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
     #[test]
