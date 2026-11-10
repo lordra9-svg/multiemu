@@ -594,6 +594,20 @@ pub trait Mapper: fmt::Debug {
         false
     }
 
+    /// CPU-RAM address window sampled before a cart read (protection boards).
+    fn ram_read_window(&self) -> Option<(u16, u16)> {
+        None
+    }
+
+    /// Board assumes Famicom/clone power wiring (PPU warm-up over before the
+    /// CPU starts), not the front-loader's shared reset.
+    fn famicom_warmup(&self) -> bool {
+        false
+    }
+
+    /// Samples CPU RAM after a read inside [`Mapper::ram_read_window`].
+    fn latch_cpu_ram(&mut self, _address: u16, _ram: &[u8; 0x800]) {}
+
     /// Full CHR ROM for mappers whose pattern banks switch during rendering
     /// (MMC2/MMC4). The PPU owns the latch state in that case.
     fn chr_rom(&self) -> Option<&[u8]> {
@@ -965,6 +979,8 @@ impl Cartridge {
             312 => Box::new(KaiserMisc::new(prg_rom, chr, header, 312)),
             313 => Box::new(Mmc3_313::new(prg_rom, chr, header)),
             314 => Box::new(Bmc64in1::new(prg_rom, chr, header)),
+            292 => Box::new(DragonFighter292::new(prg_rom, chr, header)),
+            518 => Box::new(Dance2000::new(prg_rom, chr, prg_ram, header)),
             519 => Box::new(Eh8813A::new(prg_rom, chr, header)),
             512 => Box::new(Si512::new(prg_rom, chr, header)),
             513 => Box::new(Sachen9602::new(prg_rom, chr, header)),
@@ -1257,6 +1273,23 @@ impl Cartridge {
     #[must_use]
     pub fn prg_rom_at_6000(&self) -> bool {
         self.mapper.prg_rom_at_6000()
+    }
+
+    /// CPU-RAM window sampled by the mapper, if any.
+    #[must_use]
+    pub fn ram_read_window(&self) -> Option<(u16, u16)> {
+        self.mapper.ram_read_window()
+    }
+
+    /// Whether the board requires the Famicom power-on PPU lead.
+    #[must_use]
+    pub fn famicom_warmup(&self) -> bool {
+        self.mapper.famicom_warmup()
+    }
+
+    /// Lets the mapper sample CPU RAM on a protection read.
+    pub fn latch_cpu_ram(&mut self, address: u16, ram: &[u8; 0x800]) {
+        self.mapper.latch_cpu_ram(address, ram);
     }
 
     /// Per-slot CHR-RAM bank map, when the board banks pattern RAM.
@@ -5848,6 +5881,10 @@ impl Mapper for Subor166 {
     fn number(&self) -> u16 {
         167
     }
+
+    fn famicom_warmup(&self) -> bool {
+        true
+    }
 }
 
 /// Magic Kid Goo Goo (mapper 190): two 16 KiB PRG windows and four 2 KiB CHR
@@ -6212,6 +6249,278 @@ impl Mapper for Bmc64in1 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         (0x5000..=0x5003).contains(&address) || address >= 0x8000
+    }
+}
+
+/// Dragon Fighter (mapper 292): an MMC3 clone whose `$6000-$6FFF` reads
+/// sample CPU RAM as a protection latch, plus board-selected CHR pages.
+#[derive(Debug)]
+pub struct DragonFighter292 {
+    inner: Mmc3,
+    ex: [u8; 3],
+}
+
+impl DragonFighter292 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 292),
+            ex: [0; 3],
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.prg.len() / 0x2000).max(1);
+        let bank = if slot == 0 {
+            usize::from(self.ex[0] & 0x1F)
+        } else {
+            self.inner.prg_slot(slot)
+        };
+        bank % banks
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let bank = match slot {
+            0 => ((self.inner.chr_bank(0) >> 1) ^ usize::from(self.ex[1])) << 1,
+            2 => ((self.inner.chr_bank(2) >> 1) | (usize::from(self.ex[2] & 0x40) << 1)) << 1,
+            4 => usize::from(self.ex[2] & 0x3F) << 2,
+            _ => self.inner.chr_bank(slot),
+        };
+        bank % banks
+    }
+}
+
+impl Mapper for DragonFighter292 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address >= 0x8000 {
+            let slot = usize::from((address - 0x8000) / 0x2000);
+            let bank = self.prg_bank(slot);
+            return self
+                .inner
+                .prg
+                .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+                .copied()
+                .unwrap_or(0);
+        }
+        0
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x6000..=0x6FFF if address & 0x01 == 0 => {
+                self.ex[0] = value;
+            }
+            0x6000..=0x7FFF => {}
+            _ if address < 0x8000 => {}
+            _ => self.inner.prg_write(address, value),
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        self.inner
+            .chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        292
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        true
+    }
+
+    fn famicom_warmup(&self) -> bool {
+        true
+    }
+
+    fn ram_read_window(&self) -> Option<(u16, u16)> {
+        Some((0x6000, 0x6FFF))
+    }
+
+    fn latch_cpu_ram(&mut self, address: u16, ram: &[u8; 0x800]) {
+        if address & 0x01 != 0 {
+            return;
+        }
+        if self.ex[0] & 0xE0 == 0xC0 {
+            self.ex[1] = ram[0x6A];
+        } else {
+            self.ex[2] = ram[0xFF];
+        }
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address) || (0x6000..=0x6FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// Dance 2000 (mapper 518): two 16 KiB PRG windows, two 4 KiB CHR pages and
+/// a per-nametable CHR swap, with cart RAM readable at `$5000-$5FFF`.
+#[derive(Debug)]
+pub struct Dance2000 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_reg: u8,
+    mode: u8,
+    last_nt: u8,
+    mirroring: Mirroring,
+}
+
+impl Dance2000 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            prg_reg: 0,
+            mode: 0,
+            last_nt: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_16k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % banks) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn banks(&self) -> (usize, usize) {
+        if self.mode & 0x04 != 0 {
+            let bank = usize::from(self.prg_reg & 0x07) << 1;
+            (bank, bank + 1)
+        } else {
+            (usize::from(self.prg_reg & 0x0F), 0)
+        }
+    }
+}
+
+impl Mapper for Dance2000 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let (low, high) = self.banks();
+        match address {
+            0x8000..=0xBFFF => self.prg_16k(low, address),
+            0xC000..=0xFFFF => self.prg_16k(high, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address == 0x5000 {
+            self.prg_reg = value;
+            self.mirroring = if self.mode & 0x01 != 0 {
+                Mirroring::Horizontal
+            } else {
+                Mirroring::Vertical
+            };
+        } else if address == 0x5200 {
+            self.mode = value;
+            self.mirroring = if self.mode & 0x01 != 0 {
+                Mirroring::Horizontal
+            } else {
+                Mirroring::Vertical
+            };
+        }
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0x5000..=0x5FFF).contains(&address) {
+            if self.prg_reg & 0x40 != 0 {
+                return 0xFF;
+            }
+            return self.prg_ram[usize::from(address - 0x5000) % self.prg_ram.len()];
+        }
+        self.prg_read(address)
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x1000).max(1);
+        let slot = usize::from(address) / 0x1000;
+        let bank = if slot == 0 {
+            usize::from(self.last_nt) % banks
+        } else {
+            1 % banks
+        };
+        self.chr
+            .get(bank * 0x1000 + usize::from(address & 0x0FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x1000).max(1);
+        let slot = usize::from(address) / 0x1000;
+        let bank = if slot == 0 {
+            usize::from(self.last_nt) % banks
+        } else {
+            1 % banks
+        };
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x1000 + usize::from(address & 0x0FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        518
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x5000..=0x5200).contains(&address)
     }
 }
 
@@ -27418,6 +27727,45 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0xA0);
         cart.cpu_write(0x5000, 0xA0);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn dragon_fighter_292_ram_latch() {
+        // 128 KiB PRG, 512 KiB CHR.
+        let rom = synth_banked(292, 128, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 292);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        cart.cpu_write(0x6000, 0xC0);
+        let mut ram = [0u8; 0x800];
+        ram[0x6A] = 1;
+        cart.latch_cpu_ram(0x6000, &ram);
+        assert_eq!(cart.ppu_read(0x0000), 0x82);
+        assert!(cart.famicom_warmup());
+    }
+
+    #[test]
+    fn dance_2000_518_windows() {
+        // 256 KiB PRG (16 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(518, 256, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 518);
+        let page = |n: usize| rom[16 + n * 0x4000];
+        assert_eq!(cart.cpu_read(0x8000), page(0));
+        assert_eq!(cart.cpu_read(0xC000), page(0));
+        cart.cpu_write(0x5000, 5);
+        assert_eq!(cart.cpu_read(0x8000), page(5));
+        assert_eq!(cart.cpu_read(0xC000), page(0));
+        cart.cpu_write(0x5200, 0x04);
+        assert_eq!(cart.cpu_read(0x8000), page(10));
+        assert_eq!(cart.cpu_read(0xC000), page(11));
+        cart.cpu_write(0x5200, 0x05);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        // Writes at $8000+ are ignored; $5000 bit 6 floats the RAM read.
+        cart.cpu_write(0x8000, 0xAA);
+        assert_eq!(cart.cpu_read(0x8000), page(10));
+        cart.cpu_write(0x5000, 0x40);
+        assert_eq!(cart.cpu_read_io(0x5000), 0xFF);
     }
 
     #[test]

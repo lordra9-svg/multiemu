@@ -231,6 +231,9 @@ impl System {
             cycle_count: 0,
             dma: None,
         };
+        if system.cart.famicom_warmup() {
+            system.ppu.end_warmup();
+        }
         let mut cpu = system.cpu;
         cpu.reset(&mut system);
         // The reference console leaves reset on cycle 8 (one cycle of phase
@@ -875,6 +878,14 @@ impl System {
                 if self.cart.prg_ram().is_empty() && !self.cart.prg_rom_at_6000() {
                     self.open_bus
                 } else {
+                    if self
+                        .cart
+                        .ram_read_window()
+                        .is_some_and(|(lo, hi)| (lo..=hi).contains(&address))
+                    {
+                        let ram = self.ram;
+                        self.cart.latch_cpu_ram(address, &ram);
+                    }
                     self.cart.cpu_read(address)
                 }
             }
