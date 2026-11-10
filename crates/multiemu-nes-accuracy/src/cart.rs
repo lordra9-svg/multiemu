@@ -297,6 +297,10 @@ pub enum HybridKind {
     /// the board's RAM window reads the overlay instead of CHR-ROM. The
     /// payload is the mapper number (74, 191, 192 or 194).
     Mmc3Overlay(u16),
+    /// Waixing FK23C (mapper 176): the mapper pushes the eight resolved 1 KiB
+    /// CHR banks and which of them the FS005 RAM Configuration Register has
+    /// redirected to the 8 KiB CHR-RAM overlay.
+    Fk23c,
 }
 
 /// Shared hybrid CHR state: full CHR ROM, 4 KiB CHR-RAM, the current MMC3
@@ -313,6 +317,12 @@ pub struct HybridChr {
     bank_data: [u8; 8],
     latch: [bool; 2],
     chrb: u8,
+    /// FK23C per-slot resolved 1 KiB bank.
+    fk_banks: [u16; 8],
+    /// FK23C per-slot CHR-RAM redirect (`$A001.2` FS005 overlay).
+    fk_ram: [bool; 8],
+    /// FK23C cart whose CHR is entirely 8 KiB RAM.
+    fk_flat: bool,
 }
 
 impl HybridChr {
@@ -323,6 +333,7 @@ impl HybridChr {
             HybridKind::Waixing195 => 0x8000,
             HybridKind::Mmc3Overlay(192) => 0x1000,
             HybridKind::Mmc3Overlay(_) => 0x800,
+            HybridKind::Fk23c => 0x2000,
         };
         Self {
             kind,
@@ -332,7 +343,17 @@ impl HybridChr {
             bank_data: [0; 8],
             latch: [false; 2],
             chrb: 0x80,
+            fk_banks: [0; 8],
+            fk_ram: [false; 8],
+            fk_flat: false,
         }
+    }
+
+    /// Publishes the FK23C per-slot CHR map.
+    pub fn set_fk23c(&mut self, banks: [u16; 8], ram: [bool; 8], flat_ram: bool) {
+        self.fk_banks = banks;
+        self.fk_ram = ram;
+        self.fk_flat = flat_ram;
     }
 
     fn update_regs(&mut self, select: u8, bank_data: [u8; 8]) {
@@ -436,6 +457,19 @@ impl HybridChr {
                     (true, (bank & 0x07) * 0x400 + offset)
                 } else {
                     (false, (bank & 0x3F) * 0x400 + offset)
+                }
+            }
+            HybridKind::Fk23c => {
+                let slot = usize::from(address) / 0x400;
+                let offset = usize::from(address) & 0x3FF;
+                if self.fk_flat {
+                    return (true, usize::from(address) & 0x1FFF);
+                }
+                let bank = usize::from(self.fk_banks[slot & 0x07]);
+                if self.fk_ram[slot & 0x07] {
+                    (true, (bank & 0x07) * 0x400 + offset)
+                } else {
+                    (false, bank * 0x400 + offset)
                 }
             }
             HybridKind::Mmc3Overlay(number) => {
@@ -12487,6 +12521,7 @@ pub struct Mmc3_176 {
     chr_base: u8,
     cnrom_chr_reg: u8,
     ram_cfg: u8,
+    hybrid: Option<Rc<RefCell<HybridChr>>>,
 }
 
 impl Mmc3_176 {
@@ -12498,7 +12533,11 @@ impl Mmc3_176 {
         } else {
             Vec::new()
         };
-        Self {
+        let hybrid = Some(Rc::new(RefCell::new(HybridChr::new(
+            HybridKind::Fk23c,
+            chr.clone(),
+        ))));
+        let mapper = Self {
             prg,
             chr,
             prg_ram,
@@ -12525,7 +12564,25 @@ impl Mmc3_176 {
             chr_base: 0,
             cnrom_chr_reg: 0,
             ram_cfg: 0,
+            hybrid,
+        };
+        mapper.sync_chr();
+        mapper
+    }
+
+    /// Publishes the resolved CHR map to the PPU's shared state.
+    fn sync_chr(&self) {
+        let Some(hybrid) = &self.hybrid else {
+            return;
+        };
+        let mut banks = [0u16; 8];
+        let mut ram = [false; 8];
+        for slot in 0..8 {
+            let bank = self.resolve_chr(slot);
+            banks[slot] = u16::try_from(bank).unwrap_or(0);
+            ram[slot] = !self.chr_is_ram && self.chr_bank_is_ram(bank);
         }
+        hybrid.borrow_mut().set_fk23c(banks, ram, self.chr_is_ram);
     }
 
     fn is_fs005(&self) -> bool {
@@ -12758,9 +12815,13 @@ impl Mapper for Mmc3_176 {
             0x8000..=0xFFFF => self.write_mmc3(address, value),
             _ => {}
         }
+        self.sync_chr();
     }
 
     fn chr_read(&self, address: u16) -> u8 {
+        if let Some(hybrid) = &self.hybrid {
+            return hybrid.borrow().read(address);
+        }
         let slot = usize::from(address) / 0x400;
         let bank = self.resolve_chr(slot);
         if self.chr_is_ram || self.select_chr_ram {
@@ -12773,6 +12834,10 @@ impl Mapper for Mmc3_176 {
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(hybrid) = &self.hybrid {
+            hybrid.borrow_mut().write(address, value);
+            return;
+        }
         if self.chr_is_ram {
             let index = usize::from(address) & (self.chr.len() - 1);
             self.chr[index] = value;
@@ -12795,6 +12860,10 @@ impl Mapper for Mmc3_176 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.prg_ram
+    }
+
+    fn hybrid_chr(&self) -> Option<Rc<RefCell<HybridChr>>> {
+        self.hybrid.clone()
     }
 
     fn chr_mapping_write(&self, address: u16) -> bool {
@@ -19576,6 +19645,24 @@ mod tests {
         cart.cpu_write(0x5000, 0x03);
         cart.cpu_write(0xA001, 0xA1);
         assert_eq!(cart.cpu_read(0x5000), 0x5A);
+    }
+
+    #[test]
+    fn mmc3_176_fs005_chr_ram_overlay_reaches_the_ppu() {
+        let mut rom = synth_banked(176, 128, 32);
+        rom[7] |= 0x08;
+        rom[8] = 0x20; // NES 2.0 submapper 2 (FS005)
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        // $A001.5 = config on, $A001.2 = first 8 KiB of CHR is overlay RAM.
+        cart.cpu_write(0xA001, 0x24);
+        // R2 = 0 -> CHR slot 4 (bank 0) is the overlay.
+        cart.cpu_write(0x8000, 0x02);
+        cart.cpu_write(0x8001, 0x00);
+        cart.ppu_write(0x1000, 0x5A);
+        assert_eq!(cart.ppu_read(0x1000), 0x5A);
+        // R2 = 8 -> slot 4 falls back to CHR-ROM bank 8.
+        cart.cpu_write(0x8001, 0x08);
+        assert_eq!(cart.ppu_read(0x1000), 0x88);
     }
 
     #[test]
