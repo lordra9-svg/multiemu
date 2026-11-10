@@ -301,7 +301,7 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,870 loaded (96.8%), 3,744 rendering (52.7%), 3,126 blank (44.0%), 203
+6,902 loaded (97.1%), 3,757 rendering (52.8%), 3,145 blank (44.3%), 171
 unsupported (2.9%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. The remaining 80 unsupported IDs
 are led by 256/515/551 (5 images each) and 355/446/547/594 (4 each); Datach
@@ -1029,7 +1029,7 @@ the dots 1-64 clear phase, which provides the seed.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **6,870 loaded, 3,744 rendering, 3,126 blank, 203 unsupported
+  audit is **6,902 loaded, 3,757 rendering, 3,145 blank, 171 unsupported
   (80+ IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.
