@@ -957,7 +957,10 @@ the dots 1-64 clear phase, which provides the seed.
   (NES 2.0 byte 12, plus the legacy iNES PAL bit) was ignored, so 577 local
   Dendy and 495 PAL images ran at NTSC speed; European MMC1 titles now match
   at 115-118/120. Mapper 45 reached **97.9%** and mapper 90 59.5%
-  (62.1% best-aligned) after both fixes.
+  (62.1% best-aligned) after both fixes. The same 252-image / 120-frame
+  sample moved from 87.0% to **89.2%** video (90.8% best-aligned) and from
+  53.3% to 54.9% audio, while the number of frame-shifted images fell from
+  32 to 19.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
