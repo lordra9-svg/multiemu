@@ -905,6 +905,16 @@ the dots 1-64 clear phase, which provides the seed.
   132/172 (Du Ma Racing) 4/120, 226 (22 Games) 8/120, 242 multicarts 9/120,
   176 (100-in-1) 13/120, 215 (2-in-1) 37/120 and 142 (Jinpai Mali) 40/120.
   The harness ranks these by title instead of reporting only render/blank.
+  The first fixes from that ranking, each re-measured with the same mode:
+  mapper **58** was decoding the register from the data byte instead of the
+  address (video 1/120 -> **117/120** on the sampled 117-in-1, **96.8%**
+  across all 15 board images); mapper **132** used a guessed
+  p/r/s latch instead of the reference accumulator/inverter chip (48.3% ->
+  **70.3%** over 17 images, Qi Wang 4 -> 116/120); mapper **172** wrongly
+  banked PRG and took CHR from output bits 4-5 (fixed PRG and output bits
+  0-1 now, Venice Beach 117/120); mapper **226** used the wrong bank/mode bits
+  (6.7% -> **58.0%** over 9 images, five titles at 118/120). The same
+  120-image sweep moved from video 81.1% to 82.0%.
 - A `boundary` diagnostic prints the frame-completion CPU cycle and PPU dot.
   On SMB the completed frames land at cycles 29,781 / 59,566 / 89,343 /
   119,122 / ... against the reference capture's documented 29,779 / 59,560 /
