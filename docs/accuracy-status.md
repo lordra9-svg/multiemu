@@ -993,6 +993,12 @@ the dots 1-64 clear phase, which provides the seed.
   With the consecutive-write rule — a documented MMC1 behaviour the reference
   models — Hillsfar went from 4/120 (anti-piracy trap) to **116/120** and the
   mapper-1 board from 91.0% to **92.1%** video (94.2% best-aligned).
+- The first alias batch from the mapper index: **31** (INL eight 4 KiB PRG
+  slots; slot 7 powers on at the last bank) reached **98.9%** video over 3
+  images; **92** (Jaleco JF-19, sharing the mapper-72 strobe latch with the
+  fixed-first/switchable-second layout) **97.9%** over 2; and the later
+  **Kaiser** boards **305/306/312** (2 KiB windows, address-decoded 8 KiB
+  window, switchable 16 KiB half) **99.2/98.3/98.3%** over 2 images each.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma

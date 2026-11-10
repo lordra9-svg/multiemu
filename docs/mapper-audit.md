@@ -148,11 +148,11 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   latches (page 0 is CHR-RAM), toggled by `$FD`/`$FE` pattern fetches and by
   `$2007` reads. The PPU reads and writes through the shared map. 8/8 render at
   600 frames.
-- **Mapper completion sweep (15, 27, 28, 40, 45, 57, 65, 67, 70, 72, 74, 78,
-  90, 93, 107, 117, 119, 120, 123, 133, 137, 140, 145, 147, 149, 157, 168,
-  180, 187, 191, 192, 194, 198, 225, 228, 243, 244, 245, 246, 250, 263, 264,
-  303, 313, 332, 519, 529, 552)** — 48 boards added against the RustyNES and
-  Mesen2 references:
+- **Mapper completion sweep (15, 27, 28, 31, 40, 45, 57, 65, 67, 70, 72, 74,
+  78, 90, 92, 93, 107, 117, 119, 120, 123, 133, 137, 140, 145, 147, 149, 157,
+  168, 180, 187, 191, 192, 194, 198, 225, 228, 243, 244, 245, 246, 250, 263,
+  264, 303, 305, 306, 312, 313, 332, 519, 529, 552)** — 53 boards added against
+  the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
   discrete boards add CPU-cycle IRQs; the Sachen 3009/3018 and JV001 latches
