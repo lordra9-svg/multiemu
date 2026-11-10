@@ -913,6 +913,16 @@ the dots 1-64 clear phase, which provides the seed.
   mapping was reverted and deferred until the CHR-ROM nametable pages and the
   NT-RAM write path are complete. The `$A000-$B800` handler also wrote the
   (unused) `nt_banks` array, a latent bug to fix with that work.
+
+  A second attempt with a per-slot "populated" gate (use NT RAM only once a
+  slot has received non-zero tile bytes, otherwise fall back to CIRAM) was also
+  measured and still blanked the same four titles: they *do* write non-zero
+  tile data into NT RAM, and `$2007` readback of it works, yet the rendered
+  background is blank. So the remaining fault is in the background fetch path
+  (or slot/bank timing during rendering), not in the RAM contents; this is the
+  precise next step for that feature. The change was reverted again to keep the
+  mapper-19 corpus at 32/34; Final Lap (58/60) and Youkai Douchuuki (59/60)
+  would be the wins once it is finished.
 - Mid-frame CHR bank switching is now visible to `$2007` readback: the CHR-ROM
   window is refreshed on `$2006` writes and `$2007` reads (previously it was
   copied only at the start of each frame). Some mappers self-test their banking
