@@ -974,6 +974,16 @@ the dots 1-64 clear phase, which provides the seed.
   the wrong banks at 3/120 and now matches **118/120**. The one low MMC1
   title left is *Hillsfar* (4/120), whose 24C02 EEPROM probe the reference
   does not emulate either; it falls into an anti-piracy trap in our run.
+- CHR-RAM MMC3 boards (mapper 4 homebrew such as the Atari Flashback
+  *Adventure*) bank 1 KiB pattern slots through the MMC3 registers, but the
+  PPU wrote and read its 8 KiB buffer flat, so uploaded tiles landed in the
+  wrong slots. Exposing the resolved map to the PPU (the machinery built for
+  the JY ASIC) took *Adventure* from 9/120 to **117/120**; the mapper-4
+  board measures **92.4%** video (95.5% best-aligned). The remaining two
+  low titles from that ranking are PPU-timing differences, not decode:
+  *Pugsley's Scavenger Hunt* differs only in an 8-pixel-wide band on the
+  left edge (a mid-frame scroll/write-timing effect) and *8-BIT XMAS 2015*
+  only in a central sprite region with matching CHR/VRAM/palette.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
