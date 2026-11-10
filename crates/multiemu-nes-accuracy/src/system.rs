@@ -407,6 +407,7 @@ impl System {
     /// `$2007` readback (mapper self-tests switch banks and read them back).
     fn refresh_chr(&mut self) {
         if self.cart.chr_is_ram() {
+            self.ppu.set_chr_ram_map(self.cart.chr_ram_map());
             return;
         }
         for address in 0..0x2000u16 {
@@ -424,6 +425,8 @@ impl System {
             for address in 0..0x2000u16 {
                 self.ppu.chr[usize::from(address)] = self.cart.ppu_read(address);
             }
+        } else {
+            self.ppu.set_chr_ram_map(self.cart.chr_ram_map());
         }
         let mirroring = self.cart.mirroring();
         if self.ppu.mirroring != mirroring {
@@ -1862,6 +1865,39 @@ mod tests {
         system.cart.cpu_write(0xD000, 9);
         system.sync_cartridge();
         assert_eq!(system.ppu.mmc2_banks(), Some([3, 0, 9, 0]));
+    }
+
+    #[test]
+    fn header_tv_system_selects_timing() {
+        use crate::clock::Timing;
+        // NES 2.0 byte 12: 0 = NTSC, 1 = PAL, 3 = Dendy.
+        let mut rom = vec![0u8; 16 + 16 * 1024 + 8 * 1024];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 1;
+        rom[5] = 1;
+        rom[7] = 0x08; // NES 2.0
+        rom[12] = 0;
+        assert_eq!(
+            System::from_ines(&rom).expect("load").timing(),
+            Timing::NTSC
+        );
+        rom[12] = 1;
+        assert_eq!(System::from_ines(&rom).expect("load").timing(), Timing::PAL);
+        rom[12] = 3;
+        assert_eq!(
+            System::from_ines(&rom).expect("load").timing(),
+            Timing::DENDY
+        );
+
+        // Legacy iNES: byte 9 bit 0 marks PAL.
+        rom[7] = 0;
+        rom[9] = 1;
+        assert_eq!(System::from_ines(&rom).expect("load").timing(), Timing::PAL);
+        rom[9] = 0;
+        assert_eq!(
+            System::from_ines(&rom).expect("load").timing(),
+            Timing::NTSC
+        );
     }
 
     #[test]

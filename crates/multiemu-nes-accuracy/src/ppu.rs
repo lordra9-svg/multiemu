@@ -115,6 +115,8 @@ pub struct Ppu {
     pub oam: [u8; 256],
     /// CHR memory (8 KiB window; mappers can replace this later).
     pub chr: Vec<u8>,
+    /// Per-slot 1 KiB CHR-RAM bank map for banked boards (JY ASIC).
+    chr_ram_map: Option<[u8; 8]>,
     /// MMC2/MMC4 latch-banked CHR, when the cartridge uses it.
     mmc2: Option<Mmc2Chr>,
     /// Shared hybrid CHR state (mappers 165/195).
@@ -294,6 +296,7 @@ impl Ppu {
             palette_rgb: [NES_PALETTE[0]; 32],
             oam: [0; 256],
             chr,
+            chr_ram_map: None,
             mmc2: None,
             hybrid: None,
             mmc5_aux: None,
@@ -483,6 +486,24 @@ impl Ppu {
         [r, g, b, 255]
     }
 
+    /// Physical index into the 8 KiB CHR-RAM buffer for a PPU address.
+    ///
+    /// Boards with banked CHR-RAM (the JY ASIC) map each 1 KiB slot through
+    /// their registers; flat boards keep the identity.
+    fn chr_ram_index(&self, address: u16) -> usize {
+        let slot = (usize::from(address) >> 10) & 0x07;
+        let bank = match self.chr_ram_map {
+            Some(map) => usize::from(map[slot]) & 0x07,
+            None => slot,
+        };
+        bank * 0x400 + usize::from(address & 0x03FF)
+    }
+
+    /// Installs the mapper's CHR-RAM slot map (`None` = identity).
+    pub fn set_chr_ram_map(&mut self, map: Option<[u8; 8]>) {
+        self.chr_ram_map = map;
+    }
+
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
         if let Some(aux) = &self.vrc7_chr {
@@ -496,6 +517,10 @@ impl Ppu {
         }
         match &self.mmc2 {
             Some(mmc2) => mmc2.read(address),
+            None if self.chr_ram && self.chr_ram_map.is_some() => {
+                let index = self.chr_ram_index(address);
+                self.chr.get(index).copied().unwrap_or(0)
+            }
             None => self
                 .chr
                 .get(usize::from(address) % self.chr.len().max(1))
@@ -1080,7 +1105,7 @@ impl Ppu {
             } else if let Some(hybrid) = &self.hybrid {
                 hybrid.borrow_mut().write(address, value);
             } else if self.chr_ram {
-                let index = usize::from(address) & 0x1FFF;
+                let index = self.chr_ram_index(address);
                 if let Some(byte) = self.chr.get_mut(index) {
                     *byte = value;
                 }

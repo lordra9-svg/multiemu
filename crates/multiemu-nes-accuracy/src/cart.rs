@@ -575,6 +575,11 @@ pub trait Mapper: fmt::Debug {
         &[]
     }
 
+    /// Per-slot 1 KiB CHR-RAM bank map for boards that bank pattern RAM.
+    fn chr_ram_map(&self) -> Option<[u8; 8]> {
+        None
+    }
+
     /// Whether the mapper drives PRG-ROM (not work RAM) at `$6000-$7FFF`.
     ///
     /// The CPU bus only forwards that window to the cartridge when this is
@@ -1132,6 +1137,12 @@ impl Cartridge {
         self.mapper.prg_rom_at_6000()
     }
 
+    /// Per-slot CHR-RAM bank map, when the board banks pattern RAM.
+    #[must_use]
+    pub fn chr_ram_map(&self) -> Option<[u8; 8]> {
+        self.mapper.chr_ram_map()
+    }
+
     /// Mapper IRQ output (level).
     #[must_use]
     pub fn irq_line(&self) -> bool {
@@ -1209,14 +1220,15 @@ pub fn parse_header(bytes: &[u8]) -> Result<Header, CartError> {
 
 fn nes2_size(low: u8, high: u8, unit_kib: usize) -> usize {
     let unit = unit_kib * 1024;
-    match high {
-        0 => usize::from(low) * unit,
-        0x0F => {
-            let exponent = usize::from((low >> 2) & 3);
-            let multiplier = usize::from(low & 3) * 2 + 1;
-            (1usize << exponent) * multiplier * unit
-        }
-        _ => (1usize << high) * (usize::from(low) * 2 + 1) * unit,
+    if high == 0x0F {
+        // Exponent-multiplier form: EE selects the exponent and MM the odd
+        // multiplier.
+        let exponent = usize::from((low >> 2) & 3);
+        let multiplier = usize::from(low & 3) * 2 + 1;
+        (1usize << exponent) * multiplier * unit
+    } else {
+        // Ordinary form: the MSB nibble extends the byte to a 12-bit count.
+        ((usize::from(high) << 8) | usize::from(low)) * unit
     }
 }
 
@@ -11205,6 +11217,24 @@ impl Mapper for JyAsic {
         if let Some(byte) = self.chr.get_mut(offset) {
             *byte = value;
         }
+    }
+
+    fn chr_ram_map(&self) -> Option<[u8; 8]> {
+        if !self.chr_is_ram {
+            return None;
+        }
+        let mut map = [0u8; 8];
+        for (slot, entry) in map.iter_mut().enumerate() {
+            *entry = (self.chr_bank(slot as u16 * 0x400) & 0x07) as u8;
+        }
+        Some(map)
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        matches!(
+            address & 0xF007,
+            0x8000..=0x8007 | 0x9000..=0x9007 | 0xA000..=0xA007 | 0xD000..=0xD003
+        )
     }
 
     fn mirroring(&self) -> Mirroring {
