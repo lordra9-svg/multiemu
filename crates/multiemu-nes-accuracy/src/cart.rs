@@ -540,6 +540,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Shared Namco 163 nametable state for the PPU.
+    fn n163_nt(&self) -> Option<Rc<RefCell<N163Nt>>> {
+        None
+    }
+
     /// Shared banked CHR-RAM state for the PPU (VRC7).
     fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
         None
@@ -900,6 +905,12 @@ impl Cartridge {
     #[must_use]
     pub fn mmc5_aux(&self) -> Option<Rc<RefCell<Mmc5Aux>>> {
         self.mapper.mmc5_aux()
+    }
+
+    /// Shared Namco 163 nametable state for the PPU.
+    #[must_use]
+    pub fn n163_nt(&self) -> Option<Rc<RefCell<N163Nt>>> {
+        self.mapper.n163_nt()
     }
 
     /// Shared banked CHR-RAM state for the PPU (VRC7).
@@ -6165,6 +6176,91 @@ impl Mapper for Action53 {
     }
 }
 
+/// Nametable view of the Namco 163, shared with the PPU.
+///
+/// The `$C000-$D800` registers map each 1 KiB nametable quadrant to either the
+/// console CIRAM (values `$E0`/`$E1`, pages A/B) or a CHR-ROM page (values
+/// below `$E0`). CIRAM is shared through this struct so a game that writes
+/// nametables before programming the registers (the power-on layout follows
+/// the header mirroring) keeps its data.
+#[derive(Debug)]
+pub struct N163Nt {
+    /// The console's 2 KiB CIRAM as this board sees it.
+    ram: [u8; 0x800],
+    /// Register value per 1 KiB quadrant (`$2000/$2400/$2800/$2C00`).
+    banks: [u8; 4],
+    /// CHR-ROM copy for quadrants mapped to a CHR-ROM page (< `$E0`).
+    chr_rom: Vec<u8>,
+}
+
+/// Where a nametable address resolves to.
+#[derive(Debug, Clone, Copy)]
+enum N163NtTarget {
+    /// Console CIRAM byte offset (0..0x800).
+    Ciram(usize),
+    /// CHR-ROM byte offset.
+    Chr(usize),
+}
+
+impl N163Nt {
+    fn new(mirroring: Mirroring, chr_rom: Vec<u8>) -> Self {
+        // Power-on layout reproduces the header mirroring (RustyNES `nta_for`);
+        // a game that never writes `$C000-$D800` keeps normal mirroring.
+        let banks = match mirroring {
+            Mirroring::Horizontal => [0xE0, 0xE0, 0xE1, 0xE1],
+            Mirroring::SingleLower => [0xE0; 4],
+            Mirroring::SingleUpper => [0xE1; 4],
+            _ => [0xE0, 0xE1, 0xE0, 0xE1],
+        };
+        Self {
+            ram: [0; 0x800],
+            banks,
+            chr_rom,
+        }
+    }
+
+    fn target(&self, address: u16) -> N163NtTarget {
+        let slot = usize::from((address.wrapping_sub(0x2000) >> 10) & 0x03);
+        let value = self.banks[slot];
+        if value >= 0xE0 {
+            N163NtTarget::Ciram(usize::from(value & 0x01) * 0x400 + usize::from(address & 0x3FF))
+        } else {
+            let pages = (self.chr_rom.len() / 0x400).max(1);
+            N163NtTarget::Chr((usize::from(value) % pages) * 0x400 + usize::from(address & 0x3FF))
+        }
+    }
+
+    pub(crate) fn read(&self, address: u16) -> u8 {
+        match self.target(address) {
+            N163NtTarget::Ciram(offset) => self.ram[offset & 0x7FF],
+            N163NtTarget::Chr(offset) => self
+                .chr_rom
+                .get(offset % self.chr_rom.len().max(1))
+                .copied()
+                .unwrap_or(0),
+        }
+    }
+
+    /// Returns true when the write hit a read-only CHR-ROM page.
+    pub(crate) fn write(&mut self, address: u16, value: u8) -> bool {
+        match self.target(address) {
+            N163NtTarget::Ciram(offset) => {
+                self.ram[offset & 0x7FF] = value;
+                false
+            }
+            N163NtTarget::Chr(_) => true,
+        }
+    }
+
+    fn read_ciram(&self, page: usize, offset: usize) -> u8 {
+        self.ram[(page & 0x01) * 0x400 + (offset & 0x3FF)]
+    }
+
+    fn write_ciram(&mut self, page: usize, offset: usize, value: u8) {
+        self.ram[(page & 0x01) * 0x400 + (offset & 0x3FF)] = value;
+    }
+}
+
 /// Namco 129/163 (mapper 19): 8 KiB PRG banks, 1 KiB CHR banks that can also
 /// select the 2 KiB nametable RAM, a 15-bit CPU-cycle IRQ counter and the
 /// 128-byte internal chip RAM.
@@ -6176,9 +6272,8 @@ pub struct Namco163 {
     chip_ram: [u8; 128],
     chip_addr: u8,
     chr_banks: [u8; 8],
-    nt_banks: [u8; 4],
     prg_banks: [u8; 3],
-    nt_ram: [u8; 0x800],
+    nt: Rc<RefCell<N163Nt>>,
     write_protect: u8,
     irq_counter: u16,
     irq_enabled: bool,
@@ -6195,6 +6290,7 @@ pub struct Namco163 {
 
 impl Namco163 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+        let nt = Rc::new(RefCell::new(N163Nt::new(header.mirroring, chr.clone())));
         Self {
             prg,
             chr,
@@ -6202,11 +6298,10 @@ impl Namco163 {
             chip_ram: [0; 128],
             chip_addr: 0,
             chr_banks: [0; 8],
-            nt_banks: [0; 4],
             // Power-on PRG mapping is linear: $8000/$A000/$C000 = banks 0/1/2,
             // with the last bank fixed at $E000.
             prg_banks: [0, 1, 2],
-            nt_ram: [0; 0x800],
+            nt,
             // Power-on state is write-enabled until the game programs $F800.
             write_protect: 0x40,
             irq_counter: 0,
@@ -6277,24 +6372,21 @@ impl Namco163 {
             && self.write_protect & (1 << ((address - 0x6000) / 0x800)) == 0
     }
 
-    fn chr_bank(&self, address: u16) -> usize {
+    /// The 1 KiB CHR page a pattern-table address resolves to. Values `$E0` and
+    /// above select CIRAM as CHR-RAM unless `$E800` bit 6/7 disables that half,
+    /// in which case the value is a plain CHR-ROM page (RustyNES `resolve`).
+    fn chr_page(&self, address: u16) -> Result<usize, usize> {
         let slot = usize::from(address / 0x400) & 0x07;
         let raw = usize::from(self.chr_banks[slot]);
-        if raw >= 0xE0 {
-            let disabled = if address < 0x1000 {
-                self.chr_ram_low_disabled
-            } else {
-                self.chr_ram_high_disabled
-            };
-            if disabled {
-                let banks = self.chr_bank_count();
-                banks.saturating_sub(0x20) + ((raw & 0x1F).min(banks - 1))
-            } else {
-                // Even pages read page A of the nametable RAM, odd page B.
-                0xE0 + (raw & 0x01)
-            }
+        let disabled = if address < 0x1000 {
+            self.chr_ram_low_disabled
         } else {
-            raw
+            self.chr_ram_high_disabled
+        };
+        if raw >= 0xE0 && !disabled {
+            Err(raw & 0x01)
+        } else {
+            Ok(raw % self.chr_bank_count())
         }
     }
 }
@@ -6358,14 +6450,10 @@ impl Mapper for Namco163 {
             0x8000..=0xBFFF => {
                 let slot = usize::from((address - 0x8000) / 0x800) & 0x07;
                 self.chr_banks[slot] = value;
-                if slot >= 4 {
-                    let nt = slot - 4;
-                    self.nt_banks[nt] = value;
-                }
             }
             0xC000..=0xDFFF => {
                 let slot = usize::from((address - 0xC000) / 0x800) & 0x03;
-                self.nt_banks[slot] = value;
+                self.nt.borrow_mut().banks[slot] = value;
             }
             0xE000..=0xE7FF => {
                 self.prg_banks[0] = value & 0x3F;
@@ -6387,34 +6475,37 @@ impl Mapper for Namco163 {
     }
 
     fn chr_read(&self, address: u16) -> u8 {
-        let bank = self.chr_bank(address);
-        if bank >= 0xE0 {
-            let page = bank & 0x01;
-            let offset = page * 0x400 + usize::from(address & 0x3FF);
-            self.nt_ram[offset % self.nt_ram.len()]
-        } else {
-            let banks = self.chr_bank_count();
-            let offset = (bank % banks) * 0x400 + usize::from(address & 0x3FF);
-            self.chr.get(offset).copied().unwrap_or(0)
+        let offset = usize::from(address & 0x3FF);
+        match self.chr_page(address) {
+            Err(page) => self.nt.borrow().read_ciram(page, offset),
+            Ok(page) => self.chr.get(page * 0x400 + offset).copied().unwrap_or(0),
         }
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
-        let bank = self.chr_bank(address);
-        if bank >= 0xE0 {
-            let offset = (bank & 0x01) * 0x400 + usize::from(address & 0x3FF);
-            self.nt_ram[offset % self.nt_ram.len()] = value;
-        } else {
-            let banks = self.chr_bank_count();
-            let offset = (bank % banks) * 0x400 + usize::from(address & 0x3FF);
-            if let Some(byte) = self.chr.get_mut(offset) {
-                *byte = value;
+        let offset = usize::from(address & 0x3FF);
+        match self.chr_page(address) {
+            Err(page) => self.nt.borrow_mut().write_ciram(page, offset, value),
+            Ok(page) => {
+                if let Some(byte) = self.chr.get_mut(page * 0x400 + offset) {
+                    *byte = value;
+                }
             }
         }
     }
 
     fn mirroring(&self) -> Mirroring {
         self.mirroring
+    }
+
+    /// `$4800-$4FFF` (sound data port) and `$5000-$5FFF` (IRQ counter) are
+    /// cartridge registers; the system would otherwise answer open bus.
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x4800, 0x5FFF))
+    }
+
+    fn n163_nt(&self) -> Option<Rc<RefCell<N163Nt>>> {
+        Some(self.nt.clone())
     }
 
     fn number(&self) -> u16 {

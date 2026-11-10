@@ -156,6 +156,9 @@ impl System {
         if let Some(aux) = cart.vrc7_chr() {
             ppu.set_vrc7_chr(aux);
         }
+        if let Some(nt) = cart.n163_nt() {
+            ppu.set_n163_nt(nt);
+        }
         if cart.has_rom_nametables() {
             if let Some(rom) = cart.chr_rom() {
                 ppu.set_rom_nametable_rom(rom.to_vec());
@@ -1451,6 +1454,109 @@ mod tests {
                 "bank {bank:02X} not visible to $2007"
             );
         }
+    }
+
+    #[test]
+    fn namco163_nametable_pages_select_ciram_and_chr_rom() {
+        // 128 KiB PRG, 128 KiB CHR (128 x 1 KiB banks).
+        let prg_len = 128 * 1024;
+        let chr_len = 128 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 16;
+        rom[6] = 0x30; // mapper 19, horizontal mirroring
+        rom[7] = 0x10;
+        rom[16..16 + prg_len].fill(0xEA);
+        rom[16] = 0x4C;
+        rom[17] = 0x00;
+        rom[18] = 0x80;
+        for (bank, chunk) in rom[16 + prg_len..].chunks_mut(0x400).enumerate() {
+            chunk.fill(0x80 | (bank as u8 & 0x7F));
+        }
+        let mut system = System::from_ines(&rom).expect("load");
+        system.ppu.end_warmup();
+
+        let write_nt = |system: &mut System, addr: u16, value: u8| {
+            CpuBus::write(system, 0x2006, (addr >> 8) as u8);
+            CpuBus::write(system, 0x2006, (addr & 0xFF) as u8);
+            CpuBus::write(system, 0x2007, value);
+        };
+        let read_nt = |system: &mut System, addr: u16| -> u8 {
+            CpuBus::write(system, 0x2006, (addr >> 8) as u8);
+            CpuBus::write(system, 0x2006, (addr & 0xFF) as u8);
+            let _ = CpuBus::read(system, 0x2007); // start the buffered read
+            system.ppu.step_dots(8);
+            CpuBus::read(system, 0x2007)
+        };
+
+        // Power-on follows the header mirroring (horizontal): quadrants 0 and
+        // 1 are the same 1 KiB CIRAM page, so $2400 aliases $2000.
+        write_nt(&mut system, 0x2000, 0x11);
+        assert_eq!(read_nt(&mut system, 0x2000), 0x11);
+        write_nt(&mut system, 0x2400, 0x22);
+        assert_eq!(read_nt(&mut system, 0x2000), 0x22, "shared page A");
+        assert_eq!(read_nt(&mut system, 0x2400), 0x22);
+
+        // $C000-$D800 remap the quadrants: vertical splits page A/B.
+        system.cart.cpu_write(0xC000, 0xE0);
+        system.cart.cpu_write(0xC800, 0xE1);
+        system.cart.cpu_write(0xD000, 0xE0);
+        system.cart.cpu_write(0xD800, 0xE1);
+        assert_eq!(read_nt(&mut system, 0x2000), 0x22, "page A retained");
+        assert_eq!(read_nt(&mut system, 0x2400), 0x00, "page B is separate");
+
+        // A value below $E0 selects a CHR-ROM page; it is read-only.
+        system.cart.cpu_write(0xC000, 0x01);
+        assert_eq!(read_nt(&mut system, 0x2000), 0x81);
+        write_nt(&mut system, 0x2000, 0x77);
+        assert_eq!(
+            read_nt(&mut system, 0x2000),
+            0x81,
+            "CHR-ROM page absorbs writes"
+        );
+
+        // Back to CIRAM restores the stored byte.
+        system.cart.cpu_write(0xC000, 0xE0);
+        assert_eq!(read_nt(&mut system, 0x2000), 0x22);
+    }
+
+    #[test]
+    fn namco163_irq_counter_is_readable_in_the_low_window() {
+        // The counter lives at $5000/$5800 inside $4020-$5FFF, which the
+        // system must route to the cartridge instead of answering open bus.
+        let prg_len = 128 * 1024;
+        let chr_len = 128 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 16;
+        rom[6] = 0x30;
+        rom[7] = 0x10;
+        rom[16..16 + prg_len].fill(0xEA);
+        rom[16] = 0x4C;
+        rom[17] = 0x00;
+        rom[18] = 0x80;
+        let mut system = System::from_ines(&rom).expect("load");
+
+        // Latch 0, enable, then count CPU cycles.
+        system.cart.cpu_write(0x5000, 0x00);
+        system.cart.cpu_write(0x5800, 0x80);
+        assert_eq!(CpuBus::read(&mut system, 0x5000), 0);
+        assert_eq!(CpuBus::read(&mut system, 0x5800) & 0x80, 0x80);
+        for _ in 0..0xC0 {
+            system.clock();
+        }
+        let low = CpuBus::read(&mut system, 0x5000);
+        assert!(low >= 0xBF, "IRQ counter low byte {low:02X} not counted");
+
+        // Disabling the counter freezes it.
+        system.cart.cpu_write(0x5800, 0x00);
+        let frozen = CpuBus::read(&mut system, 0x5000);
+        for _ in 0..16 {
+            system.clock();
+        }
+        assert_eq!(CpuBus::read(&mut system, 0x5000), frozen);
     }
 
     #[test]

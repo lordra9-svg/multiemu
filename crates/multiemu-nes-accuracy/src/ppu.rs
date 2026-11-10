@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::cart::{HybridChr, Mirroring, Mmc5Aux, Vrc7Chr};
+use crate::cart::{HybridChr, Mirroring, Mmc5Aux, N163Nt, Vrc7Chr};
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -121,6 +121,8 @@ pub struct Ppu {
     hybrid: Option<Rc<RefCell<HybridChr>>>,
     /// Shared MMC5 state (ExRAM/nametables/CHR map).
     mmc5_aux: Option<Rc<RefCell<Mmc5Aux>>>,
+    /// Shared Namco 163 nametable state (mapper 19).
+    n163_nt: Option<Rc<RefCell<N163Nt>>>,
     /// Shared banked CHR-RAM state (VRC7).
     vrc7_chr: Option<Rc<RefCell<Vrc7Chr>>>,
     /// Extended-attribute byte for the tile currently being fetched (MMC5
@@ -295,6 +297,7 @@ impl Ppu {
             mmc2: None,
             hybrid: None,
             mmc5_aux: None,
+            n163_nt: None,
             vrc7_chr: None,
             ext_attr: None,
             nt_rom: Vec::new(),
@@ -384,6 +387,11 @@ impl Ppu {
     /// Shares the mapper's MMC5 state (ExRAM/nametables/CHR map).
     pub fn set_mmc5_aux(&mut self, aux: Rc<RefCell<Mmc5Aux>>) {
         self.mmc5_aux = Some(aux);
+    }
+
+    /// Shares the mapper's Namco 163 nametable state (mapper 19).
+    pub fn set_n163_nt(&mut self, nt: Rc<RefCell<N163Nt>>) {
+        self.n163_nt = Some(nt);
     }
 
     /// Shares the mapper's banked CHR-RAM state (VRC7).
@@ -983,6 +991,11 @@ impl Ppu {
     }
 
     fn read_nametable(&self, address: u16) -> u8 {
+        // Namespace 19 maps each quadrant to CIRAM or a CHR-ROM page; both
+        // live outside the normal mirroring path.
+        if let Some(nt) = &self.n163_nt {
+            return nt.borrow().read(0x2000 | (address & 0x0FFF));
+        }
         if let Some(aux) = &self.mmc5_aux {
             let aux = aux.borrow();
             if let Some(value) = aux.nametable_override(address) {
@@ -1071,6 +1084,11 @@ impl Ppu {
                 }
             }
         } else if address < 0x3F00 {
+            if let Some(nt) = &self.n163_nt {
+                // CHR-ROM quadrants absorb the write; CIRAM quadrants store.
+                nt.borrow_mut().write(0x2000 | (address & 0x0FFF), value);
+                return;
+            }
             if let Some(aux) = &self.mmc5_aux {
                 let mut aux = aux.borrow_mut();
                 if aux.nametable_write(address, value) {

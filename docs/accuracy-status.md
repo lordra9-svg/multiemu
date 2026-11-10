@@ -897,32 +897,35 @@ the dots 1-64 clear phase, which provides the seed.
   The additional fidelity of the master-clock model does not translate into
   better oracle agreement here, so it was reverted rather than shipped as a
   regression.
-- Namco 163 nametable audit: swept 10 mapper-19 titles against the oracle at
-  60 frames. Six are already excellent (Star Wars 59/60, Hydlide 3 59/60,
-  Dragon Ninja 58/60, Erika 57/60, Pac-Man CE 55/60, Mappy Kids 60/60 after the
-  `$2007` fix), while Final Lap (4/60), Youkai Douchuuki (9/60), Rolling Thunder
-  (21/60) and Mindseeker (28/60) were low. Instrumenting `$C000-$D800` showed
-  Final Lap/Youkai and the other low titles write pages `$E0`/`$E1`/`$F0`/`$F1`
-  to select the N163's internal 2 KiB nametable RAM, which this core did not
-  expose to the PPU. Implementing that mapping (shared `N163Nt` state, PPU
-  nametable reads/writes routed through it) took Final Lap to 58/60 and Youkai
-  to 59/60, but *blanked* Kaijuu Monogatari and Namco Classic II, which map all
-  four slots to NT RAM, clear it to zero and expect the graphics from elsewhere
-  (the CHR-ROM nametable-page path, `$C000` values < `$E0`, which is not
-  modelled). Net corpus effect was 32 -> 28 rendering at 600 frames, so the
-  mapping was reverted and deferred until the CHR-ROM nametable pages and the
-  NT-RAM write path are complete. The `$A000-$B800` handler also wrote the
-  (unused) `nt_banks` array, a latent bug to fix with that work.
-
-  A second attempt with a per-slot "populated" gate (use NT RAM only once a
-  slot has received non-zero tile bytes, otherwise fall back to CIRAM) was also
-  measured and still blanked the same four titles: they *do* write non-zero
-  tile data into NT RAM, and `$2007` readback of it works, yet the rendered
-  background is blank. So the remaining fault is in the background fetch path
-  (or slot/bank timing during rendering), not in the RAM contents; this is the
-  precise next step for that feature. The change was reverted again to keep the
-  mapper-19 corpus at 32/34; Final Lap (58/60) and Youkai Douchuuki (59/60)
-  would be the wins once it is finished.
+- Namco 163 nametable/IRQ audit (mapper 19) — two concrete bugs found by
+  sweeping 10 titles against the oracle at 60 frames (Star Wars 59/60,
+  Hydlide 3 59/60, Dragon Ninja 58/60, Erika 57/60, Pac-Man CE 55/60,
+  Mappy Kids 60/60 were already good; Final Lap 4/60, Youkai Douchuuki 9/60,
+  Mindseeker 28/60, Kaijuu Monogatari 3/60 were low):
+  1. **`$5000-$5FFF` reads never reached the cartridge.** The system answered
+     open bus for the whole `$4020-$5FFF` window except `$5204`. The N163 IRQ
+     counter lives at `$5000`/`$5800`, and games poll it: Kaijuu Monogatari
+     spins in `LDA $5000 / CMP #$BF / BCC` waiting for the counter's low byte,
+     then writes the scroll registers. With open bus it looped forever, leaving
+     a stale `$2000 = $91` (nametable 1) in a vertical-mirrored layout, so the
+     visible quadrant was a blank CIRAM page. Exposing a `$4800-$5FFF` low
+     window for mapper 19 fixed it: Kaijuu 3 -> 58/60, Mindseeker 28 -> 58/60.
+  2. **Nametable quadrant registers were modelled incorrectly.** `$C000-$D800`
+     select, per quadrant, either the console CIRAM (`$E0`/`$E1` pages A/B) or
+     a CHR-ROM page (values below `$E0`); the power-on layout follows the header
+     mirroring. The old code used a separate RAM buffer with zeroed power-on
+     registers and no CHR-ROM page path, which broke titles that write the
+     nametable before programming the registers. The state now lives in a
+     shared `N163Nt` (CIRAM + a CHR-ROM copy, header-mirroring power-on) that
+     the PPU reads/writes directly, and the mapper's pattern-table path uses the
+     same CIRAM for `$E800`-enabled `$E0+` CHR values. Final Lap 4 -> 58/60,
+     Youkai Douchuuki 9 -> 59/60.
+  Net: the mapper-19 corpus goes **32 -> 33 of 34 rendering** at 600 frames
+  (the remaining blank title never enables rendering), with no change to the
+  other titles' parity (SMB 299/226, SMB3 70/228, CV3 188/8, MSG 298/238,
+  Zelda 299/28, VRC6 298/192, FME7 298/202; N163 298/234).
+  Rolling Thunder (21/60 video, 240/300 audio) remains the one low mapper-19
+  title and is the next diff target.
 - Mid-frame CHR bank switching is now visible to `$2007` readback: the CHR-ROM
   window is refreshed on `$2006` writes and `$2007` reads (previously it was
   copied only at the start of each frame). Some mappers self-test their banking

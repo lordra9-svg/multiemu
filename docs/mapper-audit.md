@@ -225,6 +225,16 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   `$E000` sound-disable bit. `$F800` address-port auto-increment is honoured
   for data writes. Unit test covers a $F sample reaching the expected
   `105/256` output and the disable bit.
+- **Namco 163 nametables/IRQ (19)** — `$C000-$D800` map each 1 KiB nametable
+  quadrant to CIRAM (`$E0`/`$E1`) or a CHR-ROM page (below `$E0`), with the
+  power-on layout following the header mirroring; the shared `N163Nt` state is
+  wired into the PPU's nametable reads/writes, and `$E800`-enabled `$E0+` CHR
+  banks read the same CIRAM. The `$4800-$5FFF` registers (sound port and IRQ
+  counter) are routed to the cartridge in the `$4020-$5FFF` window, which games
+  poll. Corpus: **33 of 34 mapper-19 images render at 600 frames**; the sweep
+  titles improved to Star Wars 59/60, Hydlide 3 59/60, Kaijuu Monogatari
+  58/60, Final Lap 58/60, Youkai Douchuuki 59/60, Mindseeker 58/60. Rolling
+  Thunder (21/60) is the remaining outlier.
 - **PPU** — the backdrop no longer double-indirects the palette; all five
   mirroring modes are modelled with 4 KiB CIRAM; the `$2007` read buffer is
   fed by the per-dot background/sprite fetch with a four-dot data state
