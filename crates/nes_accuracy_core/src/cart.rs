@@ -920,6 +920,7 @@ impl Cartridge {
             519 => Box::new(Eh8813A::new(prg_rom, chr, header)),
             513 => Box::new(Sachen9602::new(prg_rom, chr, header)),
             533 => Box::new(Sachen3014::new(prg_rom, chr, header)),
+            534 => Box::new(Mmc3_534::new(prg_rom, chr, header)),
             535 => Box::new(Lh53::new(prg_rom, chr, prg_ram, header)),
             529 => Box::new(T230::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
@@ -3820,6 +3821,132 @@ impl Mapper for Sachen3014 {
 
     fn number(&self) -> u16 {
         533
+    }
+}
+
+/// TEC9719 / ING-022 multicarts (mapper 534): an MMC3 core with four outer
+/// registers in the WRAM window and an inverted IRQ latch.
+#[derive(Debug)]
+pub struct Mmc3_534 {
+    inner: Mmc3,
+    outer: u8,
+    misc: u8,
+    chr8: u8,
+    mode: u8,
+}
+
+impl Mmc3_534 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 534),
+            outer: 0,
+            misc: 0,
+            chr8: 0,
+            mode: 0,
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.prg.len() / 0x2000).max(1);
+        let base = self.inner.prg_slot(slot);
+        let p = usize::from(self.outer & 0x03);
+        let mut bank = (base & 0x1F) | (p & 0x01) << 5 | ((p >> 1) & 0x01) << 6;
+        // Y=1 replaces PRG A17 with the outer register's inverted b bit.
+        if self.outer & 0x40 != 0 {
+            bank = (bank & !0x10) | ((!self.outer >> 5 & 1) as usize) << 4;
+        }
+        bank % banks
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let base = self.inner.chr_bank(slot);
+        let c = usize::from((self.outer >> 2) & 0x03);
+        let b = usize::from((self.outer >> 4) & 0x01);
+        ((base & 0x7F) | (c & 0x01) << 8 | ((c >> 1) & 0x01) << 9 | b << 10) % banks
+    }
+}
+
+impl Mapper for Mmc3_534 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot);
+        self.inner
+            .prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x6003).contains(&address) && self.inner.ram_enabled {
+            match address & 0xE003 {
+                0x6000 => self.outer = value,
+                0x6001 => self.misc = value,
+                0x6002 => self.chr8 = value,
+                0x6003 => self.mode = value,
+                _ => {}
+            }
+            return;
+        }
+        if address & 0xE001 == 0xC000 {
+            self.inner.irq_latch = value ^ 0xFF;
+            return;
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        self.inner
+            .chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        534
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address) || (0x6000..=0x6003).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
     }
 }
 
@@ -22641,6 +22768,21 @@ mod tests {
             cart.set_cpu_cycle(100 + bit * 2);
             cart.cpu_write(base, (value >> bit) & 1);
         }
+    }
+
+    #[test]
+    fn mmc3_534_outer_prg_bits() {
+        // 1 MiB PRG, 32 KiB CHR.
+        let rom = synth_banked(534, 1024, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 534);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 30);
+        cart.cpu_write(0x6000, 0x01);
+        assert_eq!(cart.cpu_read(0x8000), 32);
+        assert_eq!(cart.cpu_read(0xC000), 62);
+        // The ING-022 IRQ latch inversion is exercised in the system tests;
+        // here the outer-bank transform is the observable part.
     }
 
     #[test]
