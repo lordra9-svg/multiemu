@@ -744,7 +744,9 @@ impl Cartridge {
             67 => Box::new(Sunsoft3::new(prg_rom, chr, header)),
             72 => Box::new(Jaleco72::new(prg_rom, chr, header)),
             78 => Box::new(Irem78::new(prg_rom, chr, header)),
+            15 => Box::new(Multicart15::new(prg_rom, chr)),
             57 => Box::new(Bmc57::new(prg_rom, chr, header)),
+            120 => Box::new(FdsConv120::new(prg_rom, chr, header)),
             68 => Box::new(Sunsoft4::new(prg_rom, chr, prg_ram, header)),
             70 => Box::new(Bandai70::new(prg_rom, chr, header)),
             93 => Box::new(Sunsoft3r::new(prg_rom, chr, header)),
@@ -5151,6 +5153,205 @@ impl Mapper for Bmc57 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         (0x8000..=0xFFFF).contains(&address)
+    }
+}
+
+/// K-1029 / 100-in-1 Contra Function 16 (mapper 15): four PRG window modes,
+/// CHR-RAM and 8 KiB of PRG-RAM at `$6000`.
+#[derive(Debug)]
+pub struct Multicart15 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    mode: u8,
+    prg_bank: u8,
+    half: u8,
+    horizontal: bool,
+}
+
+impl Multicart15 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_ram: vec![0; 0x2000],
+            mode: 0,
+            prg_bank: 0,
+            half: 0,
+            horizontal: false,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get(bank % banks * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_16k(&self, bank: usize, offset: usize) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % banks) * 0x4000 + offset)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Multicart15 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if (0x6000..=0x7FFF).contains(&address) {
+            return self.prg_ram[usize::from(address - 0x6000)];
+        }
+        if address < 0x8000 {
+            return 0;
+        }
+        let win = usize::from(address - 0x8000);
+        let bank = usize::from(self.prg_bank);
+        match self.mode {
+            0 => {
+                if win < 0x4000 {
+                    self.prg_16k(bank, win)
+                } else {
+                    self.prg_16k(bank | 1, win - 0x4000)
+                }
+            }
+            1 => {
+                if win < 0x4000 {
+                    self.prg_16k(bank, win)
+                } else {
+                    self.prg_16k(bank | 7, win - 0x4000)
+                }
+            }
+            2 => self.prg_8k((bank << 1) | usize::from(self.half), address),
+            _ => self.prg_16k(bank, win & 0x3FFF),
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x7FFF).contains(&address) {
+            self.prg_ram[usize::from(address - 0x6000)] = value;
+            return;
+        }
+        if address >= 0x8000 {
+            self.mode = (address & 0x03) as u8;
+            self.horizontal = value & 0x40 != 0;
+            self.prg_bank = value & 0x3F;
+            self.half = u8::from(value & 0x80 != 0);
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address) & 0x1FFF)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address) & 0x1FFF) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        if self.horizontal {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        }
+    }
+
+    fn number(&self) -> u16 {
+        15
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
+    }
+}
+
+/// FDS-conversion protection board (mapper 120): a switchable 8 KiB PRG bank
+/// at `$6000` and the last four 8 KiB banks fixed at `$8000`.
+#[derive(Debug)]
+pub struct FdsConv120 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    reg0: u8,
+    mirroring: Mirroring,
+    /// Presence-only marker so the bus routes `$6000-$7FFF` reads to the
+    /// mapper (the window is PRG-ROM, not RAM).
+    routing: Vec<u8>,
+}
+
+impl FdsConv120 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            reg0: 0,
+            mirroring: header.mirroring,
+            routing: vec![0],
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get(bank % banks * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for FdsConv120 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.prg_8k(usize::from(self.reg0), address),
+            0x8000..=0xFFFF => {
+                let banks = (self.prg.len() / 0x2000).max(1);
+                let base = banks.saturating_sub(4);
+                let slot = usize::from((address - 0x8000) / 0x2000);
+                self.prg_8k(base + slot, address)
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address == 0x41FF {
+            self.reg0 = value;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address) & 0x1FFF)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address) & 0x1FFF) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        120
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.routing
     }
 }
 
@@ -19841,6 +20042,45 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 4);
         cart.cpu_write(0x8000, 0x40);
         assert_eq!(cart.ppu_read(0x0000), 0x80 | 64);
+    }
+
+    #[test]
+    fn multicart_15_prg_modes() {
+        // 128 KiB PRG (16 x 8 KiB), CHR-RAM.
+        let rom = synth_banked(15, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 15);
+        // Mode 0: selected 16 KiB pair.
+        cart.cpu_write(0x8000, 0x01);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+        // Mode 1: the upper half ORs 7.
+        cart.cpu_write(0x8001, 0x40);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 14);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        // Mode 2: 8 KiB with the half bit.
+        cart.cpu_write(0x8002, 0x80);
+        assert_eq!(cart.cpu_read(0x8000), 1);
+        // Mode 3: one 16 KiB bank mirrored.
+        cart.cpu_write(0x8003, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 0);
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+    }
+
+    #[test]
+    fn fds_conversion_120_banks_and_fixed_window() {
+        // 64 KiB PRG (8 x 8 KiB), CHR-RAM.
+        let rom = synth_banked(120, 64, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 120);
+        assert_eq!(cart.cpu_read(0x6000), 0);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.cpu_read(0xE000), 7);
+        cart.cpu_write(0x41FF, 2);
+        assert_eq!(cart.cpu_read(0x6000), 2);
     }
 
     #[test]
