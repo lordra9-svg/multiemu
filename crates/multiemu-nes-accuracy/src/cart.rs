@@ -11119,7 +11119,12 @@ impl Mapper for JyAsic {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        match address {
+        if std::env::var_os("JYDBG").is_some()
+            && matches!(address, 0x8000..=0x8007 | 0x9000..=0x9007 | 0xA000..=0xA007 | 0xC000..=0xC003 | 0xD000..=0xD003)
+        {
+            eprintln!("{address:04X}={value:02X}");
+        }
+        match address & 0xF007 {
             0x5000..=0x57FF => {}
             0x5800..=0x5801 => {
                 if address == 0x5800 {
@@ -11141,8 +11146,9 @@ impl Mapper for JyAsic {
                 let index = usize::from(address - 0x6000) % self.prg_ram.len();
                 self.prg_ram[index] = value;
             }
+            // The ASIC ignores A3-A11, so each register block mirrors across
+            // its whole $x000-$xFFF page (games use e.g. $D500 for mode).
             0x8000..=0x8007 => {
-                // 7-bit bank numbers; $8004-$8007 alias $8000-$8003.
                 self.prg_banks[usize::from(address & 0x03)] = value & 0x7F;
             }
             0x9000..=0x9007 => self.chr_low[usize::from(address & 0x07)] = value,
