@@ -17669,9 +17669,8 @@ impl Mapper for Bus152 {
 pub struct Multicart226 {
     prg: Vec<u8>,
     chr: Vec<u8>,
-    low: u8,
-    high: u8,
-    mode32: bool,
+    reg0: u8,
+    reg1: u8,
     mirroring: Mirroring,
 }
 
@@ -17680,15 +17679,29 @@ impl Multicart226 {
         Self {
             prg,
             chr,
-            low: 0,
-            high: 0,
-            mode32: true,
+            reg0: 0,
+            reg1: 0,
             mirroring: header.mirroring,
         }
     }
 
     fn bank(&self) -> usize {
-        usize::from(self.low & 0x3F) | (usize::from(self.high & 0x01) << 6)
+        let low = usize::from(self.reg0 & 0x1F);
+        let bit5 = usize::from((self.reg0 >> 7) & 0x01);
+        let bit6 = usize::from(self.reg1 & 0x01);
+        (bit6 << 6) | (bit5 << 5) | low
+    }
+
+    fn is_16k(&self) -> bool {
+        self.reg0 & 0x20 != 0
+    }
+
+    fn read_16k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get(bank % banks * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -17697,30 +17710,24 @@ impl Mapper for Multicart226 {
         if address < 0x8000 {
             return 0;
         }
-        if self.mode32 {
-            let banks = (self.prg.len() / 0x8000).max(1);
-            let bank = self.bank() % banks;
-            self.prg[(bank * 0x8000 + usize::from(address & 0x7FFF)) % self.prg.len()]
+        let bank = self.bank();
+        if self.is_16k() {
+            // Both 16 KiB halves show the selected bank.
+            self.read_16k(bank, address)
         } else {
-            let banks = (self.prg.len() / 0x4000).max(1);
-            let bank = self.bank() % banks;
-            self.prg[bank * 0x4000 + usize::from(address & 0x3FFF)]
+            // 32 KiB mode: the low bit is ignored; the high half is +1.
+            let base = bank & !1;
+            self.read_16k(base | usize::from(address >= 0xC000), address)
         }
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        match address & 0x8001 {
-            0x8000 => {
-                self.low = value & 0x3F;
-                self.mode32 = value & 0x80 == 0;
-                self.mirroring = if value & 0x40 != 0 {
-                    Mirroring::Vertical
-                } else {
-                    Mirroring::Horizontal
-                };
+        if address >= 0x8000 {
+            if address & 0x01 == 0 {
+                self.reg0 = value;
+            } else {
+                self.reg1 = value;
             }
-            0x8001 => self.high = value & 0x01,
-            _ => {}
         }
     }
 
@@ -17743,6 +17750,11 @@ impl Mapper for Multicart226 {
 
     fn number(&self) -> u16 {
         226
+    }
+
+    fn soft_reset(&mut self) {
+        self.reg0 = 0;
+        self.reg1 = 0;
     }
 }
 
@@ -19086,7 +19098,11 @@ mod tests {
         let rom = synth_banked(226, 512, 0);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         cart.cpu_write(0x8000, 0x02);
-        assert_eq!(cart.cpu_read(0x8000), 8);
+        // 32 KiB mode: the bank index selects a 16 KiB pair (low bit ignored).
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.cpu_read(0xC000), 6);
+        // Mirroring is fixed from the header on this board (flags6 bit 0
+        // clear => horizontal).
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
