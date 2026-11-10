@@ -944,8 +944,11 @@ the dots 1-64 clear phase, which provides the seed.
   32 KiB CHR-RAM into 8 KiB, now **89.5%** over 35 images; the **JY ASIC**
   (90/209/211/35) used the wrong PRG outer composition, CHR low/high block
   handling, `$D001` mirroring encoding and a CHR-write gate, now matching the
-  reference decode — CHR-ROM *45-in-1* went from 7/120 to **114/120** and the
-  mapper id now comes from the header instead of always reporting 90.
+  reference decode — CHR-ROM *45-in-1* went from 7/120 to **114/120**. The
+  register blocks mirror across their `$x000-$xFFF` pages (`addr & 0xF007`;
+  this board writes `$D500`), and the mapper id now comes from the header
+  instead of always reporting 90. Board parity is 56.7% same-index and
+  59.3% best-aligned over 33 images, with 7 images one frame out of phase.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
