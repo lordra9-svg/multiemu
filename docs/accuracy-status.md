@@ -936,6 +936,16 @@ the dots 1-64 clear phase, which provides the seed.
   mapper **178** (FS305) decoded the PRG mode from `$4800` bits 2-3 instead of
   1-2 and banked work RAM that the board does not bank, giving **86.9%** video
   over 38 images (the sampled 48-in-1 was 0/120).
+- The next ranked boards: **45** (T-GA23C) was wired as a plain MMC3 with no
+  outer-register layer, so falling back to the reference's four rotating
+  `$6000` registers (lock/reset, PRG-AND/OR and CHR-OR algebra) took *8-Bit
+  Slasher* from 1/120 to **118/120** and the board to **89.2%** over 11
+  images; **28** (Action 53) used a different bank formula and aliased its
+  32 KiB CHR-RAM into 8 KiB, now **89.5%** over 35 images; the **JY ASIC**
+  (90/209/211/35) used the wrong PRG outer composition, CHR low/high block
+  handling, `$D001` mirroring encoding and a CHR-write gate, now matching the
+  reference decode — CHR-ROM *45-in-1* went from 7/120 to **114/120** and the
+  mapper id now comes from the header instead of always reporting 90.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
