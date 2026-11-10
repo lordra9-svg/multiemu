@@ -1376,6 +1376,10 @@ impl Mapper for Mmc1 {
             return 0;
         }
         if address < 0x8000 {
+            // `$E000` bit 4 deselects the PRG-RAM; the window then floats.
+            if self.prg_bank & 0x10 != 0 {
+                return 0xFF;
+            }
             let offset = usize::from(address - 0x6000);
             return if self.battery || !self.prg_ram.is_empty() {
                 self.prg_ram[offset % self.prg_ram.len()]
@@ -1388,7 +1392,7 @@ impl Mapper for Mmc1 {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         if address < 0x8000 {
-            if address >= 0x6000 && !self.prg_ram.is_empty() {
+            if address >= 0x6000 && !self.prg_ram.is_empty() && self.prg_bank & 0x10 == 0 {
                 let offset = usize::from(address - 0x6000) % self.prg_ram.len();
                 self.prg_ram[offset] = value;
             }
@@ -2538,7 +2542,7 @@ impl Mapper for Mmc2 {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         if address < 0x8000 {
-            if address >= 0x6000 && !self.prg_ram.is_empty() {
+            if address >= 0x6000 && !self.prg_ram.is_empty() && self.prg_bank & 0x10 == 0 {
                 let offset = usize::from(address - 0x6000) % self.prg_ram.len();
                 self.prg_ram[offset] = value;
             }
@@ -18167,17 +18171,15 @@ pub struct Multicart226 {
     chr: Vec<u8>,
     reg0: u8,
     reg1: u8,
-    mirroring: Mirroring,
 }
 
 impl Multicart226 {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
         Self {
             prg,
             chr,
             reg0: 0,
             reg1: 0,
-            mirroring: header.mirroring,
         }
     }
 
@@ -18241,7 +18243,12 @@ impl Mapper for Multicart226 {
     }
 
     fn mirroring(&self) -> Mirroring {
-        self.mirroring
+        // reg0 bit 6 (M): 0 = horizontal, 1 = vertical.
+        if self.reg0 & 0x40 != 0 {
+            Mirroring::Vertical
+        } else {
+            Mirroring::Horizontal
+        }
     }
 
     fn number(&self) -> u16 {
@@ -19719,9 +19726,11 @@ mod tests {
         // 32 KiB mode: the bank index selects a 16 KiB pair (low bit ignored).
         assert_eq!(cart.cpu_read(0x8000), 4);
         assert_eq!(cart.cpu_read(0xC000), 6);
-        // Mirroring is fixed from the header on this board (flags6 bit 0
-        // clear => horizontal).
+        // reg0 bit 6 selects the mirroring: 0 = horizontal, 1 = vertical.
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x8000, 0x42);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        assert_eq!(cart.cpu_read(0x8000), 4);
     }
 
     #[test]
@@ -19769,6 +19778,28 @@ mod tests {
         cart.cpu_write(0x4800, 0x21);
         assert_eq!(cart.cpu_read(0x8000), 8);
         assert_eq!(cart.ppu_read(0x0000), 0x88);
+    }
+
+    #[test]
+    fn mmc1_e000_bit4_disables_prg_ram() {
+        // 128 KiB PRG, CHR-RAM: MMC1 with an 8 KiB PRG-RAM window.
+        let rom = synth_banked(1, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+        // Serial-write $10 to $E000: five LSB-first writes with bit 0.
+        for value in [0u8, 0, 0, 0, 1] {
+            cart.cpu_write(0xE000, value);
+        }
+        // Bit 4 deselects the RAM, so the window floats.
+        assert_eq!(cart.cpu_read(0x6000), 0xFF);
+        cart.cpu_write(0x6000, 0x99);
+        assert_eq!(cart.cpu_read(0x6000), 0xFF);
+        // Clear the bit again.
+        for value in [0u8, 0, 0, 0, 0] {
+            cart.cpu_write(0xE000, value);
+        }
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
     }
 
     #[test]
