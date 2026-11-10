@@ -289,6 +289,10 @@ pub enum HybridKind {
     /// Mapper 195: MMC3 1 KiB CHR banks with a CHR-RAM window selected by the
     /// bank number written through `$2007`.
     Waixing195,
+    /// Mapper 119 (TQROM): 64 KiB CHR-ROM plus 8 KiB CHR-RAM; bit 6 of the
+    /// resolved 1 KiB MMC3 bank selects the memory (set = CHR-RAM, low three
+    /// bits index the 8 KiB; clear = CHR-ROM, low six bits index the 64 KiB).
+    Tqrom,
 }
 
 /// Shared hybrid CHR state: full CHR ROM, 4 KiB CHR-RAM, the current MMC3
@@ -309,10 +313,10 @@ pub struct HybridChr {
 
 impl HybridChr {
     fn new(kind: HybridKind, rom: Vec<u8>) -> Self {
-        let ram_size = if kind == HybridKind::Mmc2 {
-            0x1000
-        } else {
-            0x8000
+        let ram_size = match kind {
+            HybridKind::Mmc2 => 0x1000,
+            HybridKind::Tqrom => 0x2000,
+            HybridKind::Waixing195 => 0x8000,
         };
         Self {
             kind,
@@ -417,6 +421,16 @@ impl HybridChr {
                     }
                 }
                 (false, bank * 0x400 + (usize::from(address) & 0x3FF))
+            }
+            HybridKind::Tqrom => {
+                let slot = usize::from(address) / 0x400;
+                let bank = self.mmc3_slot_bank(slot);
+                let offset = usize::from(address) & 0x3FF;
+                if bank & 0x40 != 0 {
+                    (true, (bank & 0x07) * 0x400 + offset)
+                } else {
+                    (false, (bank & 0x3F) * 0x400 + offset)
+                }
             }
         }
     }
@@ -727,7 +741,18 @@ impl Cartridge {
             45 => Box::new(Mmc3::new_as(prg_rom, chr, header, 45)),
             116 => Box::new(Mmc3::new_as(prg_rom, chr, header, 116)),
             118 => Box::new(Mmc3::new_txsrom(prg_rom, chr, header)),
+            119 => Box::new(Mmc3::new_hybrid(
+                prg_rom,
+                chr,
+                header,
+                119,
+                HybridKind::Tqrom,
+            )),
             196 => Box::new(Mmc3::new_196(prg_rom, chr, header)),
+            133 => Box::new(Sachen133::new(prg_rom, chr, header)),
+            225 => Box::new(Multicart225::new(prg_rom, chr, header)),
+            40 => Box::new(Whirlwind40::new(prg_rom, chr, header)),
+            303 => Box::new(Kaiser303::new(prg_rom, chr, header)),
             5 => Box::new(Mmc5::new(prg_rom, chr, header)),
             11 => Box::new(ColorDreams::new(prg_rom, chr, header)),
             13 => Box::new(Cprom::new(prg_rom, chr, header)),
@@ -1868,6 +1893,386 @@ impl Mapper for Sachen136 {
     }
 }
 
+/// Sachen 3009 (mapper 133): 32 KiB PRG and 8 KiB CHR banks selected by a
+/// write in the `$4100-$5FFF` expansion window (address line A8 set).
+///
+/// The written byte carries the bank pair: bits 3-2 choose the 32 KiB PRG
+/// bank and bits 1-0 the 8 KiB CHR bank.
+#[derive(Debug)]
+pub struct Sachen133 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Sachen133 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_bank: 0,
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Sachen133 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        let bank = usize::from(self.prg_bank) % banks;
+        self.prg
+            .get(bank * 0x8000 + usize::from(address & 0x7FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x4100..=0x5FFF).contains(&address) && address & 0x0100 != 0 {
+            self.prg_bank = (value >> 2) & 0x01;
+            self.chr_bank = value & 0x03;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, _address: u16, _value: u8) {}
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        133
+    }
+}
+
+/// Address-decoded multicart (mapper 225): two switchable 16 KiB PRG slots and
+/// one 8 KiB CHR window selected entirely by the write address.
+#[derive(Debug)]
+pub struct Multicart225 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_banks: [u8; 2],
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Multicart225 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_banks: [0, 1],
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_bank_count(&self) -> usize {
+        (self.prg.len() / 0x4000).max(1)
+    }
+}
+
+impl Mapper for Multicart225 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = self.prg_bank_count();
+        let slot = usize::from((address - 0x8000) / 0x4000);
+        let bank = usize::from(self.prg_banks[slot]) % banks;
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        let _ = value;
+        if address < 0x8000 {
+            return;
+        }
+        let high = ((address >> 8) & 0x40) as u8;
+        let page = (((address >> 6) & 0x3F) as u8) | high;
+        if address & 0x1000 != 0 {
+            self.prg_banks = [page, page];
+        } else {
+            let even = page & 0xFE;
+            self.prg_banks = [even, even.wrapping_add(1)];
+        }
+        self.chr_bank = ((address & 0x3F) as u8) | high;
+        self.mirroring = if address & 0x2000 != 0 {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        };
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, _address: u16, _value: u8) {}
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        225
+    }
+}
+
+/// Whirlwind Manu SMB2j board (mapper 40): fixed 8 KiB PRG slots with bank 6
+/// visible at `$6000-$7FFF`, and a down-counting M2 IRQ.
+#[derive(Debug)]
+pub struct Whirlwind40 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_c000: u8,
+    mirroring: Mirroring,
+    irq_counter: u16,
+    irq_pending: bool,
+    /// Non-empty so the bus routes `$6000-$7FFF` reads to the mapper (the
+    /// window is PRG-ROM bank 6, not RAM, but the read path checks this).
+    header_ram: Vec<u8>,
+}
+
+impl Whirlwind40 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_c000: 0,
+            mirroring: header.mirroring,
+            irq_counter: 0,
+            irq_pending: false,
+            header_ram: vec![0; 0x1000],
+        }
+    }
+
+    fn prg_bank_count(&self) -> usize {
+        (self.prg.len() / 0x2000).max(1)
+    }
+
+    fn bank_byte(&self, bank: usize, address: u16) -> u8 {
+        let banks = self.prg_bank_count();
+        let bank = bank % banks;
+        self.prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Whirlwind40 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.bank_byte(6, address),
+            0x8000..=0x9FFF => self.bank_byte(4, address),
+            0xA000..=0xBFFF => self.bank_byte(5, address),
+            0xC000..=0xDFFF => self.bank_byte(usize::from(self.prg_c000), address),
+            0xE000..=0xFFFF => self.bank_byte(7, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0xE000 {
+            0x8000 => {
+                self.irq_counter = 0;
+                self.irq_pending = false;
+            }
+            0xA000 => self.irq_counter = 4096,
+            0xE000 => self.prg_c000 = value,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, _address: u16, _value: u8) {}
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        40
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        // Only a routing presence; the `$6000` window is PRG-ROM.
+        &self.header_ram
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if self.irq_counter > 0 {
+            self.irq_counter -= 1;
+            if self.irq_counter == 0 {
+                self.irq_pending = true;
+            }
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// Kaiser KS-7017 (mapper 303): switchable 16 KiB PRG at `$8000`, a fixed
+/// second bank at `$C000`, 8 KiB CHR-RAM, and a down-counting M2 IRQ.
+#[derive(Debug)]
+pub struct Kaiser303 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg16: u8,
+    mirroring: Mirroring,
+    irq_counter: u16,
+    irq_enabled: bool,
+    irq_pending: bool,
+}
+
+impl Kaiser303 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg16: 0,
+            // KS-7017 powers on with vertical mirroring (Mesen InitMapper).
+            mirroring: Mirroring::Vertical,
+            irq_counter: 0,
+            irq_enabled: false,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_bank_count(&self) -> usize {
+        (self.prg.len() / 0x4000).max(1)
+    }
+}
+
+impl Mapper for Kaiser303 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let banks = self.prg_bank_count();
+        let bank = match address {
+            0x4020..=0x5FFF => return 0,
+            0x8000..=0xBFFF => usize::from(self.prg16) % banks,
+            0xC000..=0xFFFF => 2 % banks,
+            _ => return 0,
+        };
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if address == 0x4030 {
+            let pending = self.irq_pending;
+            self.irq_pending = false;
+            return u8::from(pending);
+        }
+        self.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address & 0xFF00 == 0x4A00 {
+            self.prg16 = ((((address >> 2) & 0x03) | ((address >> 4) & 0x04)) & 0x07) as u8;
+        } else {
+            match address {
+                0x4020 => {
+                    self.irq_pending = false;
+                    self.irq_counter = (self.irq_counter & 0xFF00) | u16::from(value);
+                }
+                0x4021 => {
+                    self.irq_pending = false;
+                    self.irq_counter = (self.irq_counter & 0x00FF) | (u16::from(value) << 8);
+                    self.irq_enabled = true;
+                }
+                0x4025 => {
+                    self.mirroring = if (value >> 3) & 0x01 != 0 {
+                        Mirroring::Horizontal
+                    } else {
+                        Mirroring::Vertical
+                    };
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        303
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x4030, 0x4030))
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if self.irq_enabled && self.irq_counter != 0 {
+            self.irq_counter -= 1;
+            if self.irq_counter == 0 {
+                self.irq_enabled = false;
+                self.irq_pending = true;
+            }
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
 /// MMC2 (mapper 9) and MMC4 (mapper 10).
 ///
 /// Both use two CHR latches that switch 4 KiB pattern banks when the PPU
@@ -2284,8 +2689,10 @@ impl Mmc3 {
             txsrom: false,
             remap_a0: false,
             select: 0,
-            // MMC3 power-on register values (Mesen ResetMmc3): R0..R7.
-            bank_data: [0, 2, 4, 5, 6, 7, 0, 1],
+            // Power-on bank registers. The reference emulator leaves these
+            // zeroed; games that rely on the power-on layout (e.g. TQROM's
+            // CHR upload) depend on R2-R5 reading back as zero.
+            bank_data: [0; 8],
             mirroring: header.mirroring,
             ram_enabled: true,
             irq_latch: 0,
@@ -2379,9 +2786,6 @@ impl Mapper for Mmc3 {
         match address & 0xE001 {
             0x8000 => {
                 self.select = value;
-                if std::env::var("PRGLOG").is_ok() && self.mapper == 195 {
-                    eprintln!("select={value:02X}");
-                }
                 if let Some(hybrid) = &self.hybrid {
                     hybrid.borrow_mut().update_regs(self.select, self.bank_data);
                 }
@@ -2389,9 +2793,6 @@ impl Mapper for Mmc3 {
             0x8001 => {
                 let index = usize::from(self.select & 0x07);
                 self.bank_data[index] = value;
-                if std::env::var("PRGLOG").is_ok() && self.mapper == 195 {
-                    eprintln!("bank[{index}]={value:02X}");
-                }
                 if let Some(hybrid) = &self.hybrid {
                     hybrid.borrow_mut().update_regs(self.select, self.bank_data);
                 }
@@ -15378,8 +15779,10 @@ mod tests {
 
         // Slot 0/1 follow the MMC3 registers; slots 2/3 are the extra regs
         // (power-on 0xFE/0xFF -> last two 8 KiB banks of a 64-bank image).
+        // The MMC3 bank registers power on zeroed here (matching the
+        // reference oracle), so R6/R7 read bank 0.
         assert_eq!(cart.cpu_read(0x8000), 0);
-        assert_eq!(cart.cpu_read(0xA000), 1);
+        assert_eq!(cart.cpu_read(0xA000), 0);
         assert_eq!(cart.cpu_read(0xC000), 62);
         assert_eq!(cart.cpu_read(0xE000), 63);
 
@@ -15418,6 +15821,113 @@ mod tests {
         cart.cpu_write(0x5C42, 0x5A);
         assert_eq!(cart.cpu_read(0x5C42), 0x5A);
         assert_eq!(cart.cpu_read(0x5FFF), 0);
+    }
+
+    #[test]
+    fn sachen_133_banks_prg_and_chr() {
+        // Jovial Race layout: 64 KiB PRG (2 x 32 KiB), 32 KiB CHR (4 x 8 KiB).
+        let rom = synth_banked(133, 64, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 133);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+
+        // Bits 3-2 select the 32 KiB PRG bank, bits 1-0 the 8 KiB CHR bank.
+        cart.cpu_write(0x4100, 0x06);
+        assert_eq!(
+            cart.cpu_read(0x8000),
+            4,
+            "PRG bank 1 starts at 8 KiB bank 4"
+        );
+        assert_eq!(
+            cart.ppu_read(0x0000),
+            0x90,
+            "CHR bank 2 starts at 1 KiB bank 16"
+        );
+
+        // A8 clear is not a register write.
+        cart.cpu_write(0x4000, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+    }
+
+    #[test]
+    fn multicart_225_address_decodes_prg_chr_and_mirroring() {
+        // 64 KiB PRG (4 x 16 KiB), 64 KiB CHR (8 x 8 KiB).
+        let rom = synth_banked(225, 64, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 225);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+
+        // Address bits 6-11 form the page; an even value selects a 32 KiB pair.
+        cart.cpu_write(0x8083, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.cpu_read(0xC000), 6);
+        assert_eq!(
+            cart.ppu_read(0x0000),
+            0x98,
+            "CHR bank 3 starts at 1 KiB bank 24"
+        );
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+
+        cart.cpu_write(0xA000, 0x00);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn whirlwind_40_fixed_slots_and_cycle_irq() {
+        // 64 KiB PRG (8 x 8 KiB), 8 KiB CHR-ROM.
+        let rom = synth_banked(40, 64, 8);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 40);
+        assert_eq!(cart.cpu_read(0x6000), 6);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.cpu_read(0xA000), 5);
+        assert_eq!(cart.cpu_read(0xE000), 7);
+
+        cart.cpu_write(0xE000, 1);
+        assert_eq!(cart.cpu_read(0xC000), 1);
+
+        // $A000 arms a 4096-cycle down-counter; $8000 clears it.
+        cart.cpu_write(0xA000, 0);
+        for _ in 0..4095 {
+            cart.clock_cpu();
+        }
+        assert!(!cart.irq_line());
+        cart.clock_cpu();
+        assert!(cart.irq_line());
+        cart.cpu_write(0x8000, 0);
+        assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn kaiser_303_banks_and_cycle_irq() {
+        // 128 KiB PRG (8 x 16 KiB), 8 KiB CHR-RAM.
+        let rom = synth_banked(303, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 303);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(
+            cart.cpu_read(0xC000),
+            4,
+            "fixed 16 KiB bank 2 starts at 8 KiB bank 4"
+        );
+
+        // $4A00-$4AFF address lines select the 16 KiB bank.
+        cart.cpu_write(0x4A04, 0);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+
+        // $4020/$4021 load a 16-bit down-counter; $4030 acknowledges.
+        cart.cpu_write(0x4020, 0x10);
+        cart.cpu_write(0x4021, 0x00);
+        for _ in 0..15 {
+            cart.clock_cpu();
+        }
+        assert!(!cart.irq_line());
+        cart.clock_cpu();
+        assert!(cart.irq_line());
+        assert_eq!(cart.cpu_read_io(0x4030), 1);
+        assert!(!cart.irq_line());
     }
 
     #[test]
