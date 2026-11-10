@@ -580,6 +580,12 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Tells the mapper the CPU cycle about to perform a bus write.
+    ///
+    /// Only the MMC1 needs it: a serial write on the cycle immediately after
+    /// another is ignored by the shift register.
+    fn set_cpu_cycle(&mut self, _cycle: u64) {}
+
     /// Whether the mapper drives PRG-ROM (not work RAM) at `$6000-$7FFF`.
     ///
     /// The CPU bus only forwards that window to the cartridge when this is
@@ -1143,6 +1149,11 @@ impl Cartridge {
         self.mapper.chr_ram_map()
     }
 
+    /// Tells the mapper the CPU cycle about to perform a bus write.
+    pub fn set_cpu_cycle(&mut self, cycle: u64) {
+        self.mapper.set_cpu_cycle(cycle);
+    }
+
     /// Mapper IRQ output (level).
     #[must_use]
     pub fn irq_line(&self) -> bool {
@@ -1297,6 +1308,10 @@ pub struct Mmc1 {
     prg_bank: u8,
     four_screen: bool,
     battery: bool,
+    /// CPU cycle supplied for the pending write.
+    cpu_cycle: u64,
+    /// Cycle of the previous serial write (`u64::MAX` = none).
+    last_write_cycle: u64,
 }
 
 impl Mmc1 {
@@ -1319,6 +1334,8 @@ impl Mmc1 {
             prg_bank: 0,
             four_screen: header.four_screen,
             battery: header.battery,
+            cpu_cycle: 0,
+            last_write_cycle: u64::MAX,
         }
     }
 
@@ -1398,10 +1415,20 @@ impl Mapper for Mmc1 {
             }
             return;
         }
+        // A serial write on the cycle immediately after another is ignored:
+        // the shift register needs a cycle to settle. This is what makes the
+        // `INC $addr` reset trick work (its dummy write resets the chip and
+        // the real write that follows is dropped).
+        let consecutive = self.last_write_cycle != u64::MAX
+            && self.cpu_cycle == self.last_write_cycle.wrapping_add(1);
+        self.last_write_cycle = self.cpu_cycle;
         if value & 0x80 != 0 {
             self.shift = 0;
             self.count = 0;
             self.control |= 0x0C;
+            return;
+        }
+        if consecutive {
             return;
         }
         self.shift |= (value & 1) << self.count;
@@ -1443,6 +1470,10 @@ impl Mapper for Mmc1 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.prg_ram
+    }
+
+    fn set_cpu_cycle(&mut self, cycle: u64) {
+        self.cpu_cycle = cycle;
     }
 }
 
@@ -19817,6 +19848,28 @@ mod tests {
         // 4 KiB mode: R2-R5 fill the first four slots and R0/R1 the pairs.
         cart.cpu_write(0x8000, 0x80);
         assert_eq!(cart.chr_ram_map(), Some([6, 0, 0, 0, 4, 5, 0, 1]));
+    }
+
+    #[test]
+    fn mmc1_ignores_a_serial_write_on_the_next_cycle() {
+        // 256 KiB PRG (16 x 16 KiB), CHR-RAM: bank 9 must exist.
+        let rom = synth_banked(1, 256, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        // The `INC $addr` reset trick: the dummy $FF write resets the chip and
+        // the real $00 write on the next cycle must be dropped.
+        cart.set_cpu_cycle(100);
+        cart.cpu_write(0xFFFF, 0xFF);
+        cart.set_cpu_cycle(101);
+        cart.cpu_write(0xFFFF, 0x00);
+        // Five properly spaced bits latch PRG bank 9.
+        for (i, value) in [0x09u8, 0x04, 0x02, 0x01, 0x00].into_iter().enumerate() {
+            cart.set_cpu_cycle(200 + i as u64 * 4);
+            cart.cpu_write(0xE000, value);
+        }
+        assert_eq!(cart.cpu_read(0x8000), 18, "16 KiB bank 9");
+        // Reading the same value back after another write confirms the latch.
+        cart.cpu_write(0x8000, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 18);
     }
 
     #[test]

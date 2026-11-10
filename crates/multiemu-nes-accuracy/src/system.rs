@@ -60,6 +60,8 @@ pub struct System {
     /// CPU program counter, used for APU register activation during OAM DMA.
     /// PPU dots still owed at the end of a split CPU cycle.
     end_dots: u8,
+    /// CPU cycles seen by the bus (MMC1 serial-write spacing).
+    cycle_count: u64,
     /// PPU scanline at the start of the current split cycle.
     dma: Option<Dma>,
 }
@@ -217,6 +219,7 @@ impl System {
             cpu_pc: 0,
             dmc_carry: 0,
             end_dots: 0,
+            cycle_count: 0,
             dma: None,
         };
         let mut cpu = system.cpu;
@@ -1005,6 +1008,7 @@ impl CpuBus for System {
                 }
             }
             0x4020..=0xFFFF => {
+                self.cart.set_cpu_cycle(self.cycle_count);
                 self.cart.cpu_write(address, value);
                 if self.cart.chr_mapping_write(address) {
                     self.refresh_chr();
@@ -1019,6 +1023,7 @@ impl CpuBus for System {
     fn tick(&mut self) {}
 
     fn begin_cycle(&mut self, address: Option<u16>, write: Option<u8>) {
+        self.cycle_count = self.cycle_count.wrapping_add(1);
         self.begin_dma_cycle(address, write);
     }
 
