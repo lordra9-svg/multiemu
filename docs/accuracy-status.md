@@ -921,8 +921,10 @@ the dots 1-64 clear phase, which provides the seed.
   byte (sampled title 2/120 -> **118/120**; 54.1% over 16 images, ten titles
   at 118/120); mapper **176** was ported to the reference FK23C logic (PRG
   modes 0-4, CHR mode via `$5000.6`, FS005 base bits, `$A001` RAM config,
-  `$E003` decode and the 6/7 register swap) for **70.1%** over 106 images
-  (from 53.1%); mapper **215** had the NROM/enable and 128 KiB substitution
+  `$E003` decode and the 6/7 register swap) for 70.1% over 106 images
+  (from 53.1%), then routing the FS005 CHR-RAM overlay through the PPU
+  (`HybridKind::Fk23c`, so `$2007` writes reach the first 8 KiB and banks
+  >= 8 fall back to ROM) reached **80.1%**; mapper **215** had the NROM/enable and 128 KiB substitution
   bits shifted by one and lacked the submapper-1 CHR bit, now **92.1%** video
   and 89.6% audio over 21 images. The same 120-image sweep moved from video 81.1% to 82.0%
   before the 226/242/115 fixes.
