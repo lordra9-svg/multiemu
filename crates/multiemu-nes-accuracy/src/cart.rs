@@ -3888,14 +3888,10 @@ impl Mmc5 {
             *value = self.chr_bank(slot);
         }
         if self.ppu_ctrl & 0x20 != 0 {
-            // 8x16 sprites: $5128-$512B apply to background tiles. Each
-            // register covers the corresponding slot in both pattern tables.
+            // 8x16 sprites: background tiles use the $5128-$512B register set,
+            // composed with the same CHR-mode granularity as the sprite banks.
             for (slot, value) in bg_slots.iter_mut().enumerate() {
-                let register = 8 + (slot & 0x03);
-                let bank = ((usize::from(self.chr_upper) << 8)
-                    | usize::from(self.chr_banks[register]))
-                    % self.chr_bank_count();
-                *value = bank;
+                *value = self.chr_bank_from(slot, true);
             }
         } else {
             bg_slots = slots;
@@ -3941,23 +3937,55 @@ impl Mmc5 {
     }
 
     fn chr_bank(&self, slot: usize) -> usize {
+        self.chr_bank_from(slot, false)
+    }
+
+    /// Physical 1 KiB CHR bank for a PPU slot. `bg` selects the `$5128-$512B`
+    /// register set used for background tiles in 8x16 sprite mode.
+    ///
+    /// MMC5 selects each region by the register at the *top* of the region and
+    /// ignores the low bits for the granularity (mode 0: `$5127` 8 KiB;
+    /// mode 1: `$5123`/`$5127` 4 KiB; mode 2: `$5121/$5123/$5125/$5127` 2 KiB;
+    /// mode 3: `$5120-$5127` 1 KiB). The `$5128-$512B` equivalents are used for
+    /// backgrounds in 8x16 sprite mode.
+    fn chr_bank_from(&self, slot: usize, bg: bool) -> usize {
         let banks = self.chr_bank_count();
-        let base = match self.chr_mode & 3 {
-            0 => (usize::from(self.chr_banks[0]) & !7) + slot,
-            1 => {
-                if slot < 4 {
-                    (usize::from(self.chr_banks[0]) & !3) + slot
-                } else {
-                    (usize::from(self.chr_banks[4]) & !3) + (slot - 4)
+        let upper = usize::from(self.chr_upper) << 8;
+        if bg {
+            let far = |index: usize| upper | usize::from(self.chr_banks[index]);
+            let base = match self.chr_mode & 3 {
+                0 => ((far(0x0B) << 3) + slot) % banks,
+                1 => ((far(0x0B) << 2) + (slot & 3)) % banks,
+                2 => {
+                    let group = slot / 2;
+                    let reg = if group.is_multiple_of(2) { 0x09 } else { 0x0B };
+                    ((far(reg) << 1) + (slot & 1)) % banks
                 }
+                _ => (upper | usize::from(self.chr_banks[8 + (slot & 3)])) % banks,
+            };
+            return base;
+        }
+        match self.chr_mode & 3 {
+            // Mode 0: 8 KiB from $5127 (low 3 bits ignored).
+            0 => ((upper | usize::from(self.chr_banks[7])) << 3 | slot) % banks,
+            // Mode 1: two 4 KiB regions selected by $5123/$5127.
+            1 => {
+                let reg = if slot < 4 {
+                    self.chr_banks[3]
+                } else {
+                    self.chr_banks[7]
+                };
+                ((upper | usize::from(reg)) << 2 | (slot & 3)) % banks
             }
+            // Mode 2: 2 KiB regions from $5121/$5123/$5125/$5127.
             2 => {
-                let group = slot / 2;
-                (usize::from(self.chr_banks[group * 2]) & !1) + (slot & 1)
+                let regs = [1usize, 3, 5, 7];
+                let reg = self.chr_banks[regs[slot / 2]];
+                ((upper | usize::from(reg)) << 1 | (slot & 1)) % banks
             }
-            _ => usize::from(self.chr_banks[slot]),
-        };
-        ((usize::from(self.chr_upper) << 8) | (base & 0xFF)) % banks
+            // Mode 3: eight 1 KiB banks from $5120-$5127.
+            _ => (upper | usize::from(self.chr_banks[slot])) % banks,
+        }
     }
 
     /// PRG-RAM window for mode 3 registers with bit 7 set.
@@ -15989,6 +16017,35 @@ mod tests {
             assert_eq!(aux.split_tile(0, 0), Some(0x22));
             assert_eq!(aux.split_pattern(0, 0, 0, false), Some(0x2000));
         }
+    }
+
+    #[test]
+    fn mmc5_chr_modes_use_region_top_registers() {
+        // 64 KiB CHR = 512 x 1 KiB banks; synth fills each with 0x80|index.
+        let rom = synth_banked(5, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+
+        // 4 KiB mode: $0000-$0FFF = $5123, $1000-$1FFF = $5127.
+        cart.cpu_write(0x5101, 1);
+        cart.cpu_write(0x5123, 2); // 4 KiB bank 2 -> 1 KiB 8
+        cart.cpu_write(0x5127, 3); // 4 KiB bank 3 -> 1 KiB 12
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 8);
+        assert_eq!(cart.ppu_read(0x1000), 0x80 | 12);
+
+        // 2 KiB mode: $0000-$07FF = $5121 (low bit ignored).
+        cart.cpu_write(0x5101, 2);
+        cart.cpu_write(0x5121, 5); // 2 KiB bank 5 -> 1 KiB 10
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 10);
+
+        // 8 KiB mode: $5127, low 3 bits ignored.
+        cart.cpu_write(0x5101, 0);
+        cart.cpu_write(0x5127, 1); // 8 KiB bank 1 -> 1 KiB 8
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 8);
+
+        // 1 KiB mode: $5120-$5127 directly.
+        cart.cpu_write(0x5101, 3);
+        cart.cpu_write(0x5120, 4);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 4);
     }
 
     #[test]

@@ -897,6 +897,18 @@ the dots 1-64 clear phase, which provides the seed.
   The additional fidelity of the master-clock model does not translate into
   better oracle agreement here, so it was reverted rather than shipped as a
   regression.
+- MMC5 CHR banking now follows the documented region-top register decoding:
+  mode 0 (8 KiB) uses `$5127`, mode 1 (4 KiB) uses `$5123`/`$5127`, mode 2
+  (2 KiB) uses `$5121`/`$5123`/`$5125`/`$5127` with the low bits ignored, and
+  mode 3 (1 KiB) uses `$5120-$5127`. In 8x16 sprite mode, background tiles use
+  the `$5128-$512B` set with the same per-mode granularity (so a 4 KiB
+  background uses the single `$512B` page for both halves). Previously modes
+  0-2 used the *first* register of each region and the 8x16 background used
+  per-slot 1 KiB registers, which garbled every tile on boards that used those
+  modes. Effect on the 512 KiB CHR MMC5 title (Metal Slader Glory): video
+  **142 -> 298/300** and audio **1 -> 238/300**; CV3 (1 KiB mode) is
+  unaffected, confirming the fix targets modes 0-2. `Metal Slader Glory` is now
+  pixel-identical at frames 60, 200 and 299.
 - Expansion-audio levels now use the documented per-chip scales instead of
   ad-hoc normalizations, so the per-channel mixing matches the reference:
   VRC6 is a centred linear 6-bit sum scaled so one full pulse equals a 2A03

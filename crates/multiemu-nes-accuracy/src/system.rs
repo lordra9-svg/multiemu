@@ -1391,6 +1391,28 @@ mod tests {
     }
 
     #[test]
+    fn mmc5_eight_by_sixteen_4k_background_uses_512b() {
+        // 64 KiB CHR = 512 x 1 KiB banks filled with 0x80|index.
+        let prg_len = 128 * 1024;
+        let chr_len = 64 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 8;
+        rom[6] = 0x50;
+        for (bank, chunk) in rom[16 + prg_len..].chunks_mut(0x400).enumerate() {
+            chunk.fill(0x80 | bank as u8);
+        }
+        let mut system = System::from_ines(&rom).expect("load");
+        system.cart.set_ppu_ctrl(0x20); // 8x16 sprites
+        system.cart.cpu_write(0x5101, 1); // 4 KiB CHR mode
+        system.cart.cpu_write(0x512B, 10); // background 4 KiB bank 10 -> 1 KiB 40
+                                           // Both halves of the background use the same 4 KiB page.
+        assert_eq!(system.ppu.debug_bg_chr_byte(0x0000), 0x80 | 40);
+        assert_eq!(system.ppu.debug_bg_chr_byte(0x1000), 0x80 | 40);
+    }
+
+    #[test]
     fn mmc5_extended_attributes_reach_chr_above_256_kib() {
         // 512 KiB CHR (64 x 8 KiB); 4 KiB bank 64 is solid and lives above the
         // 256 KiB reachable by the ExRAM bank bits alone.
