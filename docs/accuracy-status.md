@@ -301,12 +301,12 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,853 loaded (96.5%), 3,721 rendering (52.4%), 3,132 blank (44.1%), 220
-unsupported (3.1%) and 28 load/run failures (0.39%). The batched totals
+6,857 loaded (96.6%), 3,723 rendering (52.4%), 3,134 blank (44.1%), 216
+unsupported (3.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. The remaining 80 unsupported IDs
 are led by 256/515/551 (5 images each) and 355/446/547/594 (4 each); Datach
-(157), the former six-image tail and the 519/529/57/15/120/243 boards are now
-implemented.
+(157), the former six-image tail and the 519/529/57/15/120/137/145/243 boards
+are now implemented.
 See `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
 tail triage.
 
@@ -886,6 +886,18 @@ the dots 1-64 clear phase, which provides the seed.
   14 kHz low-pass chain match the reference formulas bit-for-bit. DMC cycle
   stealing stays pinned by `dmc_dma_stealing_matches_the_reference_benchmark`
   (10,126 stolen loop iterations over 300 frames).
+- The remaining frame-boundary gap is a three-dot (one CPU cycle) origin
+  difference. It is visible as frame 0's first-scanline backdrop prefix: 22
+  dots here versus 25 in the reference capture, while every later SMB frame is
+  identical (599/600 video hashes). The reference also ends a frame at the
+  first CPU-instruction boundary after its PPU frame-complete flag, and both
+  run three PPU dots per CPU cycle, so the integer-dot split already matches
+  the reference at dot granularity. The only local knob -- pre-advancing the
+  PPU by 1-7 dots before reset -- reproduces the reference wrap cycles but was
+  measured to regress SMB video 299 -> 273 and audio 226 -> 194. Closing the
+  last dots therefore needs the reference's master-clock bus for frame
+  detection, not another split tweak; that is a dedicated port, not a bounded
+  change.
 - A per-instruction `(pc, cycle)` comparison against the reference capture
   finally rules out CPU bus/IRQ timing as the frame-39 cause. Over the window
   around the seeding `$4007` write (cycle ~1,154,2xx) the PC streams are

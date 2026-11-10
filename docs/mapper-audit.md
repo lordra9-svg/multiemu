@@ -26,16 +26,16 @@ multiemu corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 6,853 | 96.5% |
-| Rendering | 3,721 | 52.4% |
-| Blank | 3,132 | 44.1% |
-| Unsupported mapper | 220 | 3.1% |
+| Loaded (mapper implemented) | 6,857 | 96.6% |
+| Rendering | 3,723 | 52.4% |
+| Blank | 3,134 | 44.1% |
+| Unsupported mapper | 216 | 3.0% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 43 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 6,853 (93.3% → 96.5%) and unsupported fell 446 → 220 (6.3% → 3.1%);
-80 mapper IDs remain, led by 256/515/551 (5 images each) and 355/446/547/594
+audit, 45 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 6,857 (93.3% → 96.6%) and unsupported fell 446 → 216 (6.3% → 3.0%);
+78 mapper IDs remain, led by 256/515/551 (5 images each) and 355/446/547/594
 (4 each).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
@@ -149,9 +149,10 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   `$2007` reads. The PPU reads and writes through the shared map. 8/8 render at
   600 frames.
 - **Mapper completion sweep (15, 27, 40, 57, 65, 67, 70, 72, 74, 78, 93,
-  107, 117, 119, 120, 123, 133, 140, 147, 149, 157, 168, 180, 187, 191, 192,
-  194, 198, 225, 228, 243, 244, 245, 246, 250, 263, 264, 303, 313, 332, 519,
-  529, 552)** — 43 boards added against the RustyNES and Mesen2 references:
+  107, 117, 119, 120, 123, 133, 137, 140, 145, 147, 149, 157, 168, 180, 187,
+  191, 192, 194, 198, 225, 228, 243, 244, 245, 246, 250, 263, 264, 303, 313,
+  332, 519, 529, 552)** — 45 boards added against the RustyNES and Mesen2
+  references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
   discrete boards add CPU-cycle IRQs; the Sachen 3009/3018 and JV001 latches
