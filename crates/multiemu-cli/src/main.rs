@@ -51,8 +51,29 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut skip = 0usize;
             let mut only_mapper: Option<u16> = None;
             let mut oracle: Option<String> = None;
+            let mut parity = false;
+            let mut frames_set = false;
+            let mut min_video: Option<f64> = None;
+            let mut min_audio: Option<f64> = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
+                    "--parity" => parity = true,
+                    "--min-video" => {
+                        min_video = Some(
+                            args.next()
+                                .ok_or("--min-video needs a percentage")?
+                                .parse()
+                                .map_err(|_| "--min-video needs a percentage")?,
+                        );
+                    }
+                    "--min-audio" => {
+                        min_audio = Some(
+                            args.next()
+                                .ok_or("--min-audio needs a percentage")?
+                                .parse()
+                                .map_err(|_| "--min-audio needs a percentage")?,
+                        );
+                    }
                     "--oracle" => {
                         oracle = Some(args.next().ok_or("--oracle needs a path")?);
                     }
@@ -62,6 +83,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                             .ok_or("--frames needs a number")?
                             .parse()
                             .map_err(|_| "--frames needs a number")?;
+                        frames_set = true;
                     }
                     "--limit" => {
                         limit = args
@@ -92,8 +114,27 @@ fn run() -> Result<(), Box<dyn Error>> {
             if let Some(mapper) = only_mapper {
                 entries.retain(|entry| entry.header.is_some_and(|header| header.mapper == mapper));
             }
+            if parity {
+                oracle = oracle.or_else(|| std::env::var("MULTIEMU_ORACLE").ok());
+                if !frames_set {
+                    // The differential audit is the meaningful default: one
+                    // smoke frame cannot tell a correct board from a boot loop.
+                    frames = 120;
+                }
+            }
             if let Some(oracle) = oracle {
-                return run_parity(&entries, skip, limit, frames.max(1), &oracle);
+                return run_parity(
+                    &entries,
+                    skip,
+                    limit,
+                    frames.max(1),
+                    &oracle,
+                    min_video,
+                    min_audio,
+                );
+            }
+            if parity {
+                return Err("--parity needs --oracle PATH or MULTIEMU_ORACLE".into());
             }
             let mut loaded = 0usize;
             let mut rendered = 0usize;
@@ -856,7 +897,7 @@ fn usage() -> String {
   multiemu verify <rom|archive> [frames]
   multiemu trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N]
   multiemu diff <a.trace> <b.trace> [--skip N] [--video]
-  multiemu corpus <dir> [--frames N] [--oracle PATH] [--mapper ID] [--skip N] [--limit N]
+  multiemu corpus <dir> [--parity] [--frames N] [--oracle PATH] [--mapper ID] [--skip N] [--limit N] [--min-video PCT] [--min-audio PCT]
   multiemu parity <a.trace> <b.trace> [--window N]
   multiemu boundary <rom|archive> [frames]
   multiemu bench <rom|archive> [frames]"
@@ -975,6 +1016,8 @@ fn run_parity(
     limit: usize,
     frames: u32,
     oracle: &str,
+    min_video: Option<f64>,
+    min_audio: Option<f64>,
 ) -> Result<(), Box<dyn Error>> {
     use std::collections::BTreeMap;
     use std::process::{Command, Stdio};
@@ -1112,6 +1155,22 @@ fn run_parity(
     println!("lowest video parity:");
     for (_, mapper, title, video, audio, count) in worst.iter().take(20) {
         println!("  [{mapper:>3}] {title:<44} video {video}/{count} audio {audio}/{count}");
+    }
+    let video_pct = share(video);
+    let audio_pct = share(audio);
+    if let Some(limit) = min_video {
+        if video_pct < limit {
+            return Err(
+                format!("video parity {video_pct:.1}% is below --min-video {limit:.1}%").into(),
+            );
+        }
+    }
+    if let Some(limit) = min_audio {
+        if audio_pct < limit {
+            return Err(
+                format!("audio parity {audio_pct:.1}% is below --min-audio {limit:.1}%").into(),
+            );
+        }
     }
     Ok(())
 }

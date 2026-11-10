@@ -898,7 +898,9 @@ the dots 1-64 clear phase, which provides the seed.
   last dots therefore needs the reference's master-clock bus for frame
   detection, not another split tweak; that is a dedicated port, not a bounded
   change.
-- A quantitative differential corpus mode (`corpus --oracle PATH`) was added.
+- A quantitative differential corpus mode (`corpus --oracle PATH`, now
+  `corpus --parity` with `MULTIEMU_ORACLE` and a 120-frame default, gateable
+  with `--min-video/--min-audio`) was added.
   A 120-image / 120-frame sweep (109 images with oracle output) measured
   overall **video 81.1% and audio 70.1%** identical frame hashes and exposed
   the real outliers: mapper 58 (117-in-1) 1/120, 115 (1997 Super HIK) 2/120,

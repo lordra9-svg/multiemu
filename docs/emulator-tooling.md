@@ -128,12 +128,14 @@ gating:
 
 - `corpus <dir> [--frames N] [--mapper ID] [--skip N] [--limit N]` — smoke
   audit; reports loaded/rendering/blank/unsupported/failed, ranks unsupported
-  mapper IDs and prints failing titles. Adding `--oracle PATH` switches to a
-  quantitative differential mode: each image is run for `frames` frames by
-  the accuracy core and by the reference producer, and per-frame video/audio
-  hashes are compared at the same index. It prints overall and per-mapper
-  identical-hash percentages plus the lowest-parity titles, which turns the
-  20-frame smoke test into a hundreds-of-frames parity sweep.
+  mapper IDs and prints failing titles. `--parity` makes the quantitative
+  differential audit the standard run: the oracle path comes from
+  `--oracle PATH` or `MULTIEMU_ORACLE`, `--frames` defaults to 120, and every
+  image is executed by both the accuracy core and the reference producer with
+  per-frame video/audio hashes compared at the same index. It prints overall
+  and per-mapper identical-hash percentages plus the lowest-parity titles.
+  `--min-video PCT` / `--min-audio PCT` turn a shortfall into a non-zero exit
+  status, so the same command gates CI.
 - `boundary <rom|archive> [frames]` — prints the CPU cycle and PPU
   `(scanline, dot)` at which each frame completes, for comparing the frame
   boundary with a reference capture.
