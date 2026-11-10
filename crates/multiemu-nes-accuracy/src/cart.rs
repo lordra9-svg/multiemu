@@ -19772,6 +19772,17 @@ mod tests {
     }
 
     #[test]
+    fn nes2_sizes_use_the_twelve_bit_form() {
+        // Ordinary form: the MSB nibble extends the byte to 12 bits.
+        assert_eq!(nes2_size(0x80, 0, 16), 2 * 1024 * 1024);
+        assert_eq!(nes2_size(0, 1, 8), 2 * 1024 * 1024);
+        assert_eq!(nes2_size(3, 0, 8), 3 * 8 * 1024);
+        // $0F selects the exponent-multiplier form instead.
+        // EE = 3 (x8) and MM = 3 (x7) -> 56 units of 16 KiB.
+        assert_eq!(nes2_size(0x0F, 0x0F, 16), 56 * 16 * 1024);
+    }
+
+    #[test]
     fn ks7032_exposes_prg_rom_at_6000() {
         // 128 KiB PRG (16 x 8 KiB), CHR-RAM.
         let rom = synth_banked(142, 128, 0);

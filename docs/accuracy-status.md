@@ -947,8 +947,17 @@ the dots 1-64 clear phase, which provides the seed.
   reference decode — CHR-ROM *45-in-1* went from 7/120 to **114/120**. The
   register blocks mirror across their `$x000-$xFFF` pages (`addr & 0xF007`;
   this board writes `$D500`), and the mapper id now comes from the header
-  instead of always reporting 90. Board parity is 56.7% same-index and
-  59.3% best-aligned over 33 images, with 7 images one frame out of phase.
+  instead of always reporting 90.
+- Two header/timing bugs then accounted for most of the remaining JY and
+  FS005 gap. (1) NES 2.0 size fields used the exponent-multiplier form for
+  *any* non-zero MSB nibble instead of only `$0F`, so large images were
+  truncated (JY-120A's 2 MiB CHR-ROM was read as 16 KiB); with the 12-bit
+  form it went from 7/120 to **114/120** and mapper 176 rose from 80.1% to
+  **83.4%** video and 11.8% to **65.9%** audio. (2) The TV-system byte
+  (NES 2.0 byte 12, plus the legacy iNES PAL bit) was ignored, so 577 local
+  Dendy and 495 PAL images ran at NTSC speed; European MMC1 titles now match
+  at 115-118/120. Mapper 45 reached **97.9%** and mapper 90 59.5%
+  (62.1% best-aligned) after both fixes.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
