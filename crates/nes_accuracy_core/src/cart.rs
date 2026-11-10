@@ -886,6 +886,7 @@ impl Cartridge {
             225 => Box::new(Multicart225::new(prg_rom, chr, header)),
             40 => Box::new(Whirlwind40::new(prg_rom, chr, header)),
             31 => Box::new(Inl31::new(prg_rom, chr, header)),
+            37 => Box::new(Mmc3_37::new(prg_rom, chr, header)),
             92 => Box::new(Jaleco72::new_variant(prg_rom, chr, header, 92, 0x1F, true)),
             303 => Box::new(Kaiser303::new(prg_rom, chr, header)),
             305 => Box::new(KaiserMisc::new(prg_rom, chr, header, 305)),
@@ -6885,6 +6886,109 @@ impl Mapper for Mmc3_263 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         (0x8000..=0x9FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// SMB + Tetris + Nintendo World Cup (mapper 37): an MMC3 core plus a 74HC161
+/// register in the PRG-RAM window that feeds PRG A16/A17 and CHR A17.
+#[derive(Debug)]
+pub struct Mmc3_37 {
+    inner: Mmc3,
+    q: u8,
+}
+
+impl Mmc3_37 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 37),
+            q: 0,
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.prg.len() / 0x2000).max(1);
+        let raw = self.inner.prg_slot(slot);
+        let (q0, q1, q2) = (self.q & 1, (self.q >> 1) & 1, (self.q >> 2) & 1);
+        let m16 = ((raw >> 3) & 1) as u8;
+        let a16 = (q0 & q1) | (q2 & m16);
+        (((raw & 0x07) as u8) | (a16 << 3) | (q2 << 4)) as usize % banks
+    }
+}
+
+impl Mapper for Mmc3_37 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot);
+        self.inner
+            .prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x7FFF).contains(&address) {
+            self.q = value & 0x07;
+            return;
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let raw = self.inner.chr_bank(slot);
+        let bank = ((raw & 0x7F) | (usize::from((self.q >> 2) & 1) << 7)) % banks;
+        self.inner
+            .chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let raw = self.inner.chr_bank(slot);
+        let bank = ((raw & 0x7F) | (usize::from((self.q >> 2) & 1) << 7)) % banks;
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        37
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address) || (0x6000..=0x7FFF).contains(&address)
     }
 
     fn irq_line(&self) -> bool {
@@ -20105,6 +20209,19 @@ mod tests {
             }
         }
         rom
+    }
+
+    #[test]
+    fn mmc3_37_nand_prg_bits() {
+        // 256 KiB PRG (32 x 8 KiB), 32 KiB CHR.
+        let rom = synth_banked(37, 256, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 37);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        cart.cpu_write(0x6000, 3); // Q0 & Q1 -> PRG A16.
+        assert_eq!(cart.cpu_read(0x8000), 8);
+        cart.cpu_write(0x6000, 4); // Q2 -> PRG A17.
+        assert_eq!(cart.cpu_read(0x8000), 16);
     }
 
     #[test]
