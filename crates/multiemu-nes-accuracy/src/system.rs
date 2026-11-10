@@ -976,7 +976,12 @@ impl CpuBus for System {
                     }
                 }
             }
-            0x4020..=0xFFFF => self.cart.cpu_write(address, value),
+            0x4020..=0xFFFF => {
+                self.cart.cpu_write(address, value);
+                if self.cart.chr_mapping_write(address) {
+                    self.refresh_chr();
+                }
+            }
             _ => {}
         }
         self.open_bus = value;
@@ -1454,6 +1459,33 @@ mod tests {
                 "bank {bank:02X} not visible to $2007"
             );
         }
+    }
+
+    #[test]
+    fn namco163_chr_bank_write_refreshes_the_pattern_window() {
+        // Mid-frame raster bands (Rolling Thunder's status bar) switch the
+        // eight 1 KiB CHR banks at `$8000-$BFFF`; the renderer reads its own
+        // `ppu.chr` copy, so the write must refresh it immediately.
+        let prg_len = 128 * 1024;
+        let chr_len = 128 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 16;
+        rom[6] = 0x30;
+        rom[7] = 0x10; // mapper 19
+        rom[16] = 0x4C;
+        rom[17] = 0x00;
+        rom[18] = 0x80;
+        for (bank, chunk) in rom[16 + prg_len..].chunks_mut(0x400).enumerate() {
+            chunk.fill(0x80 | (bank as u8 & 0x7F));
+        }
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.ppu.chr[0], 0x80);
+        CpuBus::write(&mut system, 0x8000, 0x05);
+        CpuBus::write(&mut system, 0x8800, 0x21);
+        assert_eq!(system.ppu.chr[0], 0x85);
+        assert_eq!(system.ppu.chr[0x400], 0xA1);
     }
 
     #[test]

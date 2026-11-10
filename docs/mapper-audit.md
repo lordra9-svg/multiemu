@@ -233,8 +233,12 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   counter) are routed to the cartridge in the `$4020-$5FFF` window, which games
   poll. Corpus: **33 of 34 mapper-19 images render at 600 frames**; the sweep
   titles improved to Star Wars 59/60, Hydlide 3 59/60, Kaijuu Monogatari
-  58/60, Final Lap 58/60, Youkai Douchuuki 59/60, Mindseeker 58/60. Rolling
-  Thunder (21/60) is the remaining outlier.
+  58/60, Final Lap 58/60, Youkai Douchuuki 59/60, Mindseeker 58/60. CHR bank
+  writes at `$8000-$BFFF` now refresh the PPU's pattern window immediately, so
+  raster bands that switch banks mid-frame render correctly; Rolling Thunder
+  matches the reference on 275 of 276 frames once the known one-cycle frame
+  origin is aligned, leaving only the boundary transition frame (it previously
+  rendered the wrong bank set below the split).
 - **PPU** — the backdrop no longer double-indirects the palette; all five
   mirroring modes are modelled with 4 KiB CIRAM; the `$2007` read buffer is
   fed by the per-dot background/sprite fetch with a four-dot data state

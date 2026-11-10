@@ -535,6 +535,13 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Whether a CPU write to `address` can change the CHR mapping. The
+    /// system re-copies the 8 KiB pattern window after such a write so a
+    /// mid-frame bank switch is visible to rendering.
+    fn chr_mapping_write(&self, _address: u16) -> bool {
+        false
+    }
+
     /// Shared MMC5 state (ExRAM/nametables/CHR map) for the PPU.
     fn mmc5_aux(&self) -> Option<Rc<RefCell<Mmc5Aux>>> {
         None
@@ -911,6 +918,12 @@ impl Cartridge {
     #[must_use]
     pub fn n163_nt(&self) -> Option<Rc<RefCell<N163Nt>>> {
         self.mapper.n163_nt()
+    }
+
+    /// Whether a CPU write to `address` changes the CHR mapping.
+    #[must_use]
+    pub fn chr_mapping_write(&self, address: u16) -> bool {
+        self.mapper.chr_mapping_write(address)
     }
 
     /// Shared banked CHR-RAM state for the PPU (VRC7).
@@ -6502,6 +6515,12 @@ impl Mapper for Namco163 {
     /// cartridge registers; the system would otherwise answer open bus.
     fn low_window(&self) -> Option<(u16, u16)> {
         Some((0x4800, 0x5FFF))
+    }
+
+    /// The eight 1 KiB CHR bank registers live at `$8000-$BFFF`; games switch
+    /// them mid-frame for raster bands (e.g. Rolling Thunder's status bar).
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..0xC000).contains(&address)
     }
 
     fn n163_nt(&self) -> Option<Rc<RefCell<N163Nt>>> {
