@@ -826,7 +826,7 @@ impl Cartridge {
                 165,
                 HybridKind::Mmc2,
             )),
-            45 => Box::new(Mmc3::new_as(prg_rom, chr, header, 45)),
+            45 => Box::new(Ga23c::new(prg_rom, chr, header)),
             116 => Box::new(Mmc3::new_as(prg_rom, chr, header, 116)),
             118 => Box::new(Mmc3::new_txsrom(prg_rom, chr, header)),
             74 => Box::new(Mmc3::new_hybrid(
@@ -6579,6 +6579,161 @@ impl Mapper for Mmc3_263 {
     }
 }
 
+/// T-GA23C (mapper 45): an MMC3 core with four rotating outer registers at
+/// `$6000-$7FFF` that gate and OR the MMC3's PRG/CHR bank outputs.
+#[derive(Debug)]
+pub struct Ga23c {
+    inner: Mmc3,
+    regs: [u8; 4],
+    index: u8,
+    locked: bool,
+    chr_is_ram: bool,
+}
+
+/// Power-on outer registers. `[0, 0, $0F, 0]` leaves PRG-AND open and the CHR
+/// mask at $FF, so the power-on map is the plain MMC3 one.
+const GA23C_RESET_REGS: [u8; 4] = [0x00, 0x00, 0x0F, 0x00];
+
+impl Ga23c {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        let chr_is_ram = header.chr_size == 0;
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 45),
+            regs: GA23C_RESET_REGS,
+            index: 0,
+            locked: false,
+            chr_is_ram,
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.prg.len() / 0x2000).max(1);
+        let raw = self.inner.prg_slot(slot);
+        let and = usize::from(!self.regs[3] & 0x3F);
+        let bank = (raw & and)
+            | usize::from(self.regs[1] & 0x3F)
+            | usize::from(self.regs[1] & 0xC0)
+            | (usize::from(self.regs[2] & 0xC0) << 2);
+        bank % banks
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let raw = self.inner.chr_bank(slot);
+        let c = self.regs[2] & 0x0F;
+        let mask = usize::from(if c >= 7 { 0xFFu8 >> (15 - c) } else { 0 });
+        let bank =
+            (raw & mask) | usize::from(self.regs[0]) | (usize::from(self.regs[2] & 0xF0) << 4);
+        bank % banks
+    }
+}
+
+impl Mapper for Ga23c {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot);
+        self.inner
+            .prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x7FFF).contains(&address) {
+            match address & 0xF001 {
+                0x6000 if !self.locked => {
+                    self.regs[usize::from(self.index)] = value;
+                    if self.index == 3 && value & 0x40 != 0 {
+                        self.locked = true;
+                    }
+                    self.index = (self.index + 1) & 0x03;
+                }
+                0x6001 => {
+                    self.regs = GA23C_RESET_REGS;
+                    self.index = 0;
+                    self.locked = false;
+                }
+                _ => {}
+            }
+            // The outer registers overlay WRAM; the WRAM write still lands.
+            self.inner.prg_write(address, value);
+            return;
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        if self.chr_is_ram {
+            return self
+                .inner
+                .chr
+                .get(usize::from(address) & 0x1FFF)
+                .copied()
+                .unwrap_or(0);
+        }
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        self.inner
+            .chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if self.chr_is_ram {
+            if let Some(byte) = self.inner.chr.get_mut(usize::from(address) & 0x1FFF) {
+                *byte = value;
+            }
+            return;
+        }
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        45
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        // $8000-$9FFF change the MMC3 CHR banks; $6000-$6003 can change the
+        // outer CHR-OR/high bits on a CHR-ROM board.
+        (0x8000..=0x9FFF).contains(&address)
+            || (!self.chr_is_ram && (0x6000..=0x7FFF).contains(&address))
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
 /// Waixing FS309 (mapper 199): MMC3 plus four extra registers.
 ///
 /// `$8001` writes with select bit 3 set land in the extra registers instead of
@@ -10203,48 +10358,64 @@ pub struct Action53 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     select: u8,
-    chr_bank: u8,
+    chr_reg: u8,
     inner: u8,
     mode: u8,
     outer: u8,
-    mirror: u8,
 }
 
 impl Action53 {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
-        let banks16 = (prg.len() / 0x4000).max(1);
-        let last = banks16 - 1;
+    fn new(prg: Vec<u8>, _chr: Vec<u8>, _header: Header) -> Self {
         Self {
             prg,
-            chr,
+            // The board mounts 32 KiB of CHR-RAM in four 8 KiB banks.
+            chr: vec![0; 4 * 0x2000],
             select: 0,
-            chr_bank: 0,
-            inner: (last & 0x0F) as u8,
+            chr_reg: 0,
+            inner: 0,
+            // Power-on: mode 0 with every outer bit set resolves $C000 to the
+            // last 16 KiB bank of the image.
             mode: 0,
-            outer: (last >> 4) as u8,
-            mirror: match header.mirroring {
-                Mirroring::Vertical => 2,
-                Mirroring::Horizontal => 3,
-                Mirroring::SingleUpper => 1,
-                _ => 0,
-            },
+            outer: 0xFF,
         }
     }
 
-    /// Reference Action 53 bank formula, returning a 16 KiB bank index.
-    fn prg_bank(&self, address: u16) -> usize {
-        let a14 = usize::from((address >> 14) & 1);
-        let mut bank_mode = usize::from(self.mode >> 2);
-        let outer = usize::from(self.outer) << 1;
-        let mut current = usize::from(self.inner);
-        if (bank_mode ^ a14) & 0x03 == 0x02 {
-            bank_mode = 0;
+    /// Resolves the 16 KiB PRG bank for `$8000-$FFFF`.
+    fn prg_bank16(&self, address: u16) -> usize {
+        let count = (self.prg.len() / 0x4000).max(1);
+        let size = u32::from((self.mode >> 4) & 0x03);
+        let prg_mode = (self.mode >> 2) & 0x03;
+        let high = address >= 0xC000;
+        let half = usize::from(high);
+        let inner = usize::from(self.inner & 0x0F);
+        let outer_bits = (usize::from(self.outer) << 1) | half;
+        // `size + 1` low bits of the bank number come from the inner register.
+        let mask = (1usize << (size + 1)) - 1;
+        let bank = match prg_mode {
+            // BNROM / AOROM: one 32 KiB bank.
+            0 | 1 => (outer_bits & !mask) | (((inner << 1) | half) & mask),
+            // UNROM #180 / #2: one half is fixed to the outer bank.
+            2 | 3 => {
+                let fixed = if prg_mode == 2 { !high } else { high };
+                if fixed {
+                    outer_bits
+                } else {
+                    (outer_bits & !mask) | (inner & mask)
+                }
+            }
+            _ => 0,
+        };
+        bank % count
+    }
+
+    fn chr_offset(&self, address: u16) -> usize {
+        usize::from(self.chr_reg & 0x03) * 0x2000 + usize::from(address & 0x1FFF)
+    }
+
+    fn latch_one_screen(&mut self, value: u8) {
+        if self.mode & 0x02 == 0 {
+            self.mode = (self.mode & !0x01) | ((value >> 4) & 0x01);
         }
-        if bank_mode & 0x02 == 0 {
-            current = (current << 1) | a14;
-        }
-        let mask = [0x01usize, 0x03, 0x07, 0x0F][(bank_mode >> 2) & 0x03];
-        (current & mask) | (outer & !mask)
     }
 }
 
@@ -10253,56 +10424,45 @@ impl Mapper for Action53 {
         if address < 0x8000 {
             return 0;
         }
-        let banks = (self.prg.len() / 0x4000).max(1);
-        let offset = (self.prg_bank(address) % banks) * 0x4000 + usize::from(address & 0x3FFF);
-        self.prg.get(offset).copied().unwrap_or(0)
+        let bank = self.prg_bank16(address);
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
         match address {
-            0x5000..=0x5FFF => self.select = value,
-            0x8000..=0xFFFF => {
-                let supervisor = self.select & 0x80 != 0;
-                let index = self.select & 0x01;
-                if supervisor {
-                    if index == 0 {
-                        self.mode = value;
-                        self.mirror = value & 0x03;
-                    } else {
-                        self.outer = value;
-                    }
-                } else if index == 0 {
-                    self.chr_bank = value & 0x03;
-                    if self.mirror < 2 {
-                        self.mirror = (self.mirror & 0x02) | ((value >> 4) & 0x01);
-                    }
-                } else {
-                    self.inner = value & 0x0F;
-                    if self.mirror < 2 {
-                        self.mirror = (self.mirror & 0x02) | ((value >> 4) & 0x01);
-                    }
+            0x5000..=0x5FFF => self.select = value & 0x81,
+            0x8000..=0xFFFF => match self.select {
+                0x00 => {
+                    self.chr_reg = value & 0x03;
+                    self.latch_one_screen(value);
                 }
-            }
+                0x01 => {
+                    self.inner = value & 0x0F;
+                    self.latch_one_screen(value);
+                }
+                0x80 => self.mode = value & 0x3F,
+                _ => self.outer = value,
+            },
             _ => {}
         }
     }
 
     fn chr_read(&self, address: u16) -> u8 {
-        let banks = (self.chr.len() / 0x2000).max(1);
-        let offset = (usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF);
-        self.chr.get(offset).copied().unwrap_or(0)
+        self.chr.get(self.chr_offset(address)).copied().unwrap_or(0)
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
-        let banks = (self.chr.len() / 0x2000).max(1);
-        let offset = (usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF);
+        let offset = self.chr_offset(address);
         if let Some(byte) = self.chr.get_mut(offset) {
             *byte = value;
         }
     }
 
     fn mirroring(&self) -> Mirroring {
-        match self.mirror & 0x03 {
+        match self.mode & 0x03 {
             0 => Mirroring::SingleLower,
             1 => Mirroring::SingleUpper,
             2 => Mirroring::Vertical,
@@ -10312,6 +10472,12 @@ impl Mapper for Action53 {
 
     fn number(&self) -> u16 {
         28
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        // The CHR window is RAM selected by `$8000` writes (and `$5000`
+        // selects which register that write reaches).
+        (0x5000..=0x5FFF).contains(&address) || (0x8000..=0xFFFF).contains(&address)
     }
 }
 
@@ -10731,6 +10897,13 @@ pub struct JyAsic {
     accumulator: u8,
     test: u8,
     mirroring: Mirroring,
+    /// `$D003` bit 5 clear selects CHR-block banking; the ASIC powers on with
+    /// the plain low/high register pair instead.
+    chr_block_mode: bool,
+    /// The board mounts CHR-RAM, so pattern writes are accepted; CHR-ROM
+    /// images ignore them.
+    chr_is_ram: bool,
+    number: u16,
 }
 
 impl JyAsic {
@@ -10758,6 +10931,9 @@ impl JyAsic {
             accumulator: 0,
             test: 0,
             mirroring: header.mirroring,
+            chr_block_mode: false,
+            chr_is_ram: header.chr_size == 0,
+            number: header.mapper,
         }
     }
 
@@ -10769,81 +10945,98 @@ impl JyAsic {
         (self.chr.len() / 0x400).max(1)
     }
 
-    fn outer_prg(&self) -> usize {
-        usize::from((self.outer >> 1) & 0x03) * 64
-    }
-
     fn prg_bank(&self, address: u16) -> usize {
-        let base = self.outer_prg();
-        let last = self.mode & 0x04 != 0;
-        let a13 = usize::from((address >> 13) & 1);
-        let a14 = usize::from((address >> 14) & 1);
-        let within = match self.mode & 0x03 {
-            // 32 KiB banking at $8000-$FFFF.
+        let window = usize::from((address >> 13) & 0x03);
+        let invert = self.mode & 0x03 == 0x03;
+        let r: [usize; 4] = self
+            .prg_banks
+            .map(|v| usize::from(if invert { invert_prg_bits(v) } else { v }));
+        let last_switchable = self.mode & 0x04 != 0;
+        match self.mode & 0x03 {
+            // 32 KiB: one bank across all four windows.
             0 => {
-                let sel = if last {
-                    usize::from(self.prg_banks[3]) & 0x0F
-                } else {
-                    0x0F
-                };
-                sel * 4 + a13 + a14 * 2
+                let base = if last_switchable { r[3] * 4 } else { 0x3C };
+                base + window
             }
-            // 16 KiB banking: $8000-$BFFF and $C000-$FFFF.
+            // 16 KiB: r1 for the low half, r3 (or fixed $3E) for the high.
             1 => {
-                let sel = if address < 0xC000 {
-                    usize::from(self.prg_banks[1]) & 0x1F
-                } else if last {
-                    usize::from(self.prg_banks[3]) & 0x1F
+                if window < 2 {
+                    (r[1] << 1) + window
                 } else {
-                    0x1F
-                };
-                sel * 2 + a13
+                    let base = if last_switchable { r[3] << 1 } else { 0x3E };
+                    base + (window - 2)
+                }
             }
-            // 8 KiB banking.
-            _ => {
-                let slot = usize::from((address >> 13) & 0x03);
-                let raw = if slot < 3 {
-                    self.prg_banks[slot]
-                } else if last {
-                    self.prg_banks[3]
-                } else {
-                    0x3F
-                };
-                let raw = if self.mode & 0x03 == 3 {
-                    reverse_seven_bits(raw)
-                } else {
-                    raw
-                };
-                usize::from(raw) & 0x3F
-            }
-        };
-        base + within
-    }
-
-    fn rom_at_6000(&self) -> usize {
-        let base = self.outer_prg();
-        let sel = usize::from(self.prg_banks[3]) & 0x3F;
-        base + match self.mode & 0x03 {
-            0 => (sel & 0x0F) * 4 + 3,
-            1 => (sel & 0x1F) * 2 + 1,
-            _ => sel,
+            // 8 KiB: each window has its own register; the last is fixed to
+            // $3F unless `$D000` bit 2 makes it switchable.
+            _ => match window {
+                0 => r[0],
+                1 => r[1],
+                2 => r[2],
+                _ => {
+                    if last_switchable {
+                        r[3]
+                    } else {
+                        0x3F
+                    }
+                }
+            },
         }
     }
 
+    /// The 8 KiB PRG bank visible at `$6000` when `$D000` bit 7 enables it.
+    fn rom_at_6000(&self) -> usize {
+        let invert = self.mode & 0x03 == 0x03;
+        let r3 = usize::from(if invert {
+            invert_prg_bits(self.prg_banks[3])
+        } else {
+            self.prg_banks[3]
+        });
+        match self.mode & 0x03 {
+            0 => r3 * 4 + 3,
+            1 => (r3 << 1) | 1,
+            _ => r3,
+        }
+    }
+
+    /// Resolves a 1 KiB CHR bank from the PPU address.
+    ///
+    /// `$D003` bit 5 clear uses the CHR-block mode: the low register supplies
+    /// the in-block bits and `$D003` supplies the block number above them.
+    /// Bit 5 set uses the plain low/high 16-bit register pair instead.
     fn chr_bank(&self, address: u16) -> usize {
         let slot = usize::from(address / 0x400) & 0x07;
-        let mode = (self.mode >> 3) & 0x03;
-        let (index, scale, sub) = match mode {
-            0 => (0, 8, slot),
-            1 => (slot / 4, 4, slot & 0x03),
-            2 => (slot / 2, 2, slot & 0x01),
-            _ => (slot, 1, 0),
+        let chr_mode = (self.mode >> 3) & 0x03;
+        let mut index = match chr_mode {
+            0 => 0,
+            1 => slot / 4,
+            2 => (slot / 2) * 2,
+            _ => slot,
         };
-        let outer =
-            (usize::from((self.outer >> 3) & 0x03) << 9) | (usize::from(self.outer & 0x01) << 8);
-        let low = usize::from(self.chr_low[index]);
-        let high = usize::from(self.chr_high[index] & 0x03);
-        outer + ((high << 8) | low) * scale + sub
+        // `$D003` bit 7 aliases the high half of the 2/1 KiB windows onto the
+        // low half.
+        if chr_mode >= 2 && self.outer & 0x80 != 0 && (index == 2 || index == 3) {
+            index -= 2;
+        }
+        let index = index & 0x07;
+        let reg = if self.chr_block_mode {
+            let (mask, shift) = match chr_mode {
+                0 => (0x1Fu8, 5),
+                1 => (0x3Fu8, 6),
+                2 => (0x7Fu8, 7),
+                _ => (0xFFu8, 8),
+            };
+            let block = ((self.outer & 0x18) >> 2) | (self.outer & 0x01);
+            (usize::from(self.chr_low[index]) & usize::from(mask)) | (usize::from(block) << shift)
+        } else {
+            usize::from(self.chr_low[index]) | (usize::from(self.chr_high[index]) << 8)
+        };
+        match chr_mode {
+            0 => reg * 8 + slot,
+            1 => reg * 4 + (slot & 0x03),
+            2 => reg * 2 + (slot & 0x01),
+            _ => reg,
+        }
     }
 
     fn irq_tick(&mut self) {
@@ -10878,14 +11071,14 @@ impl JyAsic {
     }
 }
 
-fn reverse_seven_bits(value: u8) -> u8 {
-    let mut result = 0u8;
-    for bit in 0..7 {
-        if value & (1 << bit) != 0 {
-            result |= 1 << (6 - bit);
-        }
-    }
-    result
+/// The JY ASIC's PRG bank-number reversal (bit 3 is dropped).
+fn invert_prg_bits(value: u8) -> u8 {
+    (value & 0x01) << 6
+        | (value & 0x02) << 4
+        | (value & 0x04) << 2
+        | (value & 0x10) >> 2
+        | (value & 0x20) >> 4
+        | (value & 0x40) >> 6
 }
 
 impl Mapper for JyAsic {
@@ -10948,48 +11141,44 @@ impl Mapper for JyAsic {
                 let index = usize::from(address - 0x6000) % self.prg_ram.len();
                 self.prg_ram[index] = value;
             }
-            0x8000..=0x87FF if address & 0x800 == 0 => {
-                self.prg_banks[usize::from(address & 0x03)] = value;
+            0x8000..=0x8007 => {
+                // 7-bit bank numbers; $8004-$8007 alias $8000-$8003.
+                self.prg_banks[usize::from(address & 0x03)] = value & 0x7F;
             }
-            0x9000..=0xA7FF if address & 0x800 == 0 => {
-                let slot = usize::from(address & 0x07);
-                if address < 0xA000 {
-                    self.chr_low[slot] = value;
+            0x9000..=0x9007 => self.chr_low[usize::from(address & 0x07)] = value,
+            0xA000..=0xA007 => self.chr_high[usize::from(address & 0x07)] = value,
+            0xB000..=0xB003 => self.nt_banks[usize::from(address & 0x03)] = value,
+            0xC000 => {
+                if value & 0x01 != 0 {
+                    self.irq_enable = true;
                 } else {
-                    self.chr_high[slot] = value;
+                    self.irq_enable = false;
+                    self.irq_pending = false;
+                    self.irq_prescaler = 0;
                 }
             }
-            0xB000..=0xB7FF if address & 0x800 == 0 => {
-                self.nt_banks[usize::from(address & 0x03)] = value;
-            }
-            0xC000..=0xC1FF if address & 1 == 0 => {
-                self.irq_enable = value & 0x01 != 0;
+            0xC001 => self.irq_mode = value,
+            0xC002 => {
+                self.irq_enable = false;
                 self.irq_pending = false;
-                self.irq_prescaler = 0;
             }
-            0xC000..=0xC1FF if address & 1 == 1 => self.irq_mode = value,
-            0xD000..=0xD7FF if address & 0x800 == 0 => match address & 0x03 {
-                0 => {
-                    self.mode = value;
-                    self.mirroring = match self.nt_arrange & 0x03 {
-                        0 => Mirroring::Horizontal,
-                        1 => Mirroring::Vertical,
-                        2 => Mirroring::SingleLower,
-                        _ => Mirroring::SingleUpper,
-                    };
-                }
-                1 => {
-                    self.nt_arrange = value;
-                    self.mirroring = match value & 0x03 {
-                        0 => Mirroring::Horizontal,
-                        1 => Mirroring::Vertical,
-                        2 => Mirroring::SingleLower,
-                        _ => Mirroring::SingleUpper,
-                    };
-                }
-                2 => self.ppu_conf = value,
-                _ => self.outer = value,
-            },
+            0xC003 => self.irq_enable = true,
+            0xD000 => self.mode = value,
+            0xD001 => {
+                self.nt_arrange = value & 0x03;
+                // The ASIC's MM encoding: 0 = vertical, 1 = horizontal.
+                self.mirroring = match value & 0x03 {
+                    0 => Mirroring::Vertical,
+                    1 => Mirroring::Horizontal,
+                    2 => Mirroring::SingleLower,
+                    _ => Mirroring::SingleUpper,
+                };
+            }
+            0xD002 => self.ppu_conf = value,
+            0xD003 => {
+                self.outer = value;
+                self.chr_block_mode = value & 0x20 == 0;
+            }
             _ => {}
         }
     }
@@ -11001,7 +11190,7 @@ impl Mapper for JyAsic {
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
-        if self.ppu_conf & 0x01 == 0 {
+        if !self.chr_is_ram {
             return;
         }
         let banks = self.chr_bank_count();
@@ -11017,7 +11206,7 @@ impl Mapper for JyAsic {
     }
 
     fn number(&self) -> u16 {
-        90
+        self.number
     }
 
     fn prg_ram(&self) -> &[u8] {
@@ -18688,6 +18877,91 @@ mod tests {
             2,
             "$C000 = bank 1 of the 32 KiB pair"
         );
+    }
+
+    #[test]
+    fn ga23c_45_outer_registers_gate_prg() {
+        // 256 KiB PRG (32 x 8 KiB), CHR-RAM.
+        let rom = synth_banked(45, 256, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 45);
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), 3);
+        // Rotating outer registers: r0=1, r1=5, r2=$0F, r3=$40 (lock).
+        cart.cpu_write(0x6000, 1);
+        cart.cpu_write(0x6000, 5);
+        cart.cpu_write(0x6000, 0x0F);
+        cart.cpu_write(0x6000, 0x40);
+        // PRG = (raw & !r3) | r1 = (3 & $3F) | 5 = 7.
+        assert_eq!(cart.cpu_read(0x8000), 7);
+        // Locked: further writes leave the registers alone.
+        cart.cpu_write(0x6000, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 7);
+        // $6001 resets the register file.
+        cart.cpu_write(0x6001, 0);
+        assert_eq!(cart.cpu_read(0x8000), 3);
+        // CHR-RAM is unbanked on this board.
+        cart.ppu_write(0x1000, 0x5A);
+        assert_eq!(cart.ppu_read(0x1000), 0x5A);
+    }
+
+    #[test]
+    fn action53_28_prg_modes_and_32k_chr_ram() {
+        // 256 KiB PRG (16 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(28, 256, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 28);
+        // Power-on: mode 0 / outer $FF -> the last 32 KiB (markers 28 and 30).
+        assert_eq!(cart.cpu_read(0x8000), 28);
+        assert_eq!(cart.cpu_read(0xC000), 30);
+        // Outer 0, inner 3, UNROM #180 (mode 2): $8000 fixed to bank 0,
+        // $C000 = inner | 1 = bank 1 (markers 0 and 2).
+        cart.cpu_write(0x5000, 0x81);
+        cart.cpu_write(0x8000, 0x00);
+        cart.cpu_write(0x5000, 0x01);
+        cart.cpu_write(0x8000, 0x03);
+        cart.cpu_write(0x5000, 0x80);
+        cart.cpu_write(0x8000, 0x0A);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+        // Mode 2 selects vertical mirroring.
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        // CHR-RAM bank 2 is addressable through $8000 (supervisor register 0).
+        cart.cpu_write(0x5000, 0x00);
+        cart.cpu_write(0x8000, 0x02);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+        cart.cpu_write(0x8000, 0x00);
+        assert_ne!(cart.ppu_read(0x0000), 0x5A);
+    }
+
+    #[test]
+    fn jy_asic_90_prg_and_chr_block_modes() {
+        // 512 KiB PRG (64 x 8 KiB), 256 KiB CHR (256 x 1 KiB).
+        let rom = synth_banked(90, 512, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 90);
+        // $D000 mode 2 (8 KiB), last window fixed; $8003 selects $E000.
+        cart.cpu_write(0xD000, 0x02);
+        cart.cpu_write(0x8000, 5);
+        cart.cpu_write(0x8001, 6);
+        cart.cpu_write(0x8002, 7);
+        assert_eq!(cart.cpu_read(0x8000), 5);
+        assert_eq!(cart.cpu_read(0xA000), 6);
+        assert_eq!(cart.cpu_read(0xC000), 7);
+        assert_eq!(cart.cpu_read(0xE000), 63);
+        // $D001 mode 1 is horizontal mirroring on this ASIC.
+        cart.cpu_write(0xD001, 0x01);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0xD001, 0x00);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        // CHR block mode ($D003 bit 5 clear): block bits supply A18+.
+        cart.cpu_write(0xD000, 0x18); // CHR mode 3: one register per 1 KiB.
+        cart.cpu_write(0x9000, 0x03);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 3, "1 KiB CHR bank 3");
+        cart.cpu_write(0x9001, 0x05);
+        assert_eq!(cart.ppu_read(0x0400), 0x80 | 5, "slot 1 uses register 1");
     }
 
     #[test]
