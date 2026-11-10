@@ -898,6 +898,16 @@ the dots 1-64 clear phase, which provides the seed.
   last dots therefore needs the reference's master-clock bus for frame
   detection, not another split tweak; that is a dedicated port, not a bounded
   change.
+- Two faithful local ports of the reference's arming were implemented and
+  measured, and both were rejected. Moving the odd-frame skip wrap from dot
+  340 to the reference's dot 339 left every SMB/SMB3 hash unchanged (inert).
+  Porting the reference's read/write master-clock split (5/7 for reads = one
+  PPU dot before the access, 7/5 for writes = two before) was also inert for
+  SMB and SMB3 but regressed Zelda video from 598/600 to 38/600 same-index
+  (best shift -1 -> 588/600). Both were reverted. The remaining difference is
+  therefore in the reference's master-clock bus/frame-complete plumbing
+  (`master_clock`/`ppu_clock`, DMA and interrupt ordering), not in the dot
+  split or the skip position.
 - A per-instruction `(pc, cycle)` comparison against the reference capture
   finally rules out CPU bus/IRQ timing as the frame-39 cause. Over the window
   around the seeding `$4007` write (cycle ~1,154,2xx) the PC streams are
