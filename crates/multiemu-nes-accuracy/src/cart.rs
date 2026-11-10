@@ -5825,6 +5825,8 @@ pub struct Mmc3 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
+    /// The board mounts CHR-RAM (the 8 KiB buffer the PPU owns).
+    chr_is_ram: bool,
     mapper: u16,
     txsrom: bool,
     remap_a0: bool,
@@ -5875,6 +5877,7 @@ impl Mmc3 {
             prg,
             chr,
             prg_ram: vec![0; header.prg_ram_size.max(0x2000)],
+            chr_is_ram: header.chr_size == 0,
             mapper,
             txsrom: false,
             remap_a0: false,
@@ -6069,6 +6072,23 @@ impl Mapper for Mmc3 {
         if self.irq_counter == 0 && self.irq_enabled {
             self.irq_pending = true;
         }
+    }
+
+    fn chr_ram_map(&self) -> Option<[u8; 8]> {
+        // CHR-RAM boards bank 1 KiB pattern slots through the MMC3 registers;
+        // the PPU owns the 8 KiB buffer, so it needs the resolved map.
+        if !self.chr_is_ram || self.hybrid.is_some() || self.chr.len() != 0x2000 {
+            return None;
+        }
+        let mut map = [0u8; 8];
+        for (slot, entry) in map.iter_mut().enumerate() {
+            *entry = (self.chr_bank(slot) & 0x07) as u8;
+        }
+        Some(map)
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address)
     }
 }
 
@@ -19778,6 +19798,25 @@ mod tests {
         cart.cpu_write(0x4800, 0x21);
         assert_eq!(cart.cpu_read(0x8000), 8);
         assert_eq!(cart.ppu_read(0x0000), 0x88);
+    }
+
+    #[test]
+    fn mmc3_chr_ram_map_follows_the_bank_registers() {
+        // 128 KiB PRG, CHR-RAM: mapper 4.
+        let rom = synth_banked(4, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 4);
+        // Power-on: the two 2 KiB pairs select 1 KiB banks 0/1 each, and the
+        // four single-slot registers are zero.
+        assert_eq!(cart.chr_ram_map(), Some([0, 1, 0, 1, 0, 0, 0, 0]));
+        cart.cpu_write(0x8000, 0x00);
+        cart.cpu_write(0x8001, 0x04); // R0 -> slots 0/1 = 4/5.
+        cart.cpu_write(0x8000, 0x02);
+        cart.cpu_write(0x8001, 0x06); // R2 -> slot 4 = 6.
+        assert_eq!(cart.chr_ram_map(), Some([4, 5, 0, 1, 6, 0, 0, 0]));
+        // 4 KiB mode: R2-R5 fill the first four slots and R0/R1 the pairs.
+        cart.cpu_write(0x8000, 0x80);
+        assert_eq!(cart.chr_ram_map(), Some([6, 0, 0, 0, 4, 5, 0, 1]));
     }
 
     #[test]
