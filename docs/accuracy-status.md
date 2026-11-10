@@ -999,6 +999,9 @@ the dots 1-64 clear phase, which provides the seed.
   fixed-first/switchable-second layout) **97.9%** over 2; and the later
   **Kaiser** boards **305/306/312** (2 KiB windows, address-decoded 8 KiB
   window, switchable 16 KiB half) **99.2/98.3/98.3%** over 2 images each.
+  **37** (SMB + Tetris + NWC) is an MMC3 plus a 74HC161 register whose three
+  bits feed the NAND equations for PRG A16/A17 and CHR A17: **98.3%** video
+  over 2 images.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
