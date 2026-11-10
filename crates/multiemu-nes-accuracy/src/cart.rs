@@ -755,6 +755,7 @@ impl Cartridge {
             246 => Box::new(FongShenBang::new(prg_rom, chr, header)),
             250 => Box::new(Nitra250::new(prg_rom, chr, header)),
             263 => Box::new(Mmc3_263::new(prg_rom, chr, header)),
+            264 => Box::new(Yoko264::new(prg_rom, chr, header)),
             140 => Box::new(Jaleco140::new(prg_rom, chr, header)),
             147 => Box::new(Sachen147::new(prg_rom, chr, header)),
             149 => Box::new(Sachen149::new(prg_rom, chr, header)),
@@ -4248,6 +4249,188 @@ impl Mapper for Unl117 {
                 self.irq_pending = true;
                 self.irq_alt = false;
             }
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// Yoko (mapper 264): PRG/CHR paging modes selected by `$8400`, DIP/extra
+/// registers in `$5000-$5FFF`, and a CPU-cycle down-counter.
+#[derive(Debug)]
+pub struct Yoko264 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    regs: [u8; 7],
+    ex: [u8; 4],
+    mode: u8,
+    bank: u8,
+    mirroring: Mirroring,
+    irq_counter: u16,
+    irq_enabled: bool,
+    irq_pending: bool,
+}
+
+impl Yoko264 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            regs: [0; 7],
+            ex: [0; 4],
+            mode: 0,
+            bank: 0,
+            mirroring: header.mirroring,
+            irq_counter: 0,
+            irq_enabled: false,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let page = if self.mode & 0x10 != 0 {
+            let outer = usize::from(self.bank & 0x08) << 1;
+            if slot == 3 {
+                outer | 0x0F
+            } else {
+                outer | usize::from(self.regs[slot] & 0x0F)
+            }
+        } else if self.mode & 0x08 != 0 {
+            (usize::from(self.bank & 0xFE) << 1) + slot
+        } else if slot < 2 {
+            (usize::from(self.bank) << 1) + slot
+        } else {
+            banks.saturating_sub(2) + (slot - 2)
+        };
+        page % banks
+    }
+}
+
+impl Mapper for Yoko264 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot) % banks;
+        self.prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0x5000..=0x5FFF).contains(&address) {
+            if address <= 0x53FF {
+                // Two DIP switches, both off by default.
+                return 0;
+            }
+            return self.ex[usize::from(address & 0x03)];
+        }
+        self.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address < 0x5000 {
+            return;
+        }
+        if address < 0x8000 {
+            self.ex[usize::from(address & 0x03)] = value;
+            return;
+        }
+        match address & 0x8C17 {
+            0x8000 => {
+                self.bank = value;
+                self.mirroring = if self.mode & 0x01 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+            0x8400 => {
+                self.mode = value;
+                self.mirroring = if self.mode & 0x01 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+            0x8800 => {
+                self.irq_counter = (self.irq_counter & 0xFF00) | u16::from(value);
+                self.irq_pending = false;
+            }
+            0x8801 => {
+                self.irq_enabled = self.mode & 0x80 != 0;
+                self.irq_counter = (self.irq_counter & 0x00FF) | (u16::from(value) << 8);
+            }
+            0x8C00..=0x8C02 => {
+                self.regs[usize::from((address & 0x8C17) - 0x8C00)] = value;
+            }
+            0x8C10 | 0x8C11 => {
+                self.regs[usize::from((address & 0x8C17) - 0x8C10) + 3] = value;
+            }
+            0x8C16 | 0x8C17 => {
+                self.regs[usize::from((address & 0x8C17) - 0x8C16) + 5] = value;
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x800).max(1);
+        let slot = usize::from((address >> 11) & 0x03);
+        let bank = usize::from(self.regs[slot + 3]) % banks;
+        self.chr
+            .get(bank * 0x800 + usize::from(address & 0x7FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x800).max(1);
+        let slot = usize::from((address >> 11) & 0x03);
+        let bank = usize::from(self.regs[slot + 3]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x800 + usize::from(address & 0x7FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        264
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        matches!(address & 0x8C17, 0x8C10 | 0x8C11 | 0x8C16 | 0x8C17)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if !self.irq_enabled {
+            return;
+        }
+        self.irq_counter = self.irq_counter.wrapping_sub(1);
+        if self.irq_counter == 0 {
+            self.irq_enabled = false;
+            self.irq_counter = 0xFFFF;
+            self.irq_pending = true;
         }
     }
 
@@ -18781,6 +18964,27 @@ mod tests {
         cart.cpu_write(0x8000, 0x00);
         cart.cpu_write(0x8001, 0x03);
         assert_eq!(cart.ppu_read(0x0000), 0x84);
+    }
+
+    #[test]
+    fn yoko_264_paging_and_io_window() {
+        // 512 KiB PRG (64 x 8 KiB), 64 KiB CHR (32 x 2 KiB).
+        let rom = synth_banked(264, 512, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 264);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xE000), 63);
+        // The $5000 window must not swallow the reset vectors.
+        assert_eq!(cart.cpu_read_io(0xFFFC), cart.cpu_read(0xFFFC));
+        assert_eq!(cart.cpu_read_io(0x5000), 0);
+
+        // Mode $10: four independent PRG registers.
+        cart.cpu_write(0x8400, 0x10);
+        cart.cpu_write(0x8C00, 2);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+        // CHR slot 0 comes from register 3.
+        cart.cpu_write(0x8C10, 3);
+        assert_eq!(cart.ppu_read(0x0000), 0x86);
     }
 
     #[test]
