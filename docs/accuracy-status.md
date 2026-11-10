@@ -897,6 +897,23 @@ the dots 1-64 clear phase, which provides the seed.
   The additional fidelity of the master-clock model does not translate into
   better oracle agreement here, so it was reverted rather than shipped as a
   regression.
+- Same-frame framebuffer diffs at frames 11/30/60/90/100/120/150/180/200/220/
+  250/280 classify the remaining video gaps:
+  - **SMB3** — most frames differ by exactly **8 pixels at (x0-7, y194)**, one
+    scanline of the first background column. The nametable/attribute VRAM is
+    byte-identical to the reference and OAM holds no sprite in rows 185-205, so
+    it is a first-column background-prefetch artefact on a split/CHR-boundary
+    line, not sprite-0 or phase. Because it touches every such frame, it is what
+    holds SMB3 at 70/300 despite otherwise-identical frames (at frames 180 the
+    frame is bit-identical; at 60/200/299 only these 8 pixels differ).
+  - **CV3** — 3 white pixels at (31,0), (223,0), (31,1) from frame ~150 onward,
+    the top corners of the playfield/status region; also a background artefact,
+    not phase. CV3 is otherwise frame-identical (188/300 comes mostly from the
+    one-frame game-logic phase, where our frame N matches the reference N+1).
+  - **MSG** — now pixel-identical after the MMC5 CHR-mode fix.
+  An MMC3 IRQ-clock-dot sweep (256-264) leaves SMB3's 8-pixel artefact
+  unchanged, so it is not the scanline-IRQ split timing; it needs a background
+  prefetch/shift-register trace at the split line.
 - MMC5 CHR banking now follows the documented region-top register decoding:
   mode 0 (8 KiB) uses `$5127`, mode 1 (4 KiB) uses `$5123`/`$5127`, mode 2
   (2 KiB) uses `$5121`/`$5123`/`$5125`/`$5127` with the low bits ignored, and
