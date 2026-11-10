@@ -13103,16 +13103,17 @@ impl Mmc3_115 {
 
     fn prg_bank(&self, address: u16) -> usize {
         let banks = (self.prg.len() / 0x2000).max(1);
-        if self.mode & 0x40 != 0 {
-            let mut bank16 =
-                (usize::from(self.mode & 0x0F)) | (usize::from((self.mode >> 5) & 0x01) << 4);
-            if self.mode & 0x10 != 0 {
-                bank16 = (bank16 & 0x0E) | usize::from((address >> 14) & 1);
-                return ((bank16 * 2) + usize::from((address >> 13) & 1)) % banks;
-            }
-            return ((bank16 * 2) + usize::from((address >> 13) & 1)) % banks;
-        }
         let slot = usize::from((address - 0x8000) / 0x2000);
+        // Kasheng SFC clone: bit 7 enables the outer override, bit 5 selects
+        // the 32 KiB-consecutive vs mirrored 16 KiB layout.
+        if self.mode & 0x80 != 0 {
+            let bank = if self.mode & 0x20 != 0 {
+                (usize::from(self.mode & 0x0F) >> 1) * 4 + slot
+            } else {
+                usize::from(self.mode & 0x0F) * 2 + (slot & 0x01)
+            };
+            return bank % banks;
+        }
         let mmc3_mode = self.select & 0x40;
         let last = banks - 1;
         let second_last = banks.saturating_sub(2);
@@ -13126,7 +13127,7 @@ impl Mmc3_115 {
             (_, 2) => usize::from(self.bank_data[6]),
             (_, _) => last,
         };
-        (raw | (usize::from((self.mode >> 5) & 0x01) << 5)) % banks
+        raw % banks
     }
 
     fn chr_bank(&self, slot: usize) -> usize {
@@ -13167,11 +13168,34 @@ impl Mapper for Mmc3_115 {
         }
     }
 
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0x5000..=0x5FFF).contains(&address) {
+            // Protection read-back register.
+            self.chr_outer
+        } else {
+            self.prg_read(address)
+        }
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
+    }
+
     fn prg_write(&mut self, address: u16, value: u8) {
+        if address == 0x5080 {
+            self.chr_outer = value;
+            return;
+        }
+        if (0x4100..=0x7FFF).contains(&address) {
+            // Address-decoded outer registers (data byte used for the value).
+            if address & 1 == 0 {
+                self.mode = value;
+            } else {
+                self.chr_outer = value;
+            }
+            return;
+        }
         match address & 0xE003 {
-            0x6000 => self.mode = value,
-            0x6001 => self.chr_outer = value & 0x01,
-            0x6002 => {}
             0x8000 => self.select = value,
             0x8001 => {
                 let index = usize::from(self.select & 0x07);
@@ -18783,13 +18807,14 @@ mod tests {
         cart.cpu_write(0x8001, 3);
         assert_eq!(cart.cpu_read(0x8000), 3);
         assert_eq!(cart.cpu_read(0xE000), 15);
-        // NROM-128 mode: 16 KiB bank 2 mirrored across the 32 KiB window.
-        cart.cpu_write(0x6000, 0x42);
+        // Outer override (bit 7), mirrored 16 KiB layout: bank pair 4/5.
+        cart.cpu_write(0x6000, 0xC2);
         assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.cpu_read(0xA000), 5);
         assert_eq!(cart.cpu_read(0xC000), 4);
-        // CHR A18 outer bit.
+        // The odd outer register is the CHR-high/protection byte.
         cart.cpu_write(0x6001, 1);
-        assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.cpu_read_io(0x5000), 1);
     }
 
     #[test]
@@ -19204,6 +19229,26 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
         cart.cpu_write(0x6000, 0x5A);
         assert_eq!(cart.cpu_read(0x6000), 0x5A);
+    }
+
+    #[test]
+    fn kasheng115_outer_override_and_readback() {
+        // 512 KiB PRG (64 x 8 KiB), 256 KiB CHR (256 x 1 KiB).
+        let rom = synth_banked(115, 512, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 115);
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), 3, "plain MMC3 path first");
+        // Outer override: bit 7 set, 16 KiB mirrored layout ($4100 even).
+        cart.cpu_write(0x4100, 0x81);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+        assert_eq!(cart.cpu_read(0xA000), 3);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+        assert_eq!(cart.cpu_read(0xE000), 3);
+        // Protection read-back at $5000-$5FFF returns the odd register.
+        cart.cpu_write(0x4101, 0x55);
+        assert_eq!(cart.cpu_read_io(0x5000), 0x55);
     }
 
     #[test]
