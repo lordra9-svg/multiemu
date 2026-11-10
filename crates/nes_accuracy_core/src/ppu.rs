@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::cart::{HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr};
+use crate::cart::{Chr512, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr};
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -129,6 +129,8 @@ pub struct Ppu {
     vrc7_chr: Option<Rc<RefCell<Vrc7Chr>>>,
     /// Shared Oeka Kids CHR state (mapper 96).
     oeka_chr: Option<Rc<RefCell<OekaChr>>>,
+    /// Shared CHR state for mapper 512.
+    chr512: Option<Rc<RefCell<Chr512>>>,
     /// Extended-attribute byte for the tile currently being fetched (MMC5
     /// mode 1).
     ext_attr: Option<u8>,
@@ -305,6 +307,7 @@ impl Ppu {
             n163_nt: None,
             vrc7_chr: None,
             oeka_chr: None,
+            chr512: None,
             ext_attr: None,
             nt_rom: Vec::new(),
             nt_banks: None,
@@ -410,6 +413,11 @@ impl Ppu {
         self.oeka_chr = Some(chr);
     }
 
+    /// Installs the mapper-512 shared CHR state.
+    pub fn set_chr512(&mut self, chr: Rc<RefCell<Chr512>>) {
+        self.chr512 = Some(chr);
+    }
+
     /// Installs the full CHR ROM used for ROM nametables.
     pub fn set_rom_nametable_rom(&mut self, rom: Vec<u8>) {
         self.nt_rom = rom;
@@ -513,6 +521,9 @@ impl Ppu {
 
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.chr512 {
+            return aux.borrow().read(address);
+        }
         if let Some(aux) = &self.oeka_chr {
             let mut aux = aux.borrow_mut();
             aux.note_address(address);
@@ -1033,6 +1044,11 @@ impl Ppu {
     }
 
     fn read_nametable(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.chr512 {
+            if let Some(value) = aux.borrow().nametable_read(address) {
+                return value;
+            }
+        }
         // Namespace 19 maps each quadrant to CIRAM or a CHR-ROM page; both
         // live outside the normal mirroring path.
         if let Some(nt) = &self.n163_nt {
@@ -1105,7 +1121,18 @@ impl Ppu {
     }
 
     fn write_vram(&mut self, address: u16, value: u8) {
+        if (0x2000..0x3F00).contains(&address) {
+            if let Some(aux) = &self.chr512 {
+                if aux.borrow_mut().nametable_write(address, value) {
+                    return;
+                }
+            }
+        }
         if address < 0x2000 {
+            if let Some(aux) = &self.chr512 {
+                aux.borrow_mut().write(address, value);
+                return;
+            }
             if let Some(aux) = &self.oeka_chr {
                 aux.borrow_mut().write(address, value);
                 return;

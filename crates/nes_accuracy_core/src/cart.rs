@@ -653,6 +653,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Shared CHR-ROM/RAM state for mapper 512.
+    fn chr512(&self) -> Option<Rc<RefCell<Chr512>>> {
+        None
+    }
+
     /// Inserts an FDS disk side (`Some`) or ejects (`None`). No-op elsewhere.
     fn insert_disk_side(&mut self, _side: Option<usize>) {}
 
@@ -918,6 +923,7 @@ impl Cartridge {
             312 => Box::new(KaiserMisc::new(prg_rom, chr, header, 312)),
             313 => Box::new(Mmc3_313::new(prg_rom, chr, header)),
             519 => Box::new(Eh8813A::new(prg_rom, chr, header)),
+            512 => Box::new(Si512::new(prg_rom, chr, header)),
             513 => Box::new(Sachen9602::new(prg_rom, chr, header)),
             533 => Box::new(Sachen3014::new(prg_rom, chr, header)),
             534 => Box::new(Mmc3_534::new(prg_rom, chr, header)),
@@ -1142,6 +1148,12 @@ impl Cartridge {
     #[must_use]
     pub fn oeka_chr(&self) -> Option<Rc<RefCell<OekaChr>>> {
         self.mapper.oeka_chr()
+    }
+
+    /// Shared CHR state for mapper 512.
+    #[must_use]
+    pub fn chr512(&self) -> Option<Rc<RefCell<Chr512>>> {
+        self.mapper.chr512()
     }
 
     /// Inserts an FDS disk side (`Some`) or ejects (`None`).
@@ -3824,6 +3836,88 @@ impl Mapper for Sachen3014 {
     }
 }
 
+/// Mapper 512 (Zhongguo Daheng): an MMC3 clone with switchable CHR-ROM /
+/// CHR-RAM and a battery-backed WRAM window.
+#[derive(Debug)]
+pub struct Si512 {
+    inner: Mmc3,
+    aux: Rc<RefCell<Chr512>>,
+    mode: u8,
+}
+
+impl Si512 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        let aux = Rc::new(RefCell::new(Chr512::new(chr.clone())));
+        let inner = Mmc3::new_as(prg, chr, header, 512);
+        let this = Self {
+            inner,
+            aux,
+            mode: 0,
+        };
+        this.refresh_chr();
+        this
+    }
+
+    fn refresh_chr(&self) {
+        let mut banks = [0u8; 8];
+        for (slot, bank) in banks.iter_mut().enumerate() {
+            *bank = self.inner.chr_bank(slot) as u8;
+        }
+        self.aux.borrow_mut().set_banks(banks);
+    }
+}
+
+impl Mapper for Si512 {
+    fn prg_read(&self, address: u16) -> u8 {
+        self.inner.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address == 0x4100 {
+            self.mode = value & 0x03;
+            self.aux.borrow_mut().ram_mode = self.mode >= 2;
+            self.aux.borrow_mut().vram_mode = self.mode == 1;
+            return;
+        }
+        self.inner.prg_write(address, value);
+        if address & 0xE001 == 0xA001 {
+            // This clone does not allow WRAM to be disabled.
+            self.inner.ram_enabled = true;
+        }
+        if (0x8000..=0x9FFF).contains(&address) {
+            self.refresh_chr();
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.aux.borrow().read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.aux.borrow_mut().write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        512
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address) || address == 0x4100
+    }
+
+    fn chr512(&self) -> Option<Rc<RefCell<Chr512>>> {
+        Some(self.aux.clone())
+    }
+}
+
 /// TEC9719 / ING-022 multicarts (mapper 534): an MMC3 core with four outer
 /// registers in the WRAM window and an inverted IRQ latch.
 #[derive(Debug)]
@@ -4710,6 +4804,75 @@ impl Mapper for Cufrom29 {
 
     fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
         self.chr_aux.clone()
+    }
+}
+
+/// Shared CHR state for mapper 512: 128 KiB CHR-ROM plus a switchable 8 KiB
+/// CHR-RAM window used by the Chinese-character mode.
+#[derive(Debug)]
+pub struct Chr512 {
+    rom: Vec<u8>,
+    ram: Vec<u8>,
+    ram_mode: bool,
+    vram_mode: bool,
+    vram: [u8; 0x1000],
+    banks: [u8; 8],
+}
+
+impl Chr512 {
+    fn new(rom: Vec<u8>) -> Self {
+        Self {
+            rom,
+            ram: vec![0; 0x2000],
+            ram_mode: false,
+            vram_mode: false,
+            vram: [0; 0x1000],
+            banks: [0; 8],
+        }
+    }
+
+    fn set_banks(&mut self, banks: [u8; 8]) {
+        self.banks = banks;
+    }
+
+    pub(crate) fn read(&self, address: u16) -> u8 {
+        if self.ram_mode {
+            return self
+                .ram
+                .get(usize::from(address & 0x1FFF))
+                .copied()
+                .unwrap_or(0);
+        }
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.rom.len() / 0x400).max(1);
+        let bank = usize::from(self.banks[slot]) % banks;
+        self.rom
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn write(&mut self, address: u16, value: u8) {
+        if !self.ram_mode {
+            return;
+        }
+        if let Some(byte) = self.ram.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    pub(crate) fn nametable_read(&self, address: u16) -> Option<u8> {
+        self.vram_mode
+            .then(|| self.vram[usize::from(address & 0x0FFF)])
+    }
+
+    pub(crate) fn nametable_write(&mut self, address: u16, value: u8) -> bool {
+        if self.vram_mode {
+            self.vram[usize::from(address & 0x0FFF)] = value;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -22768,6 +22931,22 @@ mod tests {
             cart.set_cpu_cycle(100 + bit * 2);
             cart.cpu_write(base, (value >> bit) & 1);
         }
+    }
+
+    #[test]
+    fn mapper_512_chr_rom_ram_modes() {
+        // 256 KiB PRG, 128 KiB CHR.
+        let rom = synth_banked(512, 256, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 512);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        cart.cpu_write(0x4100, 2);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+        cart.cpu_write(0x4100, 0);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        cart.cpu_write(0x6000, 0x42);
+        assert_eq!(cart.cpu_read(0x6000), 0x42);
     }
 
     #[test]
