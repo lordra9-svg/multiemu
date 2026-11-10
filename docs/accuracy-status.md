@@ -876,13 +876,15 @@ the dots 1-64 clear phase, which provides the seed.
   test.
 - Differential parity re-measured at 600 frames on *Super Mario Bros.* (NROM):
   **599/600 identical video hashes and 504/600 identical audio hashes**
-  against the RustyNES capture (`trace --no-state`). The nonlinear mixer
-  tables (95.52/8128 pulse, 163.67/24329 `3*tri+2*noise+dmc`) and the
-  90 Hz/440 Hz high-pass plus 14 kHz low-pass chain match the reference
-  formulas bit-for-bit; the residual audio hashes follow the same
-  one-cycle frame-boundary offset described above. DMC cycle stealing stays
-  pinned by `dmc_dma_stealing_matches_the_reference_benchmark` (10,126
-  stolen loop iterations over 300 frames).
+  against the RustyNES capture (`trace --no-state`, summarized by the new
+  `multiemu parity` command). *The Legend of Zelda* (MMC1, 600 frames) gives
+  598/600 video but 28/600 audio: its continuously playing music makes the
+  per-frame sample hash sensitive to the residual drain-point phase, while
+  SMB's sparser track tolerates it. The nonlinear mixer tables (95.52/8128
+  pulse, 163.67/24329 `3*tri+2*noise+dmc`) and the 90 Hz/440 Hz high-pass plus
+  14 kHz low-pass chain match the reference formulas bit-for-bit. DMC cycle
+  stealing stays pinned by `dmc_dma_stealing_matches_the_reference_benchmark`
+  (10,126 stolen loop iterations over 300 frames).
 - A per-instruction `(pc, cycle)` comparison against the reference capture
   finally rules out CPU bus/IRQ timing as the frame-39 cause. Over the window
   around the seeding `$4007` write (cycle ~1,154,2xx) the PC streams are

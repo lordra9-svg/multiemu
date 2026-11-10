@@ -168,6 +168,14 @@ Current local result with the canonical 2C02 palette:
 | Commercial NROM title (300 frames) | 297/300 |
 | *Super Mario Bros.* NROM (600 frames) | video 599/600, audio 504/600 |
 | *Super Mario Bros. 3* MMC3 (300 frames) | video 70/300, audio 228/300 (best audio shift −4: 259/300) |
+| *The Legend of Zelda* MMC1 (600 frames) | video 598/600, audio 28/600 |
+
+The Zelda figure is the clearest illustration of the residual limitation: the
+video track matches almost exactly, while the continuously playing music makes
+each frame's audio hash sensitive to where the 44.1 kHz drain lands. SMB's
+sparser track tolerates the same sub-cycle phase difference far better, so the
+audio number is a property of the drain-point alignment, not of a channel
+implementation defect.
 
 Two PPU defects were found and fixed with this harness:
 

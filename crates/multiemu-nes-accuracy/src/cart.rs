@@ -744,6 +744,7 @@ impl Cartridge {
             67 => Box::new(Sunsoft3::new(prg_rom, chr, header)),
             72 => Box::new(Jaleco72::new(prg_rom, chr, header)),
             78 => Box::new(Irem78::new(prg_rom, chr, header)),
+            57 => Box::new(Bmc57::new(prg_rom, chr, header)),
             68 => Box::new(Sunsoft4::new(prg_rom, chr, prg_ram, header)),
             70 => Box::new(Bandai70::new(prg_rom, chr, header)),
             93 => Box::new(Sunsoft3r::new(prg_rom, chr, header)),
@@ -5068,6 +5069,88 @@ impl Mapper for Eh8813A {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         address >= 0x8000 && address & 0x0100 == 0
+    }
+}
+
+/// BMC GK 6-in-1 (mapper 57): two address-decoded registers select a
+/// 16/32 KiB PRG window and an 8 KiB CHR bank.
+#[derive(Debug)]
+pub struct Bmc57 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    reg0: u8,
+    reg1: u8,
+    mirroring: Mirroring,
+}
+
+impl Bmc57 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            reg0: 0,
+            reg1: 0,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Bmc57 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let len = self.prg.len().max(1);
+        let index = if self.reg1 & 0x10 != 0 {
+            let bank = usize::from((self.reg1 >> 5) & 0x06) >> 1;
+            bank * 0x8000 + usize::from(address & 0x7FFF)
+        } else {
+            let bank = usize::from((self.reg1 >> 5) & 0x07);
+            bank * 0x4000 + usize::from(address & 0x3FFF)
+        };
+        self.prg.get(index % len).copied().unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0x8800 {
+            0x8000 => self.reg0 = value,
+            0x8800 => self.reg1 = value,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank =
+            usize::from((self.reg0 & 0x40) >> 3) | usize::from((self.reg0 | self.reg1) & 0x07);
+        self.chr
+            .get(bank % banks * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank =
+            usize::from((self.reg0 & 0x40) >> 3) | usize::from((self.reg0 | self.reg1) & 0x07);
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank % banks * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        57
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0xFFFF).contains(&address)
     }
 }
 
@@ -19741,6 +19824,23 @@ mod tests {
         // Bit 8 of the address disables the register decode.
         cart.cpu_write(0x8100, 6);
         assert_eq!(cart.cpu_read(0x8000), 0);
+    }
+
+    #[test]
+    fn bmc_57_prg_window_and_chr_bank() {
+        // 64 KiB PRG (4 x 16 KiB / 2 x 32 KiB), 128 KiB CHR (16 x 8 KiB).
+        let rom = synth_banked(57, 64, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 57);
+        // 16 KiB mode mirrors the selected bank in both halves.
+        cart.cpu_write(0x8800, 0x20);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+        // Bit 4 switches to a 32 KiB bank.
+        cart.cpu_write(0x8800, 0x50);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        cart.cpu_write(0x8000, 0x40);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 64);
     }
 
     #[test]

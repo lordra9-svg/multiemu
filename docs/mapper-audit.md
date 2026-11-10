@@ -152,8 +152,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   600 frames.
 - **Mapper completion sweep (27, 40, 65, 67, 70, 72, 74, 78, 93, 107, 117,
   119, 123, 133, 140, 147, 149, 157, 168, 180, 187, 191, 192, 194, 198,
-  225, 228, 244, 245, 246, 250, 263, 264, 303, 313, 332, 552)** — 37 boards
-  added against the RustyNES and Mesen2 references:
+  225, 228, 244, 245, 246, 250, 263, 264, 303, 313, 332, 519, 529, 552)** —
+  39 boards added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
   discrete boards add CPU-cycle IRQs; the Sachen 3009/3018 and JV001 latches
@@ -162,9 +162,12 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   window; and the MMC3 clones (123, 187, 198, 245) override PRG/CHR mapping
   while delegating the IRQ. The later additions cover VRC4/27, the
   Irem/Sunsoft/Jaleco discrete boards (65/67/72/78), UNL-117, the Racermate
-  periodic IRQ, the KOF '97 value scramble (263), the Yoko paging modes (264)
-  the Super 40-in-1 WS latch (332), the Taito X1-017 (552) and the
-  reset-advancing TXROM multicart (313). Differential results: 246 and 228 are
+  periodic IRQ, the KOF '97 value scramble (263), the Yoko paging modes (264),
+  the Super 40-in-1 WS latch (332), the Taito X1-017 (552), the reset-advancing
+  TXROM multicart (313), the Eh8813A (519) and the T230 VRC-like board (529).
+  The two Dragon Ball Z Gaiden (529) images poll an undocumented `$5000`
+  protection port and remain blank at the title; the other T230 images render.
+  Differential results: 246 and 228 are
   pixel-identical to the oracle on sampled frames, 70/74/119/133/140/147/149/
   180/187/191/192/194/225/245/250 match 113-119/120, and 93/107 match exactly
   once the known frame-origin drift is accounted for. 123 and 187 follow the
