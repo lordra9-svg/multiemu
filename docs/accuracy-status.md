@@ -301,12 +301,13 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,627 loaded (93.3%), 3,554 rendering (50.0%), 3,073 blank (43.3%), 446
-unsupported (6.3%) and 28 load/run failures (0.39%). The batched totals
-reproduce the single-pass numbers exactly. Top unsupported family is now
-157 (Datach) at 7 images, then a six-image tail (156/164/168/199/216/222/234/
-249/253/27/60/85/303). See `docs/mapper-audit.md` for the per-mapper table,
-ranked gaps and the tail triage.
+6,834 loaded (96.2%), 3,709 rendering (52.2%), 3,125 blank (44.0%), 239
+unsupported (3.4%) and 28 load/run failures (0.39%). The batched totals
+reproduce the single-pass numbers exactly. The remaining 80 unsupported IDs
+are led by 256/515/551 (5 images each) and 355/446/519/529/547/57/594
+(4 each); Datach (157) and the former six-image tail are now implemented.
+See `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
+tail triage.
 
 Since the previous audit, Sunsoft-4 (68) and the VRC2/VRC4 rewrite
 (21/22/23/25) landed and the mapper-173 16 KiB-PRG panic was fixed. Sunsoft-4
