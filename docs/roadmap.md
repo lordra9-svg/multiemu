@@ -32,8 +32,8 @@ The main effort is now the reference-parity accuracy core. Details in
       PRG-RAM, the MMC2/MMC3 hybrid (165), Super Mega JV001 (172), NTDEC
       TC-112 (193), full PPU mirroring modes, the 143
       protected NROM and the 212/235/286 multicarts, `System` bus, Core ABI
-      adapter and a `corpus` runner. Full-library audit: 6,991/7,101 load,
-      3,791 rendering, 82 unsupported, 0 panics; 136/193/197 render 7/7,
+      adapter and a `corpus` runner. Full-library audit: 6,993/7,101 load,
+      3,793 rendering, 80 unsupported, 0 panics; 136/193/197 render 7/7,
       159/165 8/8, 172 4/6, 195 8/8 (Tiexue needs Start on its title screen)
       (`docs/mapper-audit.md`).
       FDS wavetable/modulation audio is implemented and unit-tested. The raw
@@ -118,8 +118,8 @@ The main effort is now the reference-parity accuracy core. Details in
       and the AccuracyCoin isolated battery. Pass counts are recorded in
       `docs/accuracy-status.md`; the suites run in `crates/nes_accuracy_core/tests/`.
 - [x] Mapper audit against a licensed ROM library: 7,101 images in four
-      batches, results and ranked gaps in `docs/mapper-audit.md`. 6,991 load,
-      82 unsupported (51 IDs), 28 failures; MMC2/MMC4 followed from it.
+      batches, results and ranked gaps in `docs/mapper-audit.md`. 6,993 load,
+      80 unsupported (49 IDs), 28 failures; MMC2/MMC4 followed from it.
 
 ## M2 — NES depth
 

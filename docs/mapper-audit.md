@@ -26,16 +26,16 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 6,991 | 98.5% |
-| Rendering | 3,791 | 53.4% |
+| Loaded (mapper implemented) | 6,993 | 98.5% |
+| Rendering | 3,793 | 53.4% |
 | Blank | 3,200 | 45.1% |
-| Unsupported mapper | 82 | 1.2% |
+| Unsupported mapper | 80 | 1.1% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 138 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 6,991 (93.3% → 98.5%) and unsupported fell 446 → 82 (6.3% → 1.2%);
-51 mapper IDs remain (the ranking prints the top 80), led by 256/515
+audit, 140 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 6,993 (93.3% → 98.5%) and unsupported fell 446 → 80 (6.3% → 1.1%);
+49 mapper IDs remain (the ranking prints the top 80), led by 256/515
 (5 images each) and 355/446/547/594 (4 each).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
@@ -154,9 +154,9 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   137, 140, 144, 145, 147, 149, 153, 155, 157, 167, 168, 170, 180,
   187, 188, 190, 191, 192, 194, 198, 205, 208, 218, 219, 221, 225,
   228, 229, 238, 243, 244, 245, 246, 250, 252, 254, 258, 262, 263,
-  264, 266, 284, 285, 289, 290, 298, 299, 301, 302, 303, 304, 305,
-  306, 307, 309, 312, 313, 314, 332, 346, 347, 396, 399, 422, 512,
-  513, 516, 519, 521, 522, 529, 533, 534, 535, 548, 551, 552)** — 138 boards
+  264, 266, 284, 285, 289, 290, 292, 298, 299, 301, 302, 303, 304,
+  305, 306, 307, 309, 312, 313, 314, 332, 346, 347, 396, 399, 422,
+  512, 513, 516, 518, 519, 521, 522, 529, 533, 534, 535, 548, 551, 552)** — 140 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
@@ -167,7 +167,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   read-back (170), Street Heroes (262), A65AS (285), SMB2j (304) and
   DreamTech 01 (521). The next batch completes the TEC9719 transform for
   126/422/534 and adds Subor 167, Magic Kid Goo Goo (190), City Fighter IV
-  (266) and the BMC 64-in-1 (314). At 120 frames
+  (266) and the BMC 64-in-1 (314). Mapper 292 adds the CPU-RAM protection
+  latch and mapper 518 the cart-RAM window. At 120 frames
   16 of the 18 local images render (the two blanks are MesenCE-blank boot
   screens too); the 20-frame audit only catches 208/258 because the rest are
   still in their boot code; the Sachen
