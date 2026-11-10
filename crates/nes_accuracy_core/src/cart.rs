@@ -818,6 +818,7 @@ impl Cartridge {
             188 => Box::new(Bandai188::new(prg_rom, chr, header)),
             309 => Box::new(Lh51::new(prg_rom, chr, header)),
             522 => Box::new(Lh10::new(prg_rom, chr, prg_ram, header)),
+            56 => Box::new(Ks202::new(prg_rom, chr, prg_ram, header)),
             57 => Box::new(Bmc57::new(prg_rom, chr, header)),
             120 => Box::new(FdsConv120::new(prg_rom, chr, header)),
             68 => Box::new(Sunsoft4::new(prg_rom, chr, prg_ram, header)),
@@ -4484,6 +4485,182 @@ impl Mapper for Ntdec81 {
 
     fn number(&self) -> u16 {
         81
+    }
+}
+
+/// Kaiser KS202 (mapper 56): four 8 KiB PRG banks, eight 1 KiB CHR banks,
+/// a WRAM/ROM window at `$6000` and the Kaiser 16-bit cycle IRQ.
+#[derive(Debug)]
+pub struct Ks202 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_banks: [u8; 4],
+    chr_banks: [u8; 8],
+    select: u8,
+    use_rom: bool,
+    mirroring: Mirroring,
+    irq_reload: u16,
+    irq_counter: u16,
+    irq_control: u8,
+    irq_pending: bool,
+}
+
+impl Ks202 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            prg_banks: [0; 4],
+            chr_banks: [0; 8],
+            select: 0,
+            use_rom: false,
+            mirroring: header.mirroring,
+            irq_reload: 0,
+            irq_counter: 0,
+            irq_control: 0,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Ks202 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => {
+                if self.use_rom {
+                    self.prg_8k(usize::from(self.prg_banks[3]), address)
+                } else {
+                    self.prg_ram[usize::from(address - 0x6000)]
+                }
+            }
+            0x8000..=0x9FFF => self.prg_8k(usize::from(self.prg_banks[0]), address),
+            0xA000..=0xBFFF => self.prg_8k(usize::from(self.prg_banks[1]), address),
+            0xC000..=0xDFFF => self.prg_8k(usize::from(self.prg_banks[2]), address),
+            0xE000..=0xFFFF => {
+                let last = (self.prg.len() / 0x2000).max(1) - 1;
+                self.prg_8k(last, address)
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x6000..=0x7FFF => {
+                if !self.use_rom {
+                    self.prg_ram[usize::from(address - 0x6000)] = value;
+                }
+            }
+            0x8000..=0x8FFF => {
+                self.irq_reload = (self.irq_reload & 0xFFF0) | u16::from(value & 0x0F)
+            }
+            0x9000..=0x9FFF => {
+                self.irq_reload = (self.irq_reload & 0xFF0F) | (u16::from(value & 0x0F) << 4)
+            }
+            0xA000..=0xAFFF => {
+                self.irq_reload = (self.irq_reload & 0xF0FF) | (u16::from(value & 0x0F) << 8)
+            }
+            0xB000..=0xBFFF => {
+                self.irq_reload = (self.irq_reload & 0x0FFF) | (u16::from(value & 0x0F) << 12)
+            }
+            0xC000..=0xCFFF => {
+                self.irq_control = value;
+                if value & 0x02 != 0 {
+                    self.irq_counter = self.irq_reload;
+                }
+                self.irq_pending = false;
+            }
+            0xD000..=0xDFFF => self.irq_pending = false,
+            0xE000..=0xEFFF => self.select = (value & 0x07).wrapping_sub(1),
+            0xF000..=0xF3FF => {
+                match self.select {
+                    0..=3 => {
+                        let index = usize::from(self.select);
+                        self.prg_banks[index] = (self.prg_banks[index] & 0x10) | (value & 0x0F);
+                    }
+                    4 => self.use_rom = value & 0x04 != 0,
+                    _ => {}
+                }
+                let bank = usize::from(address & 0x03);
+                self.prg_banks[bank] = (value & 0x10) | (self.prg_banks[bank] & 0x0F);
+            }
+            0xF800..=0xFBFF => {
+                self.mirroring = if value & 0x01 != 0 {
+                    Mirroring::Vertical
+                } else {
+                    Mirroring::Horizontal
+                };
+            }
+            0xFC00..=0xFFFF => {
+                self.chr_banks[usize::from(address & 0x07)] = value;
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let slot = usize::from(address) / 0x400;
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let slot = usize::from(address) / 0x400;
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        56
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if self.irq_control & 0x02 == 0 {
+            return;
+        }
+        self.irq_counter = self.irq_counter.wrapping_add(1);
+        if self.irq_counter == 0xFFFF {
+            self.irq_counter = self.irq_reload;
+            self.irq_control &= !0x02;
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
     }
 }
 

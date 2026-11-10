@@ -26,15 +26,15 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 6,957 | 98.0% |
-| Rendering | 3,778 | 53.2% |
+| Loaded (mapper implemented) | 6,958 | 98.0% |
+| Rendering | 3,779 | 53.2% |
 | Blank | 3,145 | 44.3% |
-| Unsupported mapper | 116 | 1.6% |
+| Unsupported mapper | 115 | 1.6% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 109 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 6,957 (93.3% → 97.5%) and unsupported fell 446 → 116 (6.3% → 1.6%);
+audit, 117 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 6,958 (93.3% → 97.5%) and unsupported fell 446 → 115 (6.3% → 1.6%);
 80+ mapper IDs remain (the ranking prints the top 80), led by 256/515/551
 (5 images each) and 355/446/547/594 (4 each).
 
@@ -154,7 +154,7 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   145, 147, 149, 153, 155, 157, 168, 180, 187, 188, 191, 192, 194, 198,
   205, 218, 221, 225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254,
   263, 264, 289, 290, 299, 301, 303, 305, 306, 309, 312, 313, 332, 347,
-  396, 399, 512, 513, 516, 519, 522, 529, 533, 534, 535, 548, 551, 552)** — 109 boards
+  396, 399, 512, 513, 516, 519, 522, 529, 533, 534, 535, 548, 551, 552)** — 117 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
