@@ -12,15 +12,15 @@ Status: `shipped` · `planned` · `deferred` · `reference-only`
 |---|---|
 | Compatibility core | `tetanes-core` 0.17 (Rust, MIT OR Apache-2.0) |
 | Accuracy core | Rust, MIT + documented ISC (ares) adaptations — in progress |
-| Adapter | `crates/multiemu-nes` (TetaNES) |
+| Adapter | `crates/nes_core` (TetaNES) |
 | Accuracy bar | reference parity; see `docs/accuracy.md` |
 | Scope | licensed library, then FDS/VS/PAL/Dendy/expansion/peripherals/unlicensed/NSF |
 | Status | compatibility core shipped; accuracy core at A5 (CPU/PPU 12+19, APU 13, mappers + system + Core ABI; AccuracyCoin 139/151) |
 
-TetaNES remains the default until the accuracy core passes its gates; both will
+`nes_core` (TetaNES-derived) remains the default until the accuracy core passes its gates; both will
 be selectable by `CoreInfo.id`. The accuracy core is MIT with documented
 ISC-licensed adaptations from ares; no GPL source is read, translated or
-linked. Provenance is recorded in `crates/multiemu-nes-accuracy/PROVENANCE.md`.
+linked. Provenance is recorded in `crates/nes_accuracy_core/PROVENANCE.md`.
 
 Next: close the remaining A5 failures (DMA/abort timing, NMI hijack, `$2007`
 read buffer, scanline-0 sprites), then A6 breadth.
@@ -41,7 +41,7 @@ compatibility oracle, the coprocessor feature checklist, and the overclock /
 SPC-clock / strict-board ideas.
 
 Integration: build `ares/sfc` plus its shared CPU/DSP components as a static
-C++ library behind `multiemu_sfc_*`; expose the same `Core` surface. Do not port
+C++ library behind `unko_sfc_*`; expose the same `Core` surface. Do not port
 Mesen code.
 
 ## Nintendo 64 — planned
@@ -71,7 +71,7 @@ for that before this milestone starts.
 
 If GC/Wii is pursued, the only defensible shape is a **separate GPL process**
 launched by the shell, with its own distribution and source offer — a legal and
-product decision, not a core adapter. Do not plan it as a `multiemu-core`
+product decision, not a core adapter. Do not plan it as a `unko-core`
 implementation.
 
 ## Registry policy
@@ -94,8 +94,8 @@ implementation.
 
 | Core id | Crate | Role |
 |---|---|---|
-| `tetanes` | `multiemu-nes` | compatible default backend (TetaNES) |
-| `multiemu-nes-accuracy` | `multiemu-nes-accuracy-core` | reference-parity accuracy backend |
+| `nes_core` | `nes_core` | compatible default backend (TetaNES-derived) |
+| `nes_accuracy_core` | `nes_accuracy_core` | reference-parity accuracy backend |
 
-Select with `--core multiemu-nes-accuracy` in the CLI; the desktop app
-registers both and defaults to TetaNES.
+Select with `--core nes_accuracy_core` in the CLI; the desktop app
+registers both and defaults to `nes_core`.

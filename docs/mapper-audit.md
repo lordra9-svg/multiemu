@@ -17,8 +17,8 @@ Each image is loaded, run for 20 frames, and its final frame sampled:
 The scan is split into 2,000-entry batches, or filtered with `--mapper`:
 
 ```
-multiemu corpus <library-dir> --frames 20 --skip <n> --limit 2000
-multiemu corpus <library-dir> --mapper 136 --frames 600
+unko corpus <library-dir> --frames 20 --skip <n> --limit 2000
+unko corpus <library-dir> --mapper 136 --frames 600
 ```
 
 ## Totals
@@ -404,12 +404,12 @@ the payload), not emulation issues. The four mapper-173 panics remain fixed.
 
 ## Regression tooling
 
-- `multiemu trace <rom> --frames N --out trace.txt` records per-frame
+- `unko trace <rom> --frames N --out trace.txt` records per-frame
   video/audio hashes and the final state.
-- `multiemu diff <a.trace> <b.trace>` reports the first divergent frame.
-- `multiemu signatures <dir> [--frames N] [--mapper ID] [--check file]`
+- `unko diff <a.trace> <b.trace>` reports the first divergent frame.
+- `unko signatures <dir> [--frames N] [--mapper ID] [--check file]`
   hashes every frame of every ROM in a directory and compares a manifest.
-- `cargo run -p multiemu-nes-accuracy --example dump2007` dumps the `$2007`
+- `cargo run -p nes_accuracy_core --example dump2007` dumps the `$2007`
   stress test's raw `$0500-$0654` array for answer-key comparison.
 
 Manifests and traces are local-only and are never committed.

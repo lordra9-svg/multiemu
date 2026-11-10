@@ -1,6 +1,6 @@
 # Accuracy divergences — NES
 
-This ledger records every known place where `multiemu-nes-accuracy` does not
+This ledger records every known place where `nes_accuracy_core` does not
 yet match the chosen reference (real hardware, then ares, then the public test
 ROM). It is required by the accuracy charter in `docs/accuracy.md`. Add a dated
 entry whenever a divergence is found, and remove it only when a test or a

@@ -1,6 +1,6 @@
 # Accuracy status
 
-Measured on the reference-parity core (`multiemu-nes-accuracy`, MIT with
+Measured on the reference-parity core (`nes_accuracy_core`, MIT with
 documented ISC adaptations from ares). These are local runs
 against public test ROMs placed in `test-roms/` (gitignored).
 
@@ -8,12 +8,12 @@ against public test ROMs placed in `test-roms/` (gitignored).
 
 | Test | Result | Evidence |
 |---|---|---|
-| `nestest` golden log | **8980 / 8980 lines**, registers + PC + SP + P + CYC all match | `cargo test -p multiemu-nes-accuracy --test nestest -- --nocapture` |
-| blargg `instr_timing` | **Passed** (official, NOP/SBC, unofficial) | `cargo test -p multiemu-nes-accuracy --test blargg blargg_instr_timing -- --nocapture` |
-| blargg `instr_basics` | **Passed** | `cargo test -p multiemu-nes-accuracy --test blargg blargg_instr_basics -- --nocapture` |
+| `nestest` golden log | **8980 / 8980 lines**, registers + PC + SP + P + CYC all match | `cargo test -p nes_accuracy_core --test nestest -- --nocapture` |
+| blargg `instr_timing` | **Passed** (official, NOP/SBC, unofficial) | `cargo test -p nes_accuracy_core --test blargg blargg_instr_timing -- --nocapture` |
+| blargg `instr_basics` | **Passed** | `cargo test -p nes_accuracy_core --test blargg blargg_instr_basics -- --nocapture` |
 | blargg interrupt suites | see A2/A3 | requires PPU NMI + APU/DMA timing; tests are `#[ignore]` |
 
-The CPU implementation in `crates/multiemu-nes-accuracy/src/cpu.rs` is
+The CPU implementation in `crates/nes_accuracy_core/src/cpu.rs` is
 cycle-stepped: every cycle is a bus access or an explicit internal cycle, and
 the nestest comparison includes the absolute cycle counter, not just registers.
 
@@ -210,9 +210,9 @@ NES 2.0 PRG (16 KiB units) and CHR (8 KiB units) sizes are parsed correctly.
 
 ### Core ABI
 
-New crate `multiemu-nes-accuracy-core` implements `multiemu_core::Core`
-(id `multiemu-nes-accuracy`) and is registered beside TetaNES. The CLI can
-select it with `--core multiemu-nes-accuracy`.
+New crate `nes_accuracy_core` implements `unko_core::Core`
+(id `nes_accuracy_core`) and is registered beside `nes_core`. The CLI can
+select it with `--core nes_accuracy_core`.
 
 ### Commercial verification
 
@@ -316,7 +316,7 @@ renders 5/8 local images; the VRC family went from 8 rendering / 47 blank to
 34 rendering / 21 blank at the same 20-frame window (39/55 at 600 frames);
 the four formerly-panicking mapper-173 images now render. The VRC `number()`
 also reported every board as mapper 21 — the audit now separates 21/22/23/25.
-A new `multiemu signatures` batch harness records per-frame hashes for
+A new `unko signatures` batch harness records per-frame hashes for
 directory-level regression checks.
 
 Further A4 work: the PPU now models vertical, horizontal, single-lower,
@@ -878,7 +878,7 @@ the dots 1-64 clear phase, which provides the seed.
 - Differential parity re-measured at 600 frames on *Super Mario Bros.* (NROM):
   **599/600 identical video hashes and 504/600 identical audio hashes**
   against the RustyNES capture (`trace --no-state`, summarized by the new
-  `multiemu parity` command). *The Legend of Zelda* (MMC1, 600 frames) gives
+  `unko parity` command). *The Legend of Zelda* (MMC1, 600 frames) gives
   598/600 video but 28/600 audio: its continuously playing music makes the
   per-frame sample hash sensitive to the residual drain-point phase, while
   SMB's sparser track tolerates it. The nonlinear mixer tables (95.52/8128
@@ -899,7 +899,7 @@ the dots 1-64 clear phase, which provides the seed.
   detection, not another split tweak; that is a dedicated port, not a bounded
   change.
 - A quantitative differential corpus mode (`corpus --oracle PATH`, now
-  `corpus --parity` with `MULTIEMU_ORACLE` and a 120-frame default, gateable
+  `corpus --parity` with `UNKO_ORACLE` and a 120-frame default, gateable
   with `--min-video/--min-audio`) was added.
   A 120-image / 120-frame sweep (109 images with oracle output) measured
   overall **video 81.1% and audio 70.1%** identical frame hashes and exposed
@@ -1360,15 +1360,15 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
   texture filtering, integer scaling and a native folder dialog (`rfd`). Saves
   are keyed by a content hash (scan CRC plus FNV-1a 64) and state slots write a
   64x60 RGBA thumbnail.
-- **CLI debugger**: `multiemu run <rom> --dump-ppu` prints one CPU/PPU/APU state
+- **CLI debugger**: `unko run <rom> --dump-ppu` prints one CPU/PPU/APU state
   line per frame; `--break <hex>` steps instructions until the PC matches and
   prints the state.
 
 ### Performance track (started 2026-11-07)
 
-Baseline for the accuracy core, headless (`multiemu run <rom> --frames 1200
---core multiemu-nes-accuracy` on AccuracyCoin, release build): **~535 fps**
-(about 9x real-time). The default `multiemu-nes` core runs at ~1200 fps, so the
+Baseline for the accuracy core, headless (`unko run <rom> --frames 1200
+--core nes_accuracy_core` on AccuracyCoin, release build): **~535 fps**
+(about 9x real-time). The default `nes_core` core runs at ~1200 fps, so the
 accuracy core has clear headroom.
 
 Profiling by subsystem (temporary A/B builds): the per-pixel background/sprite
@@ -1405,7 +1405,7 @@ desktop (small but positive; the span only applies on sprite-free background
 lines).
 
 Re-measured 2026-11-10 on the same AccuracyCoin / 1200-frame basis
-(`multiemu bench`, release): **1130-1159 fps** (three runs, 18.8-19.3x
+(`unko bench`, release): **1130-1159 fps** (three runs, 18.8-19.3x
 real-time), versus the 640 fps max-of-7 recorded when the pass was written.
 The accumulated span/table/cache work covers the change; the host was also
 less loaded than during the original measurements.

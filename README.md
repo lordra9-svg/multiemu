@@ -1,12 +1,17 @@
-# multiemu
+# Unko
 
 A multi-platform, multi-core emulator shell written in Rust. The first system
 is the NES; the compatibility core is
 [`tetanes-core`](https://crates.io/crates/tetanes-core) behind a
-system-agnostic interface, and a second NES core
-(`multiemu-nes-accuracy`) is being built toward reference cycle parity.
+system-agnostic interface, and the reference-parity core is
+`nes_accuracy_core`.
 
-**Repository:** <https://github.com/lordra9-svg/multiemu>
+> **Rename:** this project was formerly `multi-emu` / `multiemu`. The emulator is
+> now **Unko**, the host crates are `unko-core`, `unko-rom`, `unko-cli` and
+> `unko-app`, and the two NES cores are `nes_core` (TetaNES-derived fallback) and
+> `nes_accuracy_core`. The `--core` IDs are `nes_core` and `nes_accuracy_core`.
+
+**Repository:** <https://github.com/lordra9-svg/unko>
 
 ## Status
 
@@ -30,13 +35,12 @@ approximation are recorded in
 
 ```
 crates/
-  multiemu-core/         # SystemId, Core trait, video/audio/input/state types, registry
-  multiemu-rom/          # discovery + .zip/.7z/.rar containers + iNES metadata
-  multiemu-nes/          # NES compatibility core adapter (tetanes-core)
-  multiemu-nes-accuracy/ # reference-parity NES core (MIT + documented ISC adaptations)
-  multiemu-nes-accuracy-core/ # Core ABI adapter for the accuracy backend
-  multiemu-cli/          # headless runner: info, scan, run, verify, trace, diff, bench, corpus
-  multiemu-app/          # desktop shell (Dolphin-inspired UX)
+  unko-core/         # SystemId, Core trait, video/audio/input/state types, registry
+  unko-rom/          # discovery + .zip/.7z/.rar containers + iNES metadata
+  nes_core/          # NES compatibility core adapter (tetanes-core)
+  nes_accuracy_core/ # reference-parity NES core + its Core ABI adapter (MIT + documented ISC adaptations)
+  unko-cli/          # headless runner: info, scan, run, verify, trace, diff, bench, corpus
+  unko-app/          # desktop shell (Dolphin-inspired UX)
 docs/
   accuracy.md            # accuracy charter, gates and source rules
   accuracy-status.md     # measured results and dated experiment log
@@ -50,7 +54,7 @@ docs/
 ```
 
 Target order: **NES → SNES (ares) → N64 (ares) → optional external Dolphin**.
-The NES track has two cores: TetaNES for compatibility and a Rust core built to
+The NES track has two cores: `nes_core` (TetaNES-derived) for compatibility and `nes_accuracy_core`, a Rust core built to
 reference parity. The accuracy core is MIT with documented ISC-licensed
 adaptations from ares; MesenCE, RustyNES, gopher64 and Dolphin are GPL
 references or separate products. Details in `docs/systems.md`.
@@ -59,9 +63,9 @@ references or separate products. Details in `docs/systems.md`.
 
 ```sh
 cargo build --release
-cargo run -p multiemu-cli -- scan roms
-cargo run -p multiemu-cli -- info "roms/.../game.zip"
-cargo run -p multiemu-cli -- run "roms/.../game.zip" --frames 120 --out shot.ppm
+cargo run -p unko-cli -- scan roms
+cargo run -p unko-cli -- info "roms/.../game.zip"
+cargo run -p unko-cli -- run "roms/.../game.zip" --frames 120 --out shot.ppm
 ```
 
 ROMs may be loose `.nes` files or inside `.zip`, `.7z`, or `.rar` archives;
@@ -74,8 +78,8 @@ output without a window.
 ## Desktop app
 
 ```sh
-cargo run -p multiemu-app --release
-cargo run -p multiemu-app --release -- --rom "roms/.../game.zip"
+cargo run -p unko-app --release
+cargo run -p unko-app --release -- --rom "roms/.../game.zip"
 ```
 
 The library defaults to `roms/`; pass `--roms DIR` to point elsewhere. The shell follows Dolphin's desktop
@@ -100,7 +104,7 @@ cleanly when the folder is absent. No ROMs are tracked in this repository.
 To run the AccuracyCoin battery, supply the ROM and its catalog yourself:
 
 ```sh
-cargo run -p multiemu-nes-accuracy --release --example accuracycoin -- \
+cargo run -p nes_accuracy_core --release --example accuracycoin -- \
   test-roms/AccuracyCoin.nes test-roms/AccuracyCoin.tsv --isolated
 ```
 
@@ -108,7 +112,7 @@ cargo run -p multiemu-nes-accuracy --release --example accuracycoin -- \
 
 Project code is MIT. The NES compatibility backend, `tetanes-core`, is
 dual-licensed MIT OR Apache-2.0 and is used here under the MIT option. Parts of
-the `multiemu-nes-accuracy` NES core are adapted from ares under its ISC
+the `nes_accuracy_core` NES core are adapted from ares under its ISC
 licence; the attribution is in `NOTICE`, `licenses/ares-LICENSE.txt` and the
 crate's `PROVENANCE.md`. See `NOTICE` and `licenses/` for all third-party terms.
 

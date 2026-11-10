@@ -48,7 +48,7 @@ the intentional approximations live in that file.
 - Implementers of this core **do not read GPL emulator source**. That includes
   MesenCE, RustyNES and Dolphin.
 - ares is ISC and may be read or adapted with attribution. The adapted areas
-  are recorded in `crates/multiemu-nes-accuracy/PROVENANCE.md`; the ares ISC
+  are recorded in `crates/nes_accuracy_core/PROVENANCE.md`; the ares ISC
   notice is in `licenses/ares-LICENSE.txt` and `NOTICE`.
 - Allowed inputs: NESdev wiki, chip datasheets, public hardware notes, test ROM
   behaviour, our own hardware captures, black-box runs of reference binaries,
@@ -103,18 +103,18 @@ Order inside the core:
 ## 6. Milestones
 
 ### A0 — harness and skeleton (done)
-- [x] Accuracy crate (`multiemu-nes-accuracy`), independent of TetaNES.
+- [x] Accuracy crate (`nes_accuracy_core`), independent of TetaNES.
 - [x] Region timing table, CPU bus contract, CPU registers/reset.
-- [x] Deterministic frame/audio trace format and `multiemu trace` / `diff`.
+- [x] Deterministic frame/audio trace format and `unko trace` / `diff`.
 - [x] Provenance rules and crate-level `PROVENANCE.md`.
 - [x] Exit: harness runs a ROM and hashes output; two runs diff clean.
 
 Commands:
 
 ```sh
-multiemu trace game.nes --core tetanes --frames 600 --out ref.trace
-multiemu trace game.nes --core <accuracy-id> --frames 600 --out new.trace
-multiemu diff ref.trace new.trace
+unko trace game.nes --core nes_core --frames 600 --out ref.trace
+unko trace game.nes --core <accuracy-id> --frames 600 --out new.trace
+unko diff ref.trace new.trace
 ```
 
 ### A1 — CPU (done)

@@ -1,0 +1,12 @@
+[package]
+name = "unko-rom"
+description = "ROM discovery and archive containers (zip, 7z, rar) for Unko"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+zip = { version = "9.3", default-features = false, features = ["deflate"] }
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["bzip2", "ppmd"] }
+rars = { version = "0.12", default-features = false }

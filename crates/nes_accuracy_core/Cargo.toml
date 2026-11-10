@@ -1,0 +1,10 @@
+[package]
+name = "nes_accuracy_core"
+description = "Clean-room, reference-parity NES core and Unko ABI adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+unko-core.workspace = true

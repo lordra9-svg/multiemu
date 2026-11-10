@@ -1,13 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/multiemu-core",
-    "crates/multiemu-rom",
-    "crates/multiemu-nes",
-    "crates/multiemu-nes-accuracy",
-    "crates/multiemu-nes-accuracy-core",
-    "crates/multiemu-cli",
-    "crates/multiemu-app",
+    "crates/unko-core",
+    "crates/unko-rom",
+    "crates/nes_core",
+    "crates/nes_accuracy_core",
+    "crates/unko-cli",
+    "crates/unko-app",
 ]
 
 [workspace.package]
@@ -15,10 +14,10 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/lordra9-svg/multiemu"
+repository = "https://github.com/lordra9-svg/unko"
 
 [workspace.dependencies]
-multiemu-core = { path = "crates/multiemu-core" }
+unko-core = { path = "crates/unko-core" }
 tetanes-core = "0.17.0"
 
 [profile.release]

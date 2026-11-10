@@ -3,7 +3,7 @@ saves/
 roms/
 test-roms
 test-roms/
-multiemu.conf
+unko.conf
 *.ppm
 *.sav
 *.srm

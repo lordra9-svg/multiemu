@@ -22,13 +22,13 @@ trait; a C ABI can be added later for plugins without changing the trait.
 
 A trait keeps the host type-safe and lets cores expose richer metadata than
 libretro's C structs. If third-party cores or RetroArch distribution matter later,
-add a `multiemu-libretro` adapter crate; do not make libretro the internal model.
+add a `unko-libretro` adapter crate; do not make libretro the internal model.
 
 ## ADR-0004 — NES backend: tetanes-core
 
 Chosen because it is MIT OR Apache-2.0, actively maintained, Rust, has save
 states/run-ahead/filters/zapper, and covers 30+ mappers and >90% of the licensed
-library. It sits behind `multiemu-nes`, so it is replaceable.
+library. It sits behind `nes_core`, so it is replaceable.
 
 Rejected for now:
 
@@ -77,11 +77,11 @@ The NES target is **reference parity**, the license stays MIT, the core is pure
 Rust, and there is no deadline. The consequences:
 
 - A second NES core is written from public hardware documentation and
-  ISC-licensed ares source (`multiemu-nes-accuracy`), independent of any GPL
+  ISC-licensed ares source (`nes_accuracy_core`), independent of any GPL
   source. ares adaptations are attributed in `PROVENANCE.md` and `NOTICE`.
 - TetaNES remains the shipped compatibility backend and the default until the
   accuracy core passes its gates.
-- Both cores implement `multiemu_core::Core`; selection is by `CoreInfo.id`.
+- Both cores implement `unko_core::Core`; selection is by `CoreInfo.id`.
 - GPL emulators (MesenCE, RustyNES, Dolphin) are run as black-box oracles only
   and are never copied or linked. ares is ISC, so documented adaptations are
   allowed with attribution.

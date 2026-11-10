@@ -79,24 +79,24 @@ The main effort is now the reference-parity accuracy core. Details in
       2026-11-10 at ~1130-1159 fps (AccuracyCoin, 1200 frames, three runs).
       Profile shares
       logged in `docs/accuracy-status.md`. Single-ROM differential traces
-      (`multiemu trace` / `diff`) and directory-level frame signatures
-      (`multiemu signatures --check`) exist. Hardware captures still
+      (`unko trace` / `diff`) and directory-level frame signatures
+      (`unko signatures --check`) exist. Hardware captures still
       outstanding.
 
 ## M0 — core boundary (done)
 
 - [x] Cargo workspace, MIT license, third-party notices.
-- [x] `multiemu-core`: `Core`, `CoreInfo`, `Registry`, video/audio/input/state types.
-- [x] `multiemu-nes`: TetaNES adapter (load, frames, RGBA video, f32 audio, input,
+- [x] `unko-core`: `Core`, `CoreInfo`, `Registry`, video/audio/input/state types.
+- [x] `nes_core`: TetaNES adapter (load, frames, RGBA video, f32 audio, input,
       save state, SRAM).
-- [x] `multiemu-cli`: `info`, `run` (PPM screenshots), `bench`.
+- [x] `unko-cli`: `info`, `run` (PPM screenshots), `bench`.
 - [x] Synthetic NROM boot test; state round-trip test; registry tests.
 - [x] Verified locally: 256×240 RGBA, ~937 fps / 15.6× realtime in release on a
       test ROM.
 
 ## M1 — NES product slice
 
-- [x] Desktop shell with Dolphin-inspired UX (`multiemu-app`): menu bar, toolbar,
+- [x] Desktop shell with Dolphin-inspired UX (`unko-app`): menu bar, toolbar,
       game library (list + grid), search, player viewport, status bar, settings
       window with category rail, about dialog.
 - [x] Library reads loose `.nes` and `.zip`/`.7z`/`.rar` members without
@@ -113,10 +113,10 @@ The main effort is now the reference-parity accuracy core. Details in
   - [x] Core exposes `sram()` / `load_sram`; the app writes `saves/<stem>.sav`.
 - [ ] Frame advance, fast-forward and rewind ring in the host.
 - [x] CLI regression mode: hash frames/audio, fresh-run vs state-resume, assert
-      byte-identical tails (`multiemu verify`).
+      byte-identical tails (`unko verify`).
 - [x] Test-ROM harness: `nestest`, blargg CPU/PPU/APU, `ppu_vbl_nmi`, MMC3 A12,
       and the AccuracyCoin isolated battery. Pass counts are recorded in
-      `docs/accuracy-status.md`; the suites run in `crates/multiemu-nes-accuracy/tests/`.
+      `docs/accuracy-status.md`; the suites run in `crates/nes_accuracy_core/tests/`.
 - [x] Mapper audit against a licensed ROM library: 7,101 images in four
       batches, results and ranked gaps in `docs/mapper-audit.md`. 6,857 load,
       216 unsupported (78 IDs), 28 failures; MMC2/MMC4 followed from it.
@@ -131,7 +131,7 @@ The main effort is now the reference-parity accuracy core. Details in
 - [ ] Expansion audio levels and per-channel mixing.
 - [ ] NTSC/composite filter pass on the GPU, palette selection.
 - [ ] Debugger: memory viewer and breakpoint UI. Headless pieces exist:
-      `multiemu run --dump-ppu` prints per-frame CPU/PPU/APU state and
+      `unko run --dump-ppu` prints per-frame CPU/PPU/APU state and
       `--break <hex>` stops on a PC.
 - [ ] Game Genie / cheat engine.
 

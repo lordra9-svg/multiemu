@@ -1,0 +1,17 @@
+[package]
+name = "unko-cli"
+description = "Headless runner for Unko cores"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "unko"
+path = "src/main.rs"
+
+[dependencies]
+unko-core.workspace = true
+nes_core = { path = "../nes_core" }
+nes_accuracy_core = { path = "../nes_accuracy_core" }
+unko-rom = { path = "../unko-rom" }

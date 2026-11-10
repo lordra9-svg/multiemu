@@ -45,9 +45,9 @@ Key interaction rules worth keeping:
 6. **Search is a mode of the library**, not a separate page.
 7. **Fullscreen hides chrome and keeps hotkeys.**
 
-## multiemu mapping
+## Unko mapping
 
-| Dolphin | multiemu (NES first) | Status |
+| Dolphin | Unko (NES first) | Status |
 |---|---|---|
 | GameList (table/grid) | Library table + grid toggle | now |
 | Search bar | Library search field | now |

@@ -17,31 +17,31 @@ input, audio, screenshot or save-state code.
                 │ FrameBuffer / AudioBuffer     │ run_frame()
                 │                               │
 ┌───────────────┴──────────────────────────────▼───────────────┐
-│ multiemu-core                                                │
+│ unko-core                                                │
 │  Core trait · CoreInfo · Registry · InputState · LoadOptions │
 └───────────────▲──────────────────────────────┬───────────────┘
                 │ implements                    │ factory()
 ┌───────────────┴──────────────────────────────▼───────────────┐
-│ core crates: multiemu-nes (tetanes-core today, others later) │
+│ core crates: nes_core (tetanes-core today, others later) │
 │  SNES core · GB core · ...                                   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The host never depends on a core crate. It depends on `multiemu-core` and builds
+The host never depends on a core crate. It depends on `unko-core` and builds
 a `Registry` from the cores it chooses to link (or, later, load as plugins).
 The NES adapter is the only crate that mentions TetaNES.
 
-`multiemu-nes-accuracy-core` is a second NES backend: it wraps the
-reference-parity `multiemu-nes-accuracy` system in the `Core` ABI, so the CLI and
-desktop app can select it with `--core multiemu-nes-accuracy`.
+`nes_accuracy_core` is the second NES backend: the crate contains the
+reference-parity system itself plus its `Core` ABI adapter, so the CLI and
+desktop app can select it with `--core nes_accuracy_core`.
 
-`multiemu-rom` is a sibling boundary for *input*: it discovers loose ROMs and
+`unko-rom` is a sibling boundary for *input*: it discovers loose ROMs and
 members of `.zip`/`.7z`/`.rar` archives, parses iNES metadata, and returns
 bytes to whichever core is loading. The UI never sees archive libraries.
 
 ## The contract
 
-`multiemu_core::Core`:
+`unko_core::Core`:
 
 | Method | Responsibility |
 |---|---|
@@ -80,7 +80,7 @@ the cores you chose to link.
 
 ## NES backend
 
-`multiemu-nes` adapts `tetanes-core`:
+`nes_core` adapts `tetanes-core`:
 
 - `ControlDeck` owns CPU/PPU/APU/bus/cart.
 - The adapter forces `VideoFilter::Pixellate` so the host gets raw pixels, and

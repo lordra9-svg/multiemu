@@ -1,0 +1,9 @@
+[package]
+name = "unko-core"
+description = "System-agnostic core interface for the Unko emulator shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]

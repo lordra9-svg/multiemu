@@ -1878,66 +1878,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "multiemu-app"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "multiemu-core",
- "multiemu-nes",
- "multiemu-nes-accuracy-core",
- "multiemu-rom",
- "rfd",
-]
-
-[[package]]
-name = "multiemu-cli"
-version = "0.1.0"
-dependencies = [
- "multiemu-core",
- "multiemu-nes",
- "multiemu-nes-accuracy",
- "multiemu-nes-accuracy-core",
- "multiemu-rom",
-]
-
-[[package]]
-name = "multiemu-core"
-version = "0.1.0"
-
-[[package]]
-name = "multiemu-nes"
-version = "0.1.0"
-dependencies = [
- "multiemu-core",
- "tetanes-core",
-]
-
-[[package]]
-name = "multiemu-nes-accuracy"
-version = "0.1.0"
-dependencies = [
- "multiemu-core",
-]
-
-[[package]]
-name = "multiemu-nes-accuracy-core"
-version = "0.1.0"
-dependencies = [
- "multiemu-core",
- "multiemu-nes-accuracy",
-]
-
-[[package]]
-name = "multiemu-rom"
-version = "0.1.0"
-dependencies = [
- "rars",
- "sevenz-rust2",
- "zip",
-]
-
-[[package]]
 name = "naga"
 version = "24.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1996,6 +1936,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "nes_accuracy_core"
+version = "0.1.0"
+dependencies = [
+ "unko-core",
+]
+
+[[package]]
+name = "nes_core"
+version = "0.1.0"
+dependencies = [
+ "tetanes-core",
+ "unko-core",
 ]
 
 [[package]]
@@ -3396,6 +3351,42 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unko-app"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "nes_accuracy_core",
+ "nes_core",
+ "rfd",
+ "unko-core",
+ "unko-rom",
+]
+
+[[package]]
+name = "unko-cli"
+version = "0.1.0"
+dependencies = [
+ "nes_accuracy_core",
+ "nes_core",
+ "unko-core",
+ "unko-rom",
+]
+
+[[package]]
+name = "unko-core"
+version = "0.1.0"
+
+[[package]]
+name = "unko-rom"
+version = "0.1.0"
+dependencies = [
+ "rars",
+ "sevenz-rust2",
+ "zip",
+]
 
 [[package]]
 name = "unty"

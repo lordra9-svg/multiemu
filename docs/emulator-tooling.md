@@ -123,14 +123,14 @@ refs/rustynes   0 uninitialized
 
 ## Headless regression commands
 
-`multiemu` carries the scriptable checks used for the audit and for change
+`unko` carries the scriptable checks used for the audit and for change
 gating:
 
 - `corpus <dir> [--frames N] [--mapper ID] [--skip N] [--limit N]` — smoke
   audit; reports loaded/rendering/blank/unsupported/failed, ranks unsupported
   mapper IDs and prints failing titles. `--parity` makes the quantitative
   differential audit the standard run: the oracle path comes from
-  `--oracle PATH` or `MULTIEMU_ORACLE`, `--frames` defaults to 120, and every
+  `--oracle PATH` or `UNKO_ORACLE`, `--frames` defaults to 120, and every
   image is executed by both the accuracy core and the reference producer with
   per-frame video/audio hashes compared at the same index. It prints overall
   and per-mapper identical-hash percentages plus the lowest-parity titles.
@@ -159,7 +159,7 @@ gating:
 
 ### Differential oracle
 
-`trace` emits the `# multiemu trace v1` format: one `frame <index> <video>
+`trace` emits the `# unko trace v1` format: one `frame <index> <video>
 <audio>` line per frame using FNV-1a-64 over the RGBA8 framebuffer and over the
 `f32` audio samples. A reference emulator only needs to emit the same records;
 `diff` compares them frame by frame and reports the first divergent video or
@@ -201,7 +201,7 @@ scanline has a handful of backdrop-vs-black pixels while the PPU is still
 starting up. Skipping those frames proves the long run explicitly:
 
 ```
-multiemu diff video.trace reference.trace --skip 28 --video
+unko diff video.trace reference.trace --skip 28 --video
 ok: 272 frames (from 28, state not compared)
 ```
 
