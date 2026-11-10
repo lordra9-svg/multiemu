@@ -981,8 +981,10 @@ impl Cartridge {
             313 => Box::new(Mmc3_313::new(prg_rom, chr, header)),
             314 => Box::new(Bmc64in1::new(prg_rom, chr, header)),
             292 => Box::new(DragonFighter292::new(prg_rom, chr, header)),
+            517 => Box::new(Unrom517::new(prg_rom, chr, header)),
             518 => Box::new(Dance2000::new(prg_rom, chr, prg_ram, header)),
             487 => Box::new(Mapper487::new(prg_rom, chr, header)),
+            493 => Box::new(Gnrom493::new(prg_rom, chr, header)),
             519 => Box::new(Eh8813A::new(prg_rom, chr, header)),
             512 => Box::new(Si512::new(prg_rom, chr, header)),
             513 => Box::new(Sachen9602::new(prg_rom, chr, header)),
@@ -992,6 +994,7 @@ impl Cartridge {
             422 => Box::new(Tec9719::new(prg_rom, chr, header, 422)),
             534 => Box::new(Tec9719::new(prg_rom, chr, header, 534)),
             535 => Box::new(Lh53::new(prg_rom, chr, prg_ram, header)),
+            526 => Box::new(UnlBj56::new(prg_rom, chr, header)),
             529 => Box::new(T230::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
             346 => Box::new(Ks7012::new(prg_rom, chr, prg_ram, header)),
@@ -999,6 +1002,7 @@ impl Cartridge {
             396 => Box::new(Realtec396::new(prg_rom, chr, header)),
             399 => Box::new(Batmap399::new(prg_rom, chr, header)),
             552 => Box::new(Taito552::new(prg_rom, chr, header)),
+            553 => Box::new(Sachen3013::new(prg_rom, chr, header)),
             5 => Box::new(Mmc5::new(prg_rom, chr, header)),
             11 => Box::new(ColorDreams::new(prg_rom, chr, header)),
             13 => Box::new(Cprom::new(prg_rom, chr, header)),
@@ -6585,6 +6589,321 @@ impl Mapper for Ax5705 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         address >= 0xA008
+    }
+}
+
+/// Maxivision 30 prototype (mapper 493): a GNROM-like 32 KiB PRG / 8 KiB CHR
+/// window with a 64 KiB outer bank register and a bus-conflicted inner one.
+#[derive(Debug)]
+pub struct Gnrom493 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    outer: u8,
+    inner: u8,
+    mirroring: Mirroring,
+}
+
+impl Gnrom493 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            outer: 0,
+            inner: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_32k(&self, page: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x8000).max(1);
+        self.prg
+            .get((page % banks) * 0x8000 + usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_8k(&self, page: usize, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        self.chr
+            .get((page % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Gnrom493 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address >= 0x8000 {
+            let page = (usize::from(self.outer) << 1) | usize::from(self.inner & 0x01);
+            self.prg_32k(page, address)
+        } else {
+            0
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address & 0xE000 == 0x6000 {
+            self.outer = value & 0x0F;
+        } else if address & 0x8000 == 0x8000 {
+            self.inner = value & self.prg_read(address);
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let page = (usize::from(self.outer) << 3) | usize::from((self.inner >> 4) & 0x07);
+        self.chr_8k(page, address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let page = (usize::from(self.outer) << 3) | usize::from((self.inner >> 4) & 0x07);
+        let index = (page % banks) * 0x2000 + usize::from(address & 0x1FFF);
+        if let Some(byte) = self.chr.get_mut(index) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        493
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address & 0x8000 == 0x8000 || address & 0xE000 == 0x6000
+    }
+}
+
+/// Korean karaoke UNROM board (mapper 517): 16 KiB PRG banking without bus
+/// conflicts and the microphone ADC ports at `$6000`/`$6001`.
+#[derive(Debug)]
+pub struct Unrom517 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Unrom517 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_16k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % banks) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Unrom517 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        match address {
+            0x8000..=0xBFFF => self.prg_16k(usize::from(self.bank), address),
+            0xC000..=0xFFFF => self.prg_16k(banks - 1, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            self.bank = value & 0x1F;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        517
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        true
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
+    }
+}
+
+/// Sangokushi bootleg UNL-BJ-56 (mapper 526): eight 1 KiB CHR registers,
+/// four 8 KiB PRG registers and a fixed 4096-cycle IRQ.
+#[derive(Debug)]
+pub struct UnlBj56 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    chr_banks: [u8; 8],
+    prg_banks: [u8; 4],
+    irq_counter: u16,
+}
+
+impl UnlBj56 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        let last = ((prg.len() / 0x2000).max(1) - 1) as u8;
+        Self {
+            prg,
+            chr,
+            chr_banks: [0; 8],
+            prg_banks: [0, 0, 0, last],
+            irq_counter: 0,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for UnlBj56 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address >= 0x8000 {
+            let slot = usize::from((address - 0x8000) / 0x2000);
+            self.prg_8k(usize::from(self.prg_banks[slot]), address)
+        } else {
+            0
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address < 0x8000 {
+            return;
+        }
+        match address & 0x0F {
+            index @ 0..=7 => self.chr_banks[usize::from(index)] = value,
+            index @ 8..=0x0B => self.prg_banks[usize::from(index - 8)] = value,
+            0x0D | 0x0F => self.irq_counter = 0,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        Mirroring::Vertical
+    }
+
+    fn number(&self) -> u16 {
+        526
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000 && (address & 0x0F) <= 7
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_counter & 0x1000 != 0
+    }
+
+    fn clock_cpu(&mut self) {
+        self.irq_counter = self.irq_counter.wrapping_add(1);
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_counter = 0;
+    }
+}
+
+/// Sachen 3013 (mapper 553): NROM-128 with `$8000-$BFFF` returning `$3A`.
+#[derive(Debug)]
+pub struct Sachen3013 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    mirroring: Mirroring,
+}
+
+impl Sachen3013 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Sachen3013 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x8000..=0xBFFF => 0x3A,
+            0xC000..=0xFFFF => self
+                .prg
+                .get(usize::from(address - 0xC000))
+                .copied()
+                .unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, _address: u16, _value: u8) {}
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        553
     }
 }
 
@@ -28160,6 +28479,75 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0x83);
         cart.cpu_write(0xA009, 2);
         assert_eq!(cart.ppu_read(0x0000), 0xC3);
+    }
+
+    #[test]
+    fn gnrom_493_outer_inner() {
+        // 1 MiB PRG and CHR.
+        let rom = synth_banked(493, 1024, 1024);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 493);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        cart.cpu_write(0x6000, 2);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 4 * 0x8000]);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        // $A001 is inside 8 KiB bank 17, whose bus byte is $11.
+        cart.cpu_write(0xA001, 0x11);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x8000]);
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
+        // Bank 20 stores $14, so the outer CHR bit survives but PRG A15 does not.
+        cart.cpu_write(0x8001, 0x11);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 4 * 0x8000]);
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
+    }
+
+    #[test]
+    fn unrom_517_banking() {
+        // 512 KiB PRG (32 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(517, 512, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 517);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 31 * 0x4000]);
+        cart.cpu_write(0x8000, 3);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x4000]);
+        assert_eq!(cart.cpu_read(0x6000), 0);
+    }
+
+    #[test]
+    fn bj56_526_banks_and_irq() {
+        // 128 KiB PRG and CHR (16 x 8 KiB / 128 x 1 KiB).
+        let rom = synth_banked(526, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 526);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 15 * 0x2000]);
+        cart.cpu_write(0x8000, 1);
+        assert_eq!(cart.ppu_read(0x0000), 0x81);
+        cart.cpu_write(0x8008, 2);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 2 * 0x2000]);
+        cart.cpu_write(0x800D, 0);
+        for _ in 0..4096 {
+            cart.clock_cpu();
+        }
+        assert!(cart.irq_line());
+        for _ in 0..4096 {
+            cart.clock_cpu();
+        }
+        assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn sachen_3013_553_constant_window() {
+        // NROM-128: 16 KiB PRG, 8 KiB CHR.
+        let rom = synth_banked(553, 16, 8);
+        let cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 553);
+        assert_eq!(cart.cpu_read(0x8000), 0x3A);
+        assert_eq!(cart.cpu_read(0xBFFF), 0x3A);
+        assert_eq!(cart.cpu_read(0xC000), rom[16]);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
     }
 
     #[test]
