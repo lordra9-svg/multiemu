@@ -27,8 +27,8 @@ multiemu corpus <library-dir> --mapper 136 --frames 600
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
 | Loaded (mapper implemented) | 6,857 | 96.6% |
-| Rendering | 3,730 | 52.5% |
-| Blank | 3,127 | 44.0% |
+| Rendering | 3,733 | 52.6% |
+| Blank | 3,124 | 44.0% |
 | Unsupported mapper | 216 | 3.0% |
 | Load/run failure | 28 | 0.39% |
 
