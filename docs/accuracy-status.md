@@ -958,9 +958,10 @@ the dots 1-64 clear phase, which provides the seed.
   Dendy and 495 PAL images ran at NTSC speed; European MMC1 titles now match
   at 115-118/120. Mapper 45 reached **97.9%** and mapper 90 59.5%
   (62.1% best-aligned) after both fixes. The same 252-image / 120-frame
-  sample moved from 87.0% to **89.2%** video (90.8% best-aligned) and from
+  sample moved from 87.0% to **90.3%** video (91.9% best-aligned) and from
   53.3% to 54.9% audio, while the number of frame-shifted images fell from
-  32 to 19.
+  32 to 19. The 226 mirroring and MMC1 PRG-RAM fixes contributed the last
+  point (89.2% -> 90.3%).
 - The next differential fixes: **226** (Waixing multicart) had mirroring
   fixed from the header instead of `reg0` bit 6, so *22 Games* sat at 9/120;
   with the register-driven mirroring the board measures **98.3%** video over
