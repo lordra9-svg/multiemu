@@ -961,6 +961,14 @@ the dots 1-64 clear phase, which provides the seed.
   sample moved from 87.0% to **89.2%** video (90.8% best-aligned) and from
   53.3% to 54.9% audio, while the number of frame-shifted images fell from
   32 to 19.
+- The next differential fixes: **226** (Waixing multicart) had mirroring
+  fixed from the header instead of `reg0` bit 6, so *22 Games* sat at 9/120;
+  with the register-driven mirroring the board measures **98.3%** video over
+  nine images. **MMC1** now honours the `$E000` bit-4 PRG-RAM deselect
+  (reads float, writes drop), matching the reference; the full 398-image
+  mapper-1 board measures **89.4%** video (91.5% best-aligned). The remaining
+  low MMC1 titles (*Hillsfar*, the 11-in-1 Musical Pack) differ by an EEPROM
+  probe / one-byte frame counter, not banking.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
