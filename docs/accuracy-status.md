@@ -928,7 +928,11 @@ the dots 1-64 clear phase, which provides the seed.
   (`HybridKind::Fk23c`, so `$2007` writes reach the first 8 KiB and banks
   >= 8 fall back to ROM) reached **80.1%**; mapper **215** had the NROM/enable and 128 KiB substitution
   bits shifted by one and lacked the submapper-1 CHR bit, now **92.1%** video
-  and 89.6% audio over 21 images.
+  and 89.6% audio over 21 images; mapper **142** (KS7032) read open bus at
+  `$6000-$7FFF` because the CPU bus forwarded that window only when PRG-RAM
+  existed (Jinpai Mali then executed the wrong bytes and stalled at `$EDC4`),
+  and matching the reference up-counter IRQ took it from 17.8% to **89.8%**
+  video and 41.6% to **84.6%** audio over 8 images (Jinpai Mali 40 -> 107/120).
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
@@ -937,8 +941,9 @@ the dots 1-64 clear phase, which provides the seed.
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
   audit is **6,857 loaded, 3,741 rendering, 3,116 blank, 216 unsupported
-  (78 IDs), 28 failures**. The same 120-image sweep moved from video 81.1% to 82.0%
-  before the 226/242/115 fixes.
+  (78 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
+  work measured **video 83.6% and audio 52.3%** identical frame hashes, up
+  from the 120-image sweep's 81.1%.
 - A `boundary` diagnostic prints the frame-completion CPU cycle and PPU dot.
   On SMB the completed frames land at cycles 29,781 / 59,566 / 89,343 /
   119,122 / ... against the reference capture's documented 29,779 / 59,560 /
