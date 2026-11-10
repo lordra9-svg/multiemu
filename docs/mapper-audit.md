@@ -26,19 +26,17 @@ multiemu corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 6,834 | 96.2% |
-| Rendering | 3,709 | 52.2% |
-| Blank | 3,125 | 44.0% |
-| Unsupported mapper | 239 | 3.4% |
+| Loaded (mapper implemented) | 6,853 | 96.5% |
+| Rendering | 3,721 | 52.4% |
+| Blank | 3,132 | 44.1% |
+| Unsupported mapper | 220 | 3.1% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 37 boards were added (27, 40, 65, 67, 70, 72, 74, 78, 93, 107, 117,
-119, 123, 133, 140, 147, 149, 157, 168, 180, 187, 191, 192, 194, 198, 225,
-228, 244, 245, 246, 250, 263, 264, 303, 313, 332, 552). Loaded rose
-6,627 → 6,834 (93.3% → 96.2%) and unsupported fell 446 → 239 (6.3% → 3.4%);
-80 mapper IDs remain, led by 256/515/551 (5 images each) and 355/446/519/
-529/547/57/594 (4 each).
+audit, 43 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 6,853 (93.3% → 96.5%) and unsupported fell 446 → 220 (6.3% → 3.1%);
+80 mapper IDs remain, led by 256/515/551 (5 images each) and 355/446/547/594
+(4 each).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
 is deliberately short; several families need hundreds of frames to leave their
@@ -152,8 +150,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   600 frames.
 - **Mapper completion sweep (15, 27, 40, 57, 65, 67, 70, 72, 74, 78, 93,
   107, 117, 119, 120, 123, 133, 140, 147, 149, 157, 168, 180, 187, 191, 192,
-  194, 198, 225, 228, 244, 245, 246, 250, 263, 264, 303, 313, 332, 519, 529,
-  552)** — 42 boards added against the RustyNES and Mesen2 references:
+  194, 198, 225, 228, 243, 244, 245, 246, 250, 263, 264, 303, 313, 332, 519,
+  529, 552)** — 43 boards added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
   discrete boards add CPU-cycle IRQs; the Sachen 3009/3018 and JV001 latches
@@ -165,8 +163,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   periodic IRQ, the KOF '97 value scramble (263), the Yoko paging modes (264),
   the Super 40-in-1 WS latch (332), the Taito X1-017 (552), the reset-advancing
   TXROM multicart (313), the Eh8813A (519), the T230 VRC-like board (529) and
-  the BMC GK 6-in-1 (57), the K-1029 100-in-1 (15) and the FDS-conversion
-  protection board (120).
+  the BMC GK 6-in-1 (57), the K-1029 100-in-1 (15), the FDS-conversion
+  protection board (120) and the Sachen SA-020A on the SA-006 PCB (243).
   The two Dragon Ball Z Gaiden (529) images poll an undocumented `$5000`
   protection port and remain blank at the title; the other T230 images render.
   Differential results: 246 and 228 are

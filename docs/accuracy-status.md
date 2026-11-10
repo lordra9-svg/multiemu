@@ -301,11 +301,12 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,834 loaded (96.2%), 3,709 rendering (52.2%), 3,125 blank (44.0%), 239
-unsupported (3.4%) and 28 load/run failures (0.39%). The batched totals
+6,853 loaded (96.5%), 3,721 rendering (52.4%), 3,132 blank (44.1%), 220
+unsupported (3.1%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. The remaining 80 unsupported IDs
-are led by 256/515/551 (5 images each) and 355/446/519/529/547/57/594
-(4 each); Datach (157) and the former six-image tail are now implemented.
+are led by 256/515/551 (5 images each) and 355/446/547/594 (4 each); Datach
+(157), the former six-image tail and the 519/529/57/15/120/243 boards are now
+implemented.
 See `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
 tail triage.
 
