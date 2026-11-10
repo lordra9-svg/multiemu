@@ -832,6 +832,7 @@ impl Cartridge {
             246 => Box::new(FongShenBang::new(prg_rom, chr, header)),
             250 => Box::new(Nitra250::new(prg_rom, chr, header)),
             252 => Box::new(Waixing252::new(prg_rom, chr, prg_ram, header)),
+            254 => Box::new(Mmc3_254::new(prg_rom, chr, header)),
             263 => Box::new(Mmc3_263::new(prg_rom, chr, header)),
             264 => Box::new(Yoko264::new(prg_rom, chr, header)),
             140 => Box::new(Jaleco140::new(prg_rom, chr, header)),
@@ -919,6 +920,7 @@ impl Cartridge {
             41 => Box::new(Caltron41::new(prg_rom, chr, header)),
             92 => Box::new(Jaleco72::new_variant(prg_rom, chr, header, 92, 0x1F, true)),
             96 => Box::new(Bandai96::new(prg_rom, chr, header)),
+            103 => Box::new(Mapper103::new(prg_rom, chr, prg_ram, header)),
             104 => Box::new(DiscreteBmc::new(prg_rom, chr, header, 104)),
             105 => Box::new(NesEvent105::new(prg_rom, chr, header)),
             47 => Box::new(Mmc3Outer::new(prg_rom, chr, header, 47)),
@@ -4003,6 +4005,182 @@ impl Mapper for Bmc299 {
 
     fn number(&self) -> u16 {
         299
+    }
+}
+
+/// MMC3 clone (mapper 254) with a scrambled WRAM read-back latch.
+#[derive(Debug)]
+pub struct Mmc3_254 {
+    inner: Mmc3,
+    unlocked: bool,
+    xor: u8,
+}
+
+impl Mmc3_254 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 254),
+            unlocked: false,
+            xor: 0,
+        }
+    }
+}
+
+impl Mapper for Mmc3_254 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if (0x6000..=0x7FFF).contains(&address) {
+            let value = self.inner.prg_read(address);
+            return if self.unlocked {
+                value
+            } else {
+                value ^ self.xor
+            };
+        }
+        self.inner.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x8000 => self.unlocked = true,
+            0xA001 => self.xor = value,
+            _ => {}
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        254
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// Mapper 103: fixed last 32 KiB PRG, an 8 KiB PRG window at `$6000` that
+/// can be RAM or ROM, and a separate WRAM window at `$B800-$D7FF`.
+#[derive(Debug)]
+pub struct Mapper103 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_reg: u8,
+    ram_disabled: bool,
+    mirroring: Mirroring,
+}
+
+impl Mapper103 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        prg_ram.resize(0x4000, 0);
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            prg_reg: 0,
+            ram_disabled: false,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Mapper103 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => {
+                if self.ram_disabled {
+                    self.prg_8k(usize::from(self.prg_reg), address)
+                } else {
+                    self.prg_ram[usize::from(address - 0x6000)]
+                }
+            }
+            0xB800..=0xD7FF => self.prg_ram[0x2000 + usize::from(address - 0xB800)],
+            0x8000..=0xFFFF => {
+                let offset = self.prg.len().saturating_sub(0x8000);
+                self.prg
+                    .get(offset + usize::from(address - 0x8000))
+                    .copied()
+                    .unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000)] = value,
+            0x8000..=0x8FFF => {
+                self.prg_reg = value & 0x0F;
+            }
+            0xB800..=0xD7FF => {
+                self.prg_ram[0x2000 + usize::from(address - 0xB800)] = value;
+            }
+            0xE000..=0xEFFF => {
+                self.mirroring = if value & 0x08 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+            0xF000..=0xFFFF => self.ram_disabled = value & 0x10 != 0,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        103
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
     }
 }
 
@@ -23901,6 +24079,23 @@ mod tests {
             cart.set_cpu_cycle(100 + bit * 2);
             cart.cpu_write(base, (value >> bit) & 1);
         }
+    }
+
+    #[test]
+    fn mapper_103_ram_rom_window() {
+        // 128 KiB PRG, CHR-RAM.
+        let rom = synth_banked(103, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 103);
+        assert_eq!(cart.cpu_read(0x8000), 12);
+        cart.cpu_write(0x6000, 0x42);
+        assert_eq!(cart.cpu_read(0x6000), 0x42);
+        cart.cpu_write(0xF000, 0x10);
+        assert_eq!(cart.cpu_read(0x6000), 0);
+        cart.cpu_write(0x8000, 2);
+        assert_eq!(cart.cpu_read(0x6000), 2);
+        cart.cpu_write(0xB800, 0x33);
+        assert_eq!(cart.cpu_read(0xB800), 0x33);
     }
 
     #[test]
