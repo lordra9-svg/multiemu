@@ -967,9 +967,12 @@ the dots 1-64 clear phase, which provides the seed.
   with the register-driven mirroring the board measures **98.3%** video over
   nine images. **MMC1** now honours the `$E000` bit-4 PRG-RAM deselect
   (reads float, writes drop), matching the reference; the full 398-image
-  mapper-1 board measures **89.4%** video (91.5% best-aligned). The remaining
-  low MMC1 titles (*Hillsfar*, the 11-in-1 Musical Pack) differ by an EEPROM
-  probe / one-byte frame counter, not banking.
+  mapper-1 board measures **91.0%** video (93.1% best-aligned) once the SUROM
+  wiring is included: 512 KiB boards reuse CHR register bit 4 as PRG A18,
+  which our mapper previously ignored, so the *11-in-1 NES Musical Pack* ran
+  the wrong banks at 3/120 and now matches **118/120**. The one low MMC1
+  title left is *Hillsfar* (4/120), whose 24C02 EEPROM probe the reference
+  does not emulate either; it falls into an anti-piracy trap in our run.
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
