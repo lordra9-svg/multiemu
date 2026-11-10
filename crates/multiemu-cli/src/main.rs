@@ -1028,6 +1028,11 @@ fn run_parity(
         video: u64,
         audio: u64,
         total: u64,
+        /// Same-index video count plus the best of a +/-2-frame alignment, so a
+        /// board that renders correctly but one frame out of phase is not
+        /// confused with one that decodes the wrong banks.
+        best_video: u64,
+        shifted: usize,
     }
 
     let temp_dir = std::env::temp_dir().join("multiemu-parity");
@@ -1096,11 +1101,33 @@ fn run_parity(
                 audio += 1;
             }
         }
+        let mut best_video = 0usize;
+        let mut best_shift = 0isize;
+        for shift in -2isize..=2 {
+            let mut v = 0usize;
+            for (i, frame) in ours.iter().take(count).enumerate() {
+                let j = i as isize + shift;
+                if !(0..count as isize).contains(&j) {
+                    continue;
+                }
+                if frame.0 == reference[j as usize].0 {
+                    v += 1;
+                }
+            }
+            if v > best_video {
+                best_video = v;
+                best_shift = shift;
+            }
+        }
         let stat = per_mapper.entry(mapper).or_default();
         stat.images += 1;
         stat.video += video;
         stat.audio += audio;
         stat.total += count as u64;
+        stat.best_video += best_video as u64;
+        if best_shift != 0 {
+            stat.shifted += 1;
+        }
         let pct = |n: u64| {
             if count == 0 {
                 0.0
@@ -1133,18 +1160,24 @@ fn run_parity(
             100.0 * n as f64 / total as f64
         }
     };
+    let best: u64 = per_mapper.values().map(|s| s.best_video).sum();
+    let shifted: usize = per_mapper.values().map(|s| s.shifted).sum();
     println!(
-        "overall: video {video}/{total} ({:.1}%), audio {audio}/{total} ({:.1}%)",
+        "overall: video {video}/{total} ({:.1}%), audio {audio}/{total} ({:.1}%), best-aligned video {best}/{total} ({:.1}%)",
         share(video),
-        share(audio)
+        share(audio),
+        share(best)
     );
-    println!("mapper images   video%  audio%");
+    println!("{shifted} images needed a non-zero frame shift");
+    println!("mapper images   video%  audio%  best%  shifted");
     for (mapper, stat) in &per_mapper {
         println!(
-            "{mapper:>6} {:>6}   {:>6.1}  {:>6.1}",
+            "{mapper:>6} {:>6}   {:>6.1}  {:>6.1}  {:>6.1}  {:>7}",
             stat.images,
             share2(stat.video, stat.total),
-            share2(stat.audio, stat.total)
+            share2(stat.audio, stat.total),
+            share2(stat.best_video, stat.total),
+            stat.shifted
         );
     }
     worst.sort_by(|a, b| {
