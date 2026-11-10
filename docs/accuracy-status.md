@@ -301,7 +301,7 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,857 loaded (96.6%), 3,723 rendering (52.4%), 3,134 blank (44.1%), 216
+6,857 loaded (96.6%), 3,741 rendering (52.7%), 3,116 blank (43.9%), 216
 unsupported (3.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. The remaining 80 unsupported IDs
 are led by 256/515/551 (5 images each) and 355/446/547/594 (4 each); Datach
@@ -926,7 +926,16 @@ the dots 1-64 clear phase, which provides the seed.
   (`HybridKind::Fk23c`, so `$2007` writes reach the first 8 KiB and banks
   >= 8 fall back to ROM) reached **80.1%**; mapper **215** had the NROM/enable and 128 KiB substitution
   bits shifted by one and lacked the submapper-1 CHR bit, now **92.1%** video
-  and 89.6% audio over 21 images. The same 120-image sweep moved from video 81.1% to 82.0%
+  and 89.6% audio over 21 images.
+- PPU colour emphasis was then implemented from the documented 2C02
+  composite model (levels, phase table, YUV decode, per-colour RGB delta).
+  The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
+  Racing* rendered with the wrong colours: its video parity rose from
+  **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
+  declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
+  protection reads reach the mapper instead of open bus. The refreshed
+  audit is **6,857 loaded, 3,741 rendering, 3,116 blank, 216 unsupported
+  (78 IDs), 28 failures**. The same 120-image sweep moved from video 81.1% to 82.0%
   before the 226/242/115 fixes.
 - A `boundary` diagnostic prints the frame-completion CPU cycle and PPU dot.
   On SMB the completed frames land at cycles 29,781 / 59,566 / 89,343 /
