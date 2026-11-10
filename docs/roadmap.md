@@ -33,7 +33,7 @@ The main effort is now the reference-parity accuracy core. Details in
       TC-112 (193), full PPU mirroring modes, the 143
       protected NROM and the 212/235/286 multicarts, `System` bus, Core ABI
       adapter and a `corpus` runner. Full-library audit: 6,857/7,101 load,
-      3,722 rendering, 216 unsupported, 0 panics; 136/193/197 render 7/7,
+      3,727 rendering, 216 unsupported, 0 panics; 136/193/197 render 7/7,
       159/165 8/8, 172 4/6, 195 8/8 (Tiexue needs Start on its title screen)
       (`docs/mapper-audit.md`).
       FDS wavetable/modulation audio is implemented and unit-tested. The raw
