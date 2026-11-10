@@ -526,6 +526,7 @@ impl Ppu {
             if self.mask_delay == 0 {
                 self.mask = value;
                 self.pending_mask = None;
+                self.refresh_palette_rgb();
             } else {
                 self.mask_delay -= 1;
             }
@@ -894,6 +895,7 @@ impl Ppu {
                 // sampled at dot 339 with the calibrated phase.
                 if self.scanline == self.pre_render_line() {
                     self.mask = value;
+                    self.refresh_palette_rgb();
                 } else {
                     self.pending_mask = Some(value);
                     // PPU register writes reach their destination two dots
@@ -1121,11 +1123,30 @@ impl Ppu {
         self.palette[Self::palette_index(address)]
     }
 
+    /// Rebuilds the 32-entry RGB cache for the current PPUMASK emphasis.
+    fn refresh_palette_rgb(&mut self) {
+        let emph = (self.mask >> 5) & 0x07;
+        for index in 0..32 {
+            let colour = self.palette[index] & 0x3F;
+            let base = NES_PALETTE[usize::from(colour)];
+            self.palette_rgb[index] = if emph == 0 {
+                base
+            } else {
+                let delta = emph_delta(colour, emph);
+                [
+                    emph_apply(base[0], delta[0]),
+                    emph_apply(base[1], delta[1]),
+                    emph_apply(base[2], delta[2]),
+                ]
+            };
+        }
+        self.span_len = 0;
+    }
+
     fn write_palette(&mut self, address: u16, value: u8) {
         let index = Self::palette_index(address);
         self.palette[index] = value & 0x3F;
-        self.palette_rgb[index] = NES_PALETTE[usize::from(value & 0x3F)];
-        self.span_len = 0;
+        self.refresh_palette_rgb();
     }
 
     fn sprite_height(&self) -> u16 {
@@ -2026,6 +2047,70 @@ const NES_PALETTE: [[u8; 3]; 64] = [
     [0x00, 0x00, 0x00],
     [0x00, 0x00, 0x00],
 ];
+
+/// Documented 2C02 composite levels `[attenuated][low, high][row]` (volts).
+const EMPH_LEVELS: [[[f64; 4]; 2]; 2] = [
+    [[0.228, 0.312, 0.552, 0.880], [0.616, 0.840, 1.100, 1.100]],
+    [[0.192, 0.256, 0.448, 0.712], [0.500, 0.676, 0.896, 0.896]],
+];
+const EMPH_BLACK: f64 = 0.312;
+const EMPH_WHITE: f64 = 1.100;
+
+fn emph_phase_high(hue: u8, phase: u8) -> bool {
+    let k = (phase + hue) % 12;
+    (1..=6).contains(&k)
+}
+
+fn emph_level(colour: u8, emph: u8, phase: u8) -> f64 {
+    let hue = colour & 0x0F;
+    let row = usize::from((colour >> 4) & 0x03);
+    if hue >= 0x0E {
+        return EMPH_LEVELS[0][0][1];
+    }
+    let attenuated = (emph & 1 != 0 && emph_phase_high(0x0C, phase))
+        || (emph & 2 != 0 && emph_phase_high(0x04, phase))
+        || (emph & 4 != 0 && emph_phase_high(0x08, phase));
+    let set = &EMPH_LEVELS[usize::from(attenuated)];
+    let (low, high) = (set[0][row], set[1][row]);
+    match hue {
+        0x00 => high,
+        0x0D => low,
+        _ if emph_phase_high(hue, phase) => high,
+        _ => low,
+    }
+}
+
+fn emph_decode(colour: u8, emph: u8) -> [f64; 3] {
+    let (mut y, mut u, mut v) = (0.0, 0.0, 0.0);
+    for phase in 0u8..12 {
+        let sample = (emph_level(colour, emph, phase) - EMPH_BLACK) / (EMPH_WHITE - EMPH_BLACK);
+        let angle = std::f64::consts::PI * (f64::from(phase) + 0.5 - 8.0) / 6.0;
+        y += sample;
+        u -= sample * angle.cos();
+        v += sample * angle.sin();
+    }
+    let (y, u, v) = (y / 12.0, 2.0 * u / 12.0, 2.0 * v / 12.0);
+    [
+        y + 1.139_883 * v,
+        y - 0.394_642 * u - 0.580_622 * v,
+        y + 2.032_062 * u,
+    ]
+}
+
+/// Change emphasis makes to a base colour, in 8-bit units (rounded).
+fn emph_delta(colour: u8, emph: u8) -> [i16; 3] {
+    if emph == 0 || colour & 0x0F >= 0x0E {
+        return [0, 0, 0];
+    }
+    let on = emph_decode(colour, emph);
+    let off = emph_decode(colour, 0);
+    let delta = |c: usize| (255.0 * (on[c] - off[c])).round() as i16;
+    [delta(0), delta(1), delta(2)]
+}
+
+fn emph_apply(base: u8, delta: i16) -> u8 {
+    (i16::from(base) + delta).clamp(0, 255) as u8
+}
 
 #[cfg(test)]
 mod tests {

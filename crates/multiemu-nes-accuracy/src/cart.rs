@@ -1914,8 +1914,19 @@ impl Sachen136 {
 }
 
 impl Mapper for Sachen136 {
+    fn low_window(&self) -> Option<(u16, u16)> {
+        // JV001 protection read-back ($4100 mask $E100).
+        Some((0x4100, 0x5FFF))
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address & 0xE100 == 0x4100 {
+            if std::env::var_os("TDBG").is_some() {
+                eprintln!(
+                    "rd {address:04X} reg={:02X} inv={} out={:02X}",
+                    self.register, self.invert, self.output
+                );
+            }
             let value = if self.invert {
                 self.register ^ 0x30
             } else {
@@ -5433,6 +5444,11 @@ impl Sachen137 {
 }
 
 impl Mapper for Sachen137 {
+    fn low_window(&self) -> Option<(u16, u16)> {
+        // Registers are write-only; keep the window from floating into CPU reads.
+        Some((0x4100, 0x4101))
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -11886,6 +11902,11 @@ impl TxcLatch {
 }
 
 impl Mapper for TxcLatch {
+    fn low_window(&self) -> Option<(u16, u16)> {
+        // TXC JV001 protection read-back.
+        Some((0x4100, 0x5FFF))
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address & 0xE103 == 0x4100 {
             return (if self.s ^ self.invert { 0x08 } else { 0 }) | self.output();
@@ -12010,6 +12031,11 @@ impl Txc132 {
 }
 
 impl Mapper for Txc132 {
+    fn low_window(&self) -> Option<(u16, u16)> {
+        // UNL-22211 protection read-back (mask $0103 == $0100).
+        Some((0x4100, 0x5FFF))
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if (0x4100..=0x5FFF).contains(&address) && (address & 0x0103) == 0x0100 {
             return self.chip_read() & 0x0F;
@@ -12778,6 +12804,11 @@ impl Mmc3_176 {
 }
 
 impl Mapper for Mmc3_176 {
+    fn low_window(&self) -> Option<(u16, u16)> {
+        // FK23C $5000 window: registers, or WRAM while the FS005 protection check has them swapped out.
+        Some((0x5000, 0x5FFF))
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x5000..=0x5FFF => {
