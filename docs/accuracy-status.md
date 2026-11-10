@@ -897,6 +897,16 @@ the dots 1-64 clear phase, which provides the seed.
   The additional fidelity of the master-clock model does not translate into
   better oracle agreement here, so it was reverted rather than shipped as a
   regression.
+- The full reference master-clock CPU/PPU scheduler port (replacing the integer
+  2-dot/1-dot split with `(5,7)`/`(7,5)` master-clock access splits, a global
+  `master_clock`/`ppu_clock` with `run_ppu_to(master-1)`, and the 108-master-
+  clock reset pre-add) was implemented on a throwaway branch and measured. It
+  is decisively worse and does **not** fix the frame origin or the SMB3
+  artefact: SMB 297/300 video / 218/300 audio, Zelda 37/300 video at 300
+  frames, SMB3 15/300, MSG 298/230, and SMB3 frame 200 still differs by the
+  same 8 pixels. The branch was discarded and `main` (integer split, 299/226
+  SMB) remains the best measured configuration. This closes the "full port"
+  route empirically; the residual is not merely an incomplete scheduler.
 - Same-frame framebuffer diffs at frames 11/30/60/90/100/120/150/180/200/220/
   250/280 classify the remaining video gaps:
   - **SMB3** — most frames differ by exactly **8 pixels at (x0-7, y194)**, one
