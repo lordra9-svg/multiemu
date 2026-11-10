@@ -1322,13 +1322,16 @@ impl Mmc1 {
         }
     }
 
-    fn prg_banks(&self) -> usize {
-        (self.prg.len() / 0x4000).max(1)
-    }
-
     fn prg_offset(&self, address: u16) -> usize {
         let offset = usize::from(address - 0x8000);
-        let banks = self.prg_banks();
+        // SUROM/SXROM: with <= 8 KiB of CHR, the CHR register's bit 4 becomes
+        // PRG A18 and selects which 256 KiB half the whole window uses.
+        let outer = if self.chr.len() <= 0x2000 && self.prg.len() > 0x40000 {
+            (usize::from((self.chr0 >> 4) & 0x01)) * 0x40000
+        } else {
+            0
+        };
+        let half_banks = (self.prg.len().saturating_sub(outer) / 0x4000).clamp(1, 16);
         let mode = (self.control >> 2) & 3;
         let bank = usize::from(self.prg_bank & 0x0F);
         let (first, second) = match mode {
@@ -1337,13 +1340,10 @@ impl Mmc1 {
                 (b, b + 1)
             }
             2 => (0, bank),
-            _ => (bank, banks - 1),
+            _ => (bank, half_banks - 1),
         };
-        if offset < 0x4000 {
-            (first % banks) * 0x4000 + offset
-        } else {
-            (second % banks) * 0x4000 + (offset - 0x4000)
-        }
+        let slot = if offset < 0x4000 { first } else { second };
+        outer + (slot % half_banks) * 0x4000 + (offset & 0x3FFF)
     }
 
     fn chr_offset(&self, address: u16) -> usize {
@@ -19778,6 +19778,23 @@ mod tests {
         cart.cpu_write(0x4800, 0x21);
         assert_eq!(cart.cpu_read(0x8000), 8);
         assert_eq!(cart.ppu_read(0x0000), 0x88);
+    }
+
+    #[test]
+    fn mmc1_surom_chr_bit4_selects_the_prg_half() {
+        // 512 KiB PRG (32 x 16 KiB), CHR-RAM: SUROM wiring.
+        let rom = synth_banked(1, 512, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        // Mode 3 (power-on control from the header): bank 0 at $8000, the last
+        // bank of the low 256 KiB half at $C000.
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 30);
+        // Serial-write $10 into CHR register 0: bit 4 selects the upper half.
+        for value in [0u8, 0, 0, 0, 1] {
+            cart.cpu_write(0xA000, value);
+        }
+        assert_eq!(cart.cpu_read(0x8000), 32);
+        assert_eq!(cart.cpu_read(0xC000), 62);
     }
 
     #[test]
