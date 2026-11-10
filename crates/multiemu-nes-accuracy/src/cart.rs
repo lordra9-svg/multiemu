@@ -849,6 +849,7 @@ impl Cartridge {
             143 => Box::new(Prot143::new(prg_rom, chr, header)),
             148 => Box::new(Nina148::new(prg_rom, chr, header)),
             150 => Box::new(Sachen150::new(prg_rom, chr, header)),
+            243 => Box::new(Sachen150::new_243(prg_rom, chr, header)),
             152 => Box::new(Bus152::new(prg_rom, chr, header)),
             226 => Box::new(Multicart226::new(prg_rom, chr, header)),
             240 => Box::new(Gnrom240::new(prg_rom, chr, prg_ram, header)),
@@ -9068,16 +9069,28 @@ pub struct Sachen150 {
     regs: [u8; 8],
     index: u8,
     mirroring: Mirroring,
+    /// Mapper 243 (SA-020A PCB) reconnects the same ASIC: R5 supplies the
+    /// whole PRG bank and R2/R4/R6 are reassembled low-to-high for CHR.
+    sa020a: bool,
 }
 
 impl Sachen150 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self::new_as(prg, chr, header, false)
+    }
+
+    fn new_243(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self::new_as(prg, chr, header, true)
+    }
+
+    fn new_as(prg: Vec<u8>, chr: Vec<u8>, header: Header, sa020a: bool) -> Self {
         Self {
             prg,
             chr,
             regs: [0; 8],
             index: 0,
             mirroring: header.mirroring,
+            sa020a,
         }
     }
 
@@ -9086,10 +9099,24 @@ impl Sachen150 {
     }
 
     fn chr_bank(&self) -> usize {
-        (usize::from(self.regs[4] & 0x01) << 2) | usize::from(self.regs[6] & 0x03)
+        if self.sa020a {
+            usize::from(self.regs[2] & 0x01)
+                | (usize::from(self.regs[4] & 0x01) << 1)
+                | (usize::from(self.regs[6] & 0x03) << 2)
+        } else {
+            (usize::from(self.regs[4] & 0x01) << 2) | usize::from(self.regs[6] & 0x03)
+        }
     }
 
     fn update_mirroring(&mut self) {
+        if self.sa020a {
+            self.mirroring = match (self.regs[7] >> 1) & 0x03 {
+                1 => Mirroring::Horizontal,
+                2 => Mirroring::Vertical,
+                _ => Mirroring::SingleLower,
+            };
+            return;
+        }
         self.mirroring = match (self.regs[7] >> 2) & 0x03 {
             0 => Mirroring::SingleLower,
             1 => Mirroring::Horizontal,
@@ -9140,7 +9167,11 @@ impl Mapper for Sachen150 {
     }
 
     fn number(&self) -> u16 {
-        150
+        if self.sa020a {
+            243
+        } else {
+            150
+        }
     }
 }
 
@@ -20081,6 +20112,21 @@ mod tests {
         assert_eq!(cart.cpu_read(0xE000), 7);
         cart.cpu_write(0x41FF, 2);
         assert_eq!(cart.cpu_read(0x6000), 2);
+    }
+
+    #[test]
+    fn sachen_243_reassembles_chr_low_to_high() {
+        // 128 KiB PRG (4 x 32 KiB), 64 KiB CHR (8 x 8 KiB).
+        let rom = synth_banked(243, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 243);
+        for (index, value) in [(2, 1), (4, 1), (5, 1), (6, 1), (7, 2)] {
+            cart.cpu_write(0x4100, index);
+            cart.cpu_write(0x4101, value);
+        }
+        assert_eq!(cart.cpu_read(0x8000), 4, "32 KiB bank 1");
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 56, "CHR bank 7");
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
     #[test]

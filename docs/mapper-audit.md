@@ -150,10 +150,10 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   latches (page 0 is CHR-RAM), toggled by `$FD`/`$FE` pattern fetches and by
   `$2007` reads. The PPU reads and writes through the shared map. 8/8 render at
   600 frames.
-- **Mapper completion sweep (27, 40, 57, 65, 67, 70, 72, 74, 78, 93, 107,
-  117, 119, 123, 133, 140, 147, 149, 157, 168, 180, 187, 191, 192, 194, 198,
-  225, 228, 244, 245, 246, 250, 263, 264, 303, 313, 332, 519, 529, 552)** —
-  40 boards added against the RustyNES and Mesen2 references:
+- **Mapper completion sweep (15, 27, 40, 57, 65, 67, 70, 72, 74, 78, 93,
+  107, 117, 119, 120, 123, 133, 140, 147, 149, 157, 168, 180, 187, 191, 192,
+  194, 198, 225, 228, 244, 245, 246, 250, 263, 264, 303, 313, 332, 519, 529,
+  552)** — 42 boards added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
   discrete boards add CPU-cycle IRQs; the Sachen 3009/3018 and JV001 latches
@@ -165,7 +165,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   periodic IRQ, the KOF '97 value scramble (263), the Yoko paging modes (264),
   the Super 40-in-1 WS latch (332), the Taito X1-017 (552), the reset-advancing
   TXROM multicart (313), the Eh8813A (519), the T230 VRC-like board (529) and
-  the BMC GK 6-in-1 (57).
+  the BMC GK 6-in-1 (57), the K-1029 100-in-1 (15) and the FDS-conversion
+  protection board (120).
   The two Dragon Ball Z Gaiden (529) images poll an undocumented `$5000`
   protection port and remain blank at the title; the other T230 images render.
   Differential results: 246 and 228 are

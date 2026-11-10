@@ -75,7 +75,9 @@ The main effort is now the reference-parity accuracy core. Details in
 - [ ] **A7** differential harness, hardware captures, performance pass.
       Performance pass started: headless accuracy core ~535 -> ~640 fps
       (max-of-7, 2400 frames) via the sprite-list pixel loop, table-driven
-      mixer, palette RGB cache and the 8-dot background span; profile shares
+      mixer, palette RGB cache and the 8-dot background span; re-measured
+      2026-11-10 at ~1130-1159 fps (AccuracyCoin, 1200 frames, three runs).
+      Profile shares
       logged in `docs/accuracy-status.md`. Single-ROM differential traces
       (`multiemu trace` / `diff`) and directory-level frame signatures
       (`multiemu signatures --check`) exist. Hardware captures still

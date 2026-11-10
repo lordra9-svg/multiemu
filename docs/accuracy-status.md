@@ -1247,6 +1247,12 @@ sprite tests are unchanged. Measured ~630 → ~640 fps max-of-7 on the loaded
 desktop (small but positive; the span only applies on sprite-free background
 lines).
 
+Re-measured 2026-11-10 on the same AccuracyCoin / 1200-frame basis
+(`multiemu bench`, release): **1130-1159 fps** (three runs, 18.8-19.3x
+real-time), versus the 640 fps max-of-7 recorded when the pass was written.
+The accumulated span/table/cache work covers the change; the host was also
+less loaded than during the original measurements.
+
 **A5 gate met (2026-11-08):** the isolated battery is at **146/151 passed,
 0 failed, 5 skipped, 0 unrun** — every non-DRAW test passes. The former
 `$2007 Stress Test` failure was fixed with the PPU data state machine:
