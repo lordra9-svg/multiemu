@@ -961,8 +961,8 @@ the dots 1-64 clear phase, which provides the seed.
   sample moved from 87.0% to **90.3%** video (91.9% best-aligned) and from
   53.3% to 54.9% audio, while the number of frame-shifted images fell from
   32 to 19. The 226 mirroring, MMC1 PRG-RAM and SUROM fixes contributed the
-  last two points (89.2% -> 91.1%), the final sample measuring **91.1%**
-  video and **92.7%** best-aligned over 252 images.
+  last two points (89.2% -> 91.1%). The MMC3 CHR-RAM map then took the same
+  252-image sample to **92.0%** video and **93.6%** best-aligned.
 - The next differential fixes: **226** (Waixing multicart) had mirroring
   fixed from the header instead of `reg0` bit 6, so *22 Games* sat at 9/120;
   with the register-driven mirroring the board measures **98.3%** video over
