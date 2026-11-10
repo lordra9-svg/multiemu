@@ -748,6 +748,7 @@ impl Cartridge {
             70 => Box::new(Bandai70::new(prg_rom, chr, header)),
             93 => Box::new(Sunsoft3r::new(prg_rom, chr, header)),
             107 => Box::new(MagicDragon107::new(prg_rom, chr, header)),
+            168 => Box::new(Racermate168::new(prg_rom, chr, header)),
             180 => Box::new(Nichibutsu180::new(prg_rom, chr, header)),
             228 => Box::new(Action52::new(prg_rom, chr)),
             246 => Box::new(FongShenBang::new(prg_rom, chr, header)),
@@ -906,7 +907,7 @@ impl Cartridge {
             66 => Box::new(GxRom::new(prg_rom, chr, header)),
             71 => Box::new(Camerica::new(prg_rom, chr, header)),
             7 => Box::new(AxRom::new(prg_rom, chr, header)),
-            21 | 22 | 23 | 25 => Box::new(Vrc::new(prg_rom, chr, prg_ram, header)),
+            21 | 22 | 23 | 25 | 27 => Box::new(Vrc::new(prg_rom, chr, prg_ram, header)),
             24 => Box::new(Vrc6::new(prg_rom, chr, prg_ram, header, 24)),
             26 => Box::new(Vrc6::new(prg_rom, chr, prg_ram, header, 26)),
             other => return Err(CartError::UnsupportedMapper(other)),
@@ -4032,6 +4033,97 @@ impl Mapper for Irem78 {
     }
 }
 
+/// Racermate Challenge II (mapper 168): switchable 16 KiB PRG and 4 KiB CHR
+/// pages with a free-running CPU-cycle IRQ that fires every 1024 cycles.
+#[derive(Debug)]
+pub struct Racermate168 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    mirroring: Mirroring,
+    irq_counter: u16,
+    irq_pending: bool,
+}
+
+impl Racermate168 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_bank: 0,
+            mirroring: header.mirroring,
+            irq_counter: 0,
+            irq_pending: false,
+        }
+    }
+}
+
+impl Mapper for Racermate168 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x4000).max(1);
+        let bank = if address < 0xC000 {
+            usize::from(self.prg_bank) % banks
+        } else {
+            banks - 1
+        };
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0xC000 {
+            0x8000 => self.prg_bank = (value >> 6) & 0x03,
+            0xC000 => {
+                self.irq_counter = 1024;
+                self.irq_pending = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address) & 0x1FFF)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address) & 0x1FFF) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        168
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        self.irq_counter = self.irq_counter.wrapping_sub(1);
+        if self.irq_counter == 0 {
+            self.irq_counter = 1024;
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
 /// UxROM (mapper 2): 16 KiB switchable at `$8000`, last bank fixed.
 #[derive(Debug)]
 pub struct UxRom {
@@ -5855,6 +5947,9 @@ impl Vrc {
     fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
         let variant = match header.mapper {
             22 => VrcVariant::Vrc2a,
+            // Mapper 27 is VRC4 with the A0/A1 register decode of the
+            // VRC2b/VRC4f wiring.
+            27 => VrcVariant::Vrc4f,
             23 => match header.submapper {
                 1 => VrcVariant::Vrc4f,
                 3 => VrcVariant::Vrc2b,
@@ -18406,6 +18501,41 @@ mod tests {
         cart.cpu_write(0x8000, 0x06);
         cart.cpu_write(0x8001, 0x20);
         assert_eq!(cart.cpu_read(0x8000), 0x20);
+    }
+
+    #[test]
+    fn vrc4_mapper_27_decodes_registers() {
+        // 128 KiB PRG (16 x 8 KiB), 128 KiB CHR (128 x 1 KiB).
+        let rom = synth_banked(27, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 27);
+        cart.cpu_write(0x8000, 2);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+        // Low/high nibble CHR writes at $B000/$B001 select 1 KiB bank 0x13.
+        cart.cpu_write(0xB000, 3);
+        cart.cpu_write(0xB001, 1);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 0x13);
+    }
+
+    #[test]
+    fn racermate_168_prg_bank_and_periodic_irq() {
+        // 64 KiB PRG (4 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(168, 64, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 168);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 6);
+        cart.cpu_write(0x8000, 0x40);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+
+        // $C000 reloads the 1024-cycle counter and clears the line.
+        cart.cpu_write(0xC000, 0);
+        for _ in 0..1023 {
+            cart.clock_cpu();
+        }
+        assert!(!cart.irq_line());
+        cart.clock_cpu();
+        assert!(cart.irq_line());
     }
 
     #[test]

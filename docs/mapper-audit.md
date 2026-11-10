@@ -149,6 +149,21 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   latches (page 0 is CHR-RAM), toggled by `$FD`/`$FE` pattern fetches and by
   `$2007` reads. The PPU reads and writes through the shared map. 8/8 render at
   600 frames.
+- **Mapper completion sweep (40, 70, 74, 93, 107, 119, 123, 133, 140, 147,
+  149, 157, 180, 187, 191, 192, 194, 198, 225, 228, 244, 245, 246, 250,
+  303)** — 25 boards added against the RustyNES and Mesen2 references:
+  TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
+  Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
+  discrete boards add CPU-cycle IRQs; the Sachen 3009/3018 and JV001 latches
+  cover the A8-decoded `$4100-$5FFF` window; Nitra decodes the MMC3 protocol
+  from the write address; Datach reuses the Bandai FCG core with the scanner
+  window; and the MMC3 clones (123, 187, 198, 245) override PRG/CHR mapping
+  while delegating the IRQ. Differential results: 246 and 228 are
+  pixel-identical to the oracle on sampled frames, 70/74/119/133/140/147/149/
+  180/187/191/192/194/225/245/250 match 113-119/120, and 93/107 match exactly
+  once the known frame-origin drift is accounted for. 123 and 187 follow the
+  Mesen reference because the RustyNES oracle falls back to a different board
+  for them.
 - **MMC5 (5, partial)** — the CPU-visible register file covers the unsigned
   8×8 multiplier (`$5205`/`$5206`), PRG-RAM protect (`$5102`/`$5103`), the
   `$5113` 8 KiB PRG-RAM bank, the `$5114-$5116` RAM/ROM toggle, ExRAM CPU
