@@ -748,6 +748,7 @@ impl Cartridge {
             70 => Box::new(Bandai70::new(prg_rom, chr, header)),
             93 => Box::new(Sunsoft3r::new(prg_rom, chr, header)),
             107 => Box::new(MagicDragon107::new(prg_rom, chr, header)),
+            117 => Box::new(Unl117::new(prg_rom, chr, header)),
             168 => Box::new(Racermate168::new(prg_rom, chr, header)),
             180 => Box::new(Nichibutsu180::new(prg_rom, chr, header)),
             228 => Box::new(Action52::new(prg_rom, chr)),
@@ -4116,6 +4117,136 @@ impl Mapper for Racermate168 {
         if self.irq_counter == 0 {
             self.irq_counter = 1024;
             self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// UNL-Mapper-117: four switchable 8 KiB PRG pages, eight 1 KiB CHR pages,
+/// an A12-rise IRQ with a reload/enable pair, and `$D000` mirroring.
+#[derive(Debug)]
+pub struct Unl117 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_banks: [u8; 4],
+    chr_banks: [u8; 8],
+    mirroring: Mirroring,
+    irq_reload: u8,
+    irq_counter: u8,
+    irq_enabled: bool,
+    irq_alt: bool,
+    irq_pending: bool,
+}
+
+impl Unl117 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        let banks = (prg.len() / 0x2000).max(1) as u8;
+        let last = |offset: u8| banks.saturating_sub(offset);
+        Self {
+            prg,
+            chr,
+            prg_banks: [last(4), last(3), last(2), last(1)],
+            chr_banks: [0; 8],
+            mirroring: header.mirroring,
+            irq_reload: 0,
+            irq_counter: 0,
+            irq_enabled: false,
+            irq_alt: false,
+            irq_pending: false,
+        }
+    }
+}
+
+impl Mapper for Unl117 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = usize::from(self.prg_banks[slot]) % banks;
+        self.prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x8000..=0x8003 => self.prg_banks[usize::from(address & 0x03)] = value,
+            0xA000..=0xA007 => self.chr_banks[usize::from(address & 0x07)] = value,
+            0xC001 => self.irq_reload = value,
+            0xC002 => {
+                self.irq_pending = false;
+                self.irq_alt = false;
+            }
+            0xC003 => {
+                self.irq_counter = self.irq_reload;
+                self.irq_alt = true;
+            }
+            0xD000 => {
+                self.mirroring = if value & 0x01 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                }
+            }
+            0xE000 => {
+                self.irq_enabled = value & 0x01 != 0;
+                self.irq_pending = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let slot = usize::from((address >> 10) & 0x07);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let slot = usize::from((address >> 10) & 0x07);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        117
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0xA000..=0xA007).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_scanline(&mut self) {
+        if self.irq_enabled && self.irq_alt && self.irq_counter != 0 {
+            self.irq_counter -= 1;
+            if self.irq_counter == 0 {
+                self.irq_pending = true;
+                self.irq_alt = false;
+            }
         }
     }
 
@@ -18535,6 +18666,31 @@ mod tests {
         }
         assert!(!cart.irq_line());
         cart.clock_cpu();
+        assert!(cart.irq_line());
+    }
+
+    #[test]
+    fn unl_117_pages_and_a12_irq() {
+        // 128 KiB PRG (16 x 8 KiB), 64 KiB CHR (64 x 1 KiB).
+        let rom = synth_banked(117, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 117);
+        // Power-on 32 KiB block at the end: banks 12..15.
+        assert_eq!(cart.cpu_read(0x8000), 12);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+        cart.cpu_write(0x8000, 2);
+        assert_eq!(cart.cpu_read(0x8000), 2);
+        cart.cpu_write(0xA000, 3);
+        assert_eq!(cart.ppu_read(0x0000), 0x83);
+
+        cart.cpu_write(0xC001, 0x10);
+        cart.cpu_write(0xE000, 0x01);
+        cart.cpu_write(0xC003, 0x00);
+        for _ in 0..15 {
+            cart.clock_scanline();
+        }
+        assert!(!cart.irq_line());
+        cart.clock_scanline();
         assert!(cart.irq_line());
     }
 
