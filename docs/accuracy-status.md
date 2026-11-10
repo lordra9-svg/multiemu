@@ -897,6 +897,22 @@ the dots 1-64 clear phase, which provides the seed.
   The additional fidelity of the master-clock model does not translate into
   better oracle agreement here, so it was reverted rather than shipped as a
   regression.
+- Namco 163 nametable audit: swept 10 mapper-19 titles against the oracle at
+  60 frames. Six are already excellent (Star Wars 59/60, Hydlide 3 59/60,
+  Dragon Ninja 58/60, Erika 57/60, Pac-Man CE 55/60, Mappy Kids 60/60 after the
+  `$2007` fix), while Final Lap (4/60), Youkai Douchuuki (9/60), Rolling Thunder
+  (21/60) and Mindseeker (28/60) were low. Instrumenting `$C000-$D800` showed
+  Final Lap/Youkai and the other low titles write pages `$E0`/`$E1`/`$F0`/`$F1`
+  to select the N163's internal 2 KiB nametable RAM, which this core did not
+  expose to the PPU. Implementing that mapping (shared `N163Nt` state, PPU
+  nametable reads/writes routed through it) took Final Lap to 58/60 and Youkai
+  to 59/60, but *blanked* Kaijuu Monogatari and Namco Classic II, which map all
+  four slots to NT RAM, clear it to zero and expect the graphics from elsewhere
+  (the CHR-ROM nametable-page path, `$C000` values < `$E0`, which is not
+  modelled). Net corpus effect was 32 -> 28 rendering at 600 frames, so the
+  mapping was reverted and deferred until the CHR-ROM nametable pages and the
+  NT-RAM write path are complete. The `$A000-$B800` handler also wrote the
+  (unused) `nt_banks` array, a latent bug to fix with that work.
 - Mid-frame CHR bank switching is now visible to `$2007` readback: the CHR-ROM
   window is refreshed on `$2006` writes and `$2007` reads (previously it was
   copied only at the start of each frame). Some mappers self-test their banking
