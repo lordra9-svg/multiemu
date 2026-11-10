@@ -918,6 +918,16 @@ the dots 1-64 clear phase, which provides the seed.
   The remaining gap is therefore coupled to the reference's DMA, interrupt and
   APU ordering inside the same bus; porting the clock arithmetic alone makes
   both video and audio worse.
+- The ordering was then ported too -- pre-access PPU dots run before the
+  APU/mapper tick (the reference's `start_cycle`), with DMA compensation for
+  the already-spent portion of the cycle -- and the one-clock sample lag was
+  swept 0/1/2. At **lag 0** the port reproduces the shipped scheduler on SMB
+  (299/300 video, 226/300 audio) and SMB3 (299/300 video, 300/300 audio), but
+  still regresses Zelda (598 -> 38/600 same-index; best shift -1 = 588/600).
+  At the reference's **lag 1**, SMB falls to 297/300 video and 226/300 audio.
+  Reverted again: the shipped scheduler is already dot-equivalent once the
+  ordering matches, and the read/write split is what moves Zelda the wrong
+  way.
 - A per-instruction `(pc, cycle)` comparison against the reference capture
   finally rules out CPU bus/IRQ timing as the frame-39 cause. Over the window
   around the seeding `$4007` write (cycle ~1,154,2xx) the PC streams are
