@@ -26,17 +26,17 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 6,857 | 96.6% |
-| Rendering | 3,733 | 52.6% |
-| Blank | 3,124 | 44.0% |
-| Unsupported mapper | 216 | 3.0% |
+| Loaded (mapper implemented) | 6,870 | 96.8% |
+| Rendering | 3,744 | 52.7% |
+| Blank | 3,126 | 44.0% |
+| Unsupported mapper | 203 | 2.9% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 45 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 6,857 (93.3% → 96.6%) and unsupported fell 446 → 216 (6.3% → 3.0%);
-78 mapper IDs remain, led by 256/515/551 (5 images each) and 355/446/547/594
-(4 each).
+audit, 54 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 6,870 (93.3% → 96.8%) and unsupported fell 446 → 203 (6.3% → 2.9%);
+80+ mapper IDs remain (the ranking prints the top 80), led by 256/515/551
+(5 images each) and 355/446/547/594 (4 each).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
 is deliberately short; several families need hundreds of frames to leave their
