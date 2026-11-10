@@ -864,7 +864,7 @@ impl Cartridge {
             241 => Box::new(BxRomWram::new(prg_rom, chr, prg_ram, header)),
             286 => Box::new(Benshieng286::new(prg_rom, chr, header)),
             58 | 213 => Box::new(Multicart58::new(prg_rom, chr, header)),
-            132 => Box::new(TxcLatch::new(prg_rom, chr, header, 132)),
+            132 => Box::new(Txc132::new(prg_rom, chr, header)),
             173 => Box::new(TxcLatch::new(prg_rom, chr, header, 173)),
             177 => Box::new(Hengge177::new(prg_rom, chr, prg_ram, header)),
             185 => Box::new(CnRom185::new(prg_rom, chr, header)),
@@ -1868,7 +1868,10 @@ impl Sachen136 {
     }
 
     fn chr_bank(&self) -> usize {
-        if self.reversed {
+        if self.number == 172 {
+            // TXC JV001 reversed: CHR A13-A14 come from output bits 0-1.
+            usize::from(self.output & 0x03)
+        } else if self.reversed {
             usize::from((self.output >> 4) & 0x03)
         } else {
             usize::from(self.output & 0x07)
@@ -1892,6 +1895,16 @@ impl Mapper for Sachen136 {
         }
         if address < 0x8000 {
             return 0;
+        }
+        if self.number == 172 {
+            // The P-4070 has no PRG bank line: the first 32 KiB is fixed (a
+            // 16 KiB image mirrors across the window).
+            let span = 0x8000.min(self.prg.len().max(1));
+            return self
+                .prg
+                .get(usize::from(address - 0x8000) % span)
+                .copied()
+                .unwrap_or(0);
         }
         let banks = (self.prg.len() / 0x8000).max(1);
         let bank = usize::from((self.output >> 4) & 0x01) % banks;
@@ -11552,8 +11565,8 @@ pub struct Multicart58 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_bank: u8,
+    prg32_mode: bool,
     chr_bank: u8,
-    nrom128: bool,
     mirroring: Mirroring,
 }
 
@@ -11563,8 +11576,8 @@ impl Multicart58 {
             prg,
             chr,
             prg_bank: 0,
+            prg32_mode: false,
             chr_bank: 0,
-            nrom128: false,
             mirroring: header.mirroring,
         }
     }
@@ -11575,40 +11588,53 @@ impl Mapper for Multicart58 {
         if address < 0x8000 {
             return 0;
         }
-        let banks = (self.prg.len() / 0x8000).max(1);
-        let bank = usize::from(self.prg_bank) % banks;
-        let offset = if self.nrom128 {
-            bank * 0x8000 + usize::from(address & 0x3FFF)
+        if self.prg32_mode {
+            let banks = (self.prg.len() / 0x8000).max(1);
+            let bank = usize::from((self.prg_bank & 0x06) >> 1) % banks;
+            self.prg
+                .get(bank * 0x8000 + usize::from(address - 0x8000))
+                .copied()
+                .unwrap_or(0)
         } else {
-            bank * 0x8000 + usize::from(address & 0x7FFF)
-        };
-        self.prg.get(offset).copied().unwrap_or(0)
+            let banks = (self.prg.len() / 0x4000).max(1);
+            let bank = usize::from(self.prg_bank) % banks;
+            self.prg
+                .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+                .copied()
+                .unwrap_or(0)
+        }
     }
 
-    fn prg_write(&mut self, address: u16, value: u8) {
-        if address < 0x8000 {
-            return;
+    fn prg_write(&mut self, address: u16, _value: u8) {
+        if address >= 0x8000 {
+            // Address-decoded register (the data byte is ignored).
+            self.prg_bank = (address & 0x07) as u8;
+            self.prg32_mode = address & 0x40 == 0;
+            self.chr_bank = ((address >> 3) & 0x07) as u8;
+            self.mirroring = if address & 0x80 != 0 {
+                Mirroring::Horizontal
+            } else {
+                Mirroring::Vertical
+            };
         }
-        self.prg_bank = value & 0x07;
-        self.chr_bank = (value >> 3) & 0x07;
-        self.nrom128 = value & 0x40 != 0;
-        self.mirroring = if value & 0x80 == 0 {
-            Mirroring::Vertical
-        } else {
-            Mirroring::Horizontal
-        };
     }
 
     fn chr_read(&self, address: u16) -> u8 {
         let banks = (self.chr.len() / 0x2000).max(1);
-        let offset = (usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF);
-        self.chr.get(offset).copied().unwrap_or(0)
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
         let banks = (self.chr.len() / 0x2000).max(1);
-        let offset = (usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF);
-        if let Some(byte) = self.chr.get_mut(offset) {
+        let bank = usize::from(self.chr_bank) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x2000 + usize::from(address & 0x1FFF))
+        {
             *byte = value;
         }
     }
@@ -11619,6 +11645,10 @@ impl Mapper for Multicart58 {
 
     fn number(&self) -> u16 {
         58
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
     }
 }
 
@@ -11879,6 +11909,124 @@ impl Mapper for TxcLatch {
 
     fn number(&self) -> u16 {
         self.mapper
+    }
+}
+
+/// TXC UNL-22211 (mapper 132): the scrambling-accumulator chip drives a
+/// 32 KiB PRG bank and an 8 KiB CHR bank, latched only on a subsequent
+/// `$8000-$FFFF` write.
+#[derive(Debug)]
+pub struct Txc132 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    accumulator: u8,
+    inverter: u8,
+    staging: u8,
+    output: u8,
+    increase: bool,
+    invert: bool,
+    mirroring: Mirroring,
+}
+
+impl Txc132 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            accumulator: 0,
+            inverter: 0,
+            staging: 0,
+            output: 0,
+            increase: false,
+            invert: false,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn chip_read(&self) -> u8 {
+        let invert_xor = if self.invert { 0xFF } else { 0x00 };
+        (self.accumulator & 0x07) | ((self.inverter ^ invert_xor) & !0x07)
+    }
+
+    fn chip_write(&mut self, address: u16, value: u8) {
+        let value = value & 0x0F;
+        if address < 0x8000 {
+            match address & 0xE103 {
+                0x4100 => {
+                    if self.increase {
+                        self.accumulator = self.accumulator.wrapping_add(1);
+                    } else {
+                        let invert_xor = if self.invert { 0xFF } else { 0x00 };
+                        self.accumulator =
+                            ((self.accumulator & !0x07) | (self.staging & 0x07)) ^ invert_xor;
+                    }
+                }
+                0x4101 => self.invert = value & 0x01 != 0,
+                0x4102 => {
+                    self.staging = value & 0x07;
+                    self.inverter = value & !0x07;
+                }
+                0x4103 => self.increase = value & 0x01 != 0,
+                _ => {}
+            }
+        } else {
+            self.output = (self.accumulator & 0x0F) | ((self.inverter & 0x08) << 1);
+        }
+    }
+}
+
+impl Mapper for Txc132 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if (0x4100..=0x5FFF).contains(&address) && (address & 0x0103) == 0x0100 {
+            return self.chip_read() & 0x0F;
+        }
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        let bank = usize::from((self.output >> 2) & 0x01) % banks;
+        self.prg
+            .get(bank * 0x8000 + usize::from(address & 0x7FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 || (0x4100..=0x5FFF).contains(&address) {
+            self.chip_write(address, value);
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.output & 0x03) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.output & 0x03) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        132
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
     }
 }
 
@@ -18393,10 +18541,16 @@ mod tests {
     fn multicart58_latches_banks() {
         let rom = synth_banked(58, 128, 32);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
-        cart.cpu_write(0x8000, 0x09);
-        assert_eq!(cart.cpu_read(0x8000), 4);
-        assert_eq!(cart.ppu_read(0x0000), 0x88);
+        // Address-decoded: A0-A2 = PRG, A6 = 32 KiB mode (clear), A3-A5 = CHR.
+        cart.cpu_write(0xC005, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 8);
+        assert_eq!(cart.cpu_read(0xC000), 10);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        // A6 set selects the 16 KiB mode, mirrored in both halves.
+        cart.cpu_write(0x8040, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 0);
     }
 
     #[test]
@@ -18429,6 +18583,33 @@ mod tests {
         cart.cpu_write(0x8000, 0x00);
         assert_eq!(cart.cpu_read(0x8000), 4);
         assert_eq!(cart.ppu_read(0x0000), 0x88);
+    }
+
+    #[test]
+    fn txc132_accumulator_and_inverter() {
+        let rom = synth_banked(132, 64, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        // Staging 4 with the inverter's high bit set; the read reflects it.
+        cart.cpu_write(0x4102, 0x0C);
+        cart.cpu_write(0x4100, 0x00);
+        assert_eq!(cart.cpu_read(0x4100), 0x0C);
+        cart.cpu_write(0x8000, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 4, "32 KiB bank 1");
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+    }
+
+    #[test]
+    fn txc172_has_fixed_prg_and_low_chr_bits() {
+        // 32 KiB PRG (fixed), 32 KiB CHR (4 x 8 KiB).
+        let rom = synth_banked(172, 32, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 172);
+        cart.cpu_write(0x4102, 0x05);
+        cart.cpu_write(0x4100, 0x00);
+        cart.cpu_write(0x8000, 0x00);
+        // PRG never banks: the first 32 KiB stays visible.
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.ppu_read(0x0000), 0x80, "output & 3 = 0");
     }
 
     #[test]
@@ -21204,7 +21385,8 @@ mod tests {
         assert_eq!(cart.cpu_read(0x4100), 0x01);
         cart.cpu_write(0x8000, 0);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
-        assert_eq!(cart.ppu_read(0x0000), 0x90);
+        // CHR A13-A14 are output bits 0-1: reversed $01 -> $20 -> bank 0.
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
 
         // Invert (CPU bit 5) turns the latch write into vertical mirroring.
         cart.cpu_write(0x4101, 0x20);
