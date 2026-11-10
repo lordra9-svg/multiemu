@@ -984,6 +984,13 @@ the dots 1-64 clear phase, which provides the seed.
   *Pugsley's Scavenger Hunt* differs only in an 8-pixel-wide band on the
   left edge (a mid-frame scroll/write-timing effect) and *8-BIT XMAS 2015*
   only in a central sprite region with matching CHR/VRAM/palette.
+- The last low MMC1 title, *Hillsfar*, was not an EEPROM probe after all: the
+  game resets the MMC1 with the `INC $FFD7` trick, whose dummy `$FF` write
+  resets the chip and whose real `$00` write must be **ignored because it
+  lands on the next CPU cycle** (the shift register needs a cycle to settle).
+  With the consecutive-write rule — a documented MMC1 behaviour the reference
+  models — Hillsfar went from 4/120 (anti-piracy trap) to **116/120** and the
+  mapper-1 board from 91.0% to **92.1%** video (94.2% best-aligned).
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
