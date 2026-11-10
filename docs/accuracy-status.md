@@ -301,7 +301,7 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-6,857 loaded (96.6%), 3,741 rendering (52.7%), 3,116 blank (43.9%), 216
+6,857 loaded (96.6%), 3,744 rendering (52.7%), 3,113 blank (43.8%), 216
 unsupported (3.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. The remaining 80 unsupported IDs
 are led by 256/515/551 (5 images each) and 355/446/547/594 (4 each); Datach
@@ -932,7 +932,10 @@ the dots 1-64 clear phase, which provides the seed.
   `$6000-$7FFF` because the CPU bus forwarded that window only when PRG-RAM
   existed (Jinpai Mali then executed the wrong bytes and stalled at `$EDC4`),
   and matching the reference up-counter IRQ took it from 17.8% to **89.8%**
-  video and 41.6% to **84.6%** audio over 8 images (Jinpai Mali 40 -> 107/120).
+  video and 41.6% to **84.6%** audio over 8 images (Jinpai Mali 40 -> 107/120);
+  mapper **178** (FS305) decoded the PRG mode from `$4800` bits 2-3 instead of
+  1-2 and banked work RAM that the board does not bank, giving **86.9%** video
+  over 38 images (the sampled 48-in-1 was 0/120).
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma
@@ -940,7 +943,7 @@ the dots 1-64 clear phase, which provides the seed.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **6,857 loaded, 3,741 rendering, 3,116 blank, 216 unsupported
+  audit is **6,857 loaded, 3,744 rendering, 3,113 blank, 216 unsupported
   (78 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.
