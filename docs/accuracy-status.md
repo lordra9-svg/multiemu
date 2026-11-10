@@ -897,6 +897,17 @@ the dots 1-64 clear phase, which provides the seed.
   The additional fidelity of the master-clock model does not translate into
   better oracle agreement here, so it was reverted rather than shipped as a
   regression.
+- Mid-frame CHR bank switching is now visible to `$2007` readback: the CHR-ROM
+  window is refreshed on `$2006` writes and `$2007` reads (previously it was
+  copied only at the start of each frame). Some mappers self-test their banking
+  by switching a CHR bank and reading it back through `$2007`; with a stale
+  window that check fails and the game parks in a `JMP $FF66` hang. Namco 163
+  (mapper 19) was affected: Mappy Kids hung at the CHR-bank self-test. With the
+  refresh its video goes **8 -> 298/300** and audio 205 -> 234/300, and the
+  mapper-19 corpus is **32/34 rendering at 600 frames**. The refresh is cheap
+  (only on `$2006`/`$2007` accesses) and leaves every other title's parity
+  unchanged (SMB 299/226, SMB3 70/228, CV3 188/8, MSG 298/238, Zelda 299/28,
+  VRC6 298/192, FME7 298/202).
 - The full reference master-clock CPU/PPU scheduler port (replacing the integer
   2-dot/1-dot split with `(5,7)`/`(7,5)` master-clock access splits, a global
   `master_clock`/`ppu_clock` with `run_ppu_to(master-1)`, and the 108-master-

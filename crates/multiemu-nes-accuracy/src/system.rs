@@ -374,6 +374,18 @@ impl System {
         self.cart.prg_ram()
     }
 
+    /// Re-copies the CHR-ROM window from the cartridge. Called on `$2006`
+    /// writes and `$2007` reads so a mid-frame CHR bank switch is visible to
+    /// `$2007` readback (mapper self-tests switch banks and read them back).
+    fn refresh_chr(&mut self) {
+        if self.cart.chr_is_ram() {
+            return;
+        }
+        for address in 0..0x2000u16 {
+            self.ppu.chr[usize::from(address)] = self.cart.ppu_read(address);
+        }
+    }
+
     fn sync_cartridge(&mut self) {
         // CHR-ROM is copied once per frame; mid-frame bank switches are an A4
         // follow-up. CHR-RAM is owned by the PPU because games upload tiles to
@@ -855,7 +867,14 @@ impl CpuBus for System {
         let mut drives_bus = true;
         let value = match address {
             0x0000..=0x1FFF => self.ram[usize::from(address) & 0x07FF],
-            0x2000..=0x3FFF => self.ppu.read_register(address),
+            0x2000..=0x3FFF => {
+                // A `$2007` read returns the current CHR bank; refresh first so
+                // a bank written since the frame start is visible.
+                if address & 7 == 7 {
+                    self.refresh_chr();
+                }
+                self.ppu.read_register(address)
+            }
             0x4000..=0x4013 => self.open_bus,
             0x4015 => {
                 // $4015 is internal to the 2A03 and does not drive the CPU
@@ -910,6 +929,11 @@ impl CpuBus for System {
                 self.ppu.write_register(address, value);
                 if address == 0x2000 {
                     self.cart.set_ppu_ctrl(value);
+                }
+                // `$2006` sets the PPU address; a following `$2007` read must
+                // see the bank currently selected by the mapper.
+                if address & 7 == 6 {
+                    self.refresh_chr();
                 }
             }
             0x4000..=0x4013 | 0x4015 | 0x4017 => {
@@ -1388,6 +1412,45 @@ mod tests {
         system.cart.set_ppu_ctrl(0x20);
         assert_eq!(system.ppu.debug_chr_byte(0x0000), 0x81);
         assert_eq!(system.ppu.debug_bg_chr_byte(0x0000), 0x82);
+    }
+
+    #[test]
+    fn namco163_midframe_chr_bank_is_visible_to_2007_readback() {
+        // 128 KiB PRG, 128 KiB CHR (128 x 1 KiB banks filled with 0x80|index).
+        let prg_len = 128 * 1024;
+        let chr_len = 128 * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 8;
+        rom[5] = 16;
+        rom[6] = 0x30;
+        rom[7] = 0x10; // mapper 19
+        rom[16..16 + prg_len].fill(0xEA);
+        rom[16] = 0x4C;
+        rom[17] = 0x00;
+        rom[18] = 0x80;
+        for (bank, chunk) in rom[16 + prg_len..].chunks_mut(0x400).enumerate() {
+            chunk.fill(0x80 | (bank as u8 & 0x7F));
+        }
+        let mut system = System::from_ines(&rom).expect("load");
+        assert_eq!(system.cart.mapper(), 19);
+
+        // The mapper self-test switches CHR bank 0 and reads it back through
+        // $2007; the PPU's CHR window must be refreshed by the access.
+        for bank in [0x05u8, 0x21, 0x55] {
+            system.cart.cpu_write(0x8000, bank);
+            CpuBus::write(&mut system, 0x2006, 0);
+            CpuBus::write(&mut system, 0x2006, 0);
+            let _ = CpuBus::read(&mut system, 0x2007); // start the buffered read
+                                                       // The PPU fills the read buffer four dots later.
+            system.ppu.step_dots(8);
+            let value = CpuBus::read(&mut system, 0x2007);
+            assert_eq!(
+                value,
+                0x80 | (bank & 0x7F),
+                "bank {bank:02X} not visible to $2007"
+            );
+        }
     }
 
     #[test]

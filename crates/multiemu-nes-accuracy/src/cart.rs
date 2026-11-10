@@ -6203,7 +6203,9 @@ impl Namco163 {
             chip_addr: 0,
             chr_banks: [0; 8],
             nt_banks: [0; 4],
-            prg_banks: [0; 3],
+            // Power-on PRG mapping is linear: $8000/$A000/$C000 = banks 0/1/2,
+            // with the last bank fixed at $E000.
+            prg_banks: [0, 1, 2],
             nt_ram: [0; 0x800],
             // Power-on state is write-enabled until the game programs $F800.
             write_protect: 0x40,
