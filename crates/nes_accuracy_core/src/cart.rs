@@ -658,6 +658,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Shared CHR/nametable state for mapper 77.
+    fn aux77(&self) -> Option<Rc<RefCell<Aux77>>> {
+        None
+    }
+
     /// Inserts an FDS disk side (`Some`) or ejects (`None`). No-op elsewhere.
     fn insert_disk_side(&mut self, _side: Option<usize>) {}
 
@@ -809,6 +814,7 @@ impl Cartridge {
             65 => Box::new(Irem65::new(prg_rom, chr, header)),
             67 => Box::new(Sunsoft3::new(prg_rom, chr, header)),
             72 => Box::new(Jaleco72::new(prg_rom, chr, header)),
+            77 => Box::new(Irem77::new(prg_rom, chr)),
             78 => Box::new(Irem78::new(prg_rom, chr, header)),
             12 => Box::new(Mmc3_12::new(prg_rom, chr, header)),
             14 => Box::new(Jaleco14::new(prg_rom, chr, header)),
@@ -1178,6 +1184,12 @@ impl Cartridge {
     #[must_use]
     pub fn chr512(&self) -> Option<Rc<RefCell<Chr512>>> {
         self.mapper.chr512()
+    }
+
+    /// Shared CHR/nametable state for mapper 77.
+    #[must_use]
+    pub fn aux77(&self) -> Option<Rc<RefCell<Aux77>>> {
+        self.mapper.aux77()
     }
 
     /// Inserts an FDS disk side (`Some`) or ejects (`None`).
@@ -4485,6 +4497,126 @@ impl Mapper for Ntdec81 {
 
     fn number(&self) -> u16 {
         81
+    }
+}
+
+/// Shared CHR/nametable state for the Irem 77 board: 2 KiB switchable
+/// CHR-ROM, 6 KiB CHR-RAM and 4 KiB of cartridge nametable RAM.
+#[derive(Debug)]
+pub struct Aux77 {
+    rom: Vec<u8>,
+    ram: Vec<u8>,
+    nt: [u8; 0x1000],
+    chr_bank: u8,
+}
+
+impl Aux77 {
+    fn new(rom: Vec<u8>) -> Self {
+        Self {
+            rom,
+            ram: vec![0; 0x1800],
+            nt: [0; 0x1000],
+            chr_bank: 0,
+        }
+    }
+
+    pub(crate) fn chr_read(&self, address: u16) -> u8 {
+        let address = address & 0x1FFF;
+        if address < 0x800 {
+            let banks = (self.rom.len() / 0x800).max(1);
+            let bank = usize::from(self.chr_bank) % banks;
+            self.rom
+                .get(bank * 0x800 + usize::from(address))
+                .copied()
+                .unwrap_or(0)
+        } else {
+            self.ram
+                .get(usize::from(address - 0x800))
+                .copied()
+                .unwrap_or(0)
+        }
+    }
+
+    pub(crate) fn chr_write(&mut self, address: u16, value: u8) {
+        let address = address & 0x1FFF;
+        if address >= 0x800 {
+            if let Some(byte) = self.ram.get_mut(usize::from(address - 0x800)) {
+                *byte = value;
+            }
+        }
+    }
+
+    pub(crate) fn nt_read(&self, address: u16) -> u8 {
+        self.nt[usize::from(address & 0x0FFF)]
+    }
+
+    pub(crate) fn nt_write(&mut self, address: u16, value: u8) {
+        self.nt[usize::from(address & 0x0FFF)] = value;
+    }
+}
+
+/// Irem (mapper 77, Napoleon Senki): 32 KiB PRG banking with bus conflicts,
+/// 2 KiB CHR-ROM + 6 KiB CHR-RAM and 4 KiB cartridge nametable RAM.
+#[derive(Debug)]
+pub struct Irem77 {
+    prg: Vec<u8>,
+    aux: Rc<RefCell<Aux77>>,
+    prg_bank: u8,
+}
+
+impl Irem77 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>) -> Self {
+        Self {
+            prg,
+            aux: Rc::new(RefCell::new(Aux77::new(chr))),
+            prg_bank: 0,
+        }
+    }
+
+    fn prg_32k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x8000).max(1);
+        self.prg
+            .get((bank % banks) * 0x8000 + usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Irem77 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address >= 0x8000 {
+            self.prg_32k(usize::from(self.prg_bank), address)
+        } else {
+            0
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            let effective = value & self.prg_read(address);
+            self.prg_bank = effective & 0x0F;
+            self.aux.borrow_mut().chr_bank = (effective >> 4) & 0x0F;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.aux.borrow().chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.aux.borrow_mut().chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        Mirroring::FourScreen
+    }
+
+    fn number(&self) -> u16 {
+        77
+    }
+
+    fn aux77(&self) -> Option<Rc<RefCell<Aux77>>> {
+        Some(self.aux.clone())
     }
 }
 

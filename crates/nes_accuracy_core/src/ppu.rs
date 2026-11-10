@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::cart::{Chr512, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr};
+use crate::cart::{Aux77, Chr512, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr};
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -131,6 +131,8 @@ pub struct Ppu {
     oeka_chr: Option<Rc<RefCell<OekaChr>>>,
     /// Shared CHR state for mapper 512.
     chr512: Option<Rc<RefCell<Chr512>>>,
+    /// Shared CHR/nametable state for mapper 77.
+    aux77: Option<Rc<RefCell<Aux77>>>,
     /// Extended-attribute byte for the tile currently being fetched (MMC5
     /// mode 1).
     ext_attr: Option<u8>,
@@ -308,6 +310,7 @@ impl Ppu {
             vrc7_chr: None,
             oeka_chr: None,
             chr512: None,
+            aux77: None,
             ext_attr: None,
             nt_rom: Vec::new(),
             nt_banks: None,
@@ -418,6 +421,11 @@ impl Ppu {
         self.chr512 = Some(chr);
     }
 
+    /// Installs the mapper-77 shared CHR/nametable state.
+    pub fn set_aux77(&mut self, aux: Rc<RefCell<Aux77>>) {
+        self.aux77 = Some(aux);
+    }
+
     /// Installs the full CHR ROM used for ROM nametables.
     pub fn set_rom_nametable_rom(&mut self, rom: Vec<u8>) {
         self.nt_rom = rom;
@@ -521,6 +529,9 @@ impl Ppu {
 
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.aux77 {
+            return aux.borrow().chr_read(address);
+        }
         if let Some(aux) = &self.chr512 {
             return aux.borrow().read(address);
         }
@@ -1044,6 +1055,9 @@ impl Ppu {
     }
 
     fn read_nametable(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.aux77 {
+            return aux.borrow().nt_read(address);
+        }
         if let Some(aux) = &self.chr512 {
             if let Some(value) = aux.borrow().nametable_read(address) {
                 return value;
@@ -1122,6 +1136,10 @@ impl Ppu {
 
     fn write_vram(&mut self, address: u16, value: u8) {
         if (0x2000..0x3F00).contains(&address) {
+            if let Some(aux) = &self.aux77 {
+                aux.borrow_mut().nt_write(address, value);
+                return;
+            }
             if let Some(aux) = &self.chr512 {
                 if aux.borrow_mut().nametable_write(address, value) {
                     return;
@@ -1129,6 +1147,10 @@ impl Ppu {
             }
         }
         if address < 0x2000 {
+            if let Some(aux) = &self.aux77 {
+                aux.borrow_mut().chr_write(address, value);
+                return;
+            }
             if let Some(aux) = &self.chr512 {
                 aux.borrow_mut().write(address, value);
                 return;

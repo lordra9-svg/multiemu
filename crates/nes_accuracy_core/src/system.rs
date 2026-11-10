@@ -189,6 +189,9 @@ impl System {
         if let Some(aux) = cart.chr512() {
             ppu.set_chr512(aux);
         }
+        if let Some(aux) = cart.aux77() {
+            ppu.set_aux77(aux);
+        }
         if let Some(nt) = cart.n163_nt() {
             ppu.set_n163_nt(nt);
         }
