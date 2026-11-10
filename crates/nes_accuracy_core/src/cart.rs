@@ -923,6 +923,8 @@ impl Cartridge {
             535 => Box::new(Lh53::new(prg_rom, chr, prg_ram, header)),
             529 => Box::new(T230::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
+            347 => Box::new(Ks7030::new(prg_rom, chr, prg_ram, header)),
+            396 => Box::new(Realtec396::new(prg_rom, chr, header)),
             399 => Box::new(Batmap399::new(prg_rom, chr, header)),
             552 => Box::new(Taito552::new(prg_rom, chr, header)),
             5 => Box::new(Mmc5::new(prg_rom, chr, header)),
@@ -3818,6 +3820,196 @@ impl Mapper for Sachen3014 {
 
     fn number(&self) -> u16 {
         533
+    }
+}
+
+/// Realtec / J.Y. 8-in-1 boards (mapper 396): UNROM with an outer 128 KiB
+/// PRG bank and a 16 KiB inner bank.
+#[derive(Debug)]
+pub struct Realtec396 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    submapper: u8,
+    outer: u8,
+    inner: u8,
+    mirroring: Mirroring,
+}
+
+impl Realtec396 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            submapper: header.submapper,
+            outer: 0,
+            inner: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_16k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % banks) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Realtec396 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let page = usize::from(self.outer) * 8 + usize::from(self.inner);
+        match address {
+            0x8000..=0xBFFF => self.prg_16k(page, address),
+            0xC000..=0xFFFF => self.prg_16k(usize::from(self.outer) * 8 + 7, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if self.submapper == 3 {
+            if (0x8000..=0xBFFF).contains(&address) {
+                self.outer = value & 0x07;
+                self.mirroring = if value & 0x20 != 0 {
+                    Mirroring::Vertical
+                } else {
+                    Mirroring::Horizontal
+                };
+            } else if address >= 0xC000 {
+                self.inner = value & 0x07;
+            }
+            return;
+        }
+        if (0xA000..=0xBFFF).contains(&address) {
+            self.outer = value & 0x07;
+            let bit = if self.submapper == 1 { 0x40 } else { 0x20 };
+            self.mirroring = if value & bit != 0 {
+                Mirroring::Vertical
+            } else {
+                Mirroring::Horizontal
+            };
+        } else if (0x8000..=0x9FFF).contains(&address) || address >= 0xC000 {
+            self.inner = value & 0x07;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        396
+    }
+}
+
+/// Kaiser KS7030 (mapper 347): an FDS conversion with a split PRG image:
+/// three RAM windows, two switchable 4 KiB banks and a fixed 32 KiB tail.
+#[derive(Debug)]
+pub struct Ks7030 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    bank7000: u8,
+    bank_c000: u8,
+    mirroring: Mirroring,
+}
+
+impl Ks7030 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            bank7000: 0,
+            bank_c000: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_at(&self, offset: usize) -> u8 {
+        self.prg
+            .get(offset % self.prg.len().max(1))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Ks7030 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x6BFF => self.prg_ram[usize::from(address - 0x6000)],
+            0x6C00..=0x6FFF => self.prg_at(
+                usize::from(self.bank_c000) * 0x1000 + 0x0C00 + usize::from(address - 0x6C00),
+            ),
+            0x7000..=0x7FFF => self.prg_at(
+                0x10000 + usize::from(self.bank7000) * 0x1000 + usize::from(address - 0x7000),
+            ),
+            0x8000..=0xB7FF => self.prg_at(0x18000 + usize::from(address - 0x8000)),
+            0xB800..=0xBFFF => self.prg_ram[0xC00 + usize::from(address - 0xB800)],
+            0xC000..=0xCBFF => {
+                self.prg_at(usize::from(self.bank_c000) * 0x1000 + usize::from(address - 0xC000))
+            }
+            0xCC00..=0xD7FF => self.prg_ram[0xE00 + usize::from(address - 0xCC00)],
+            0xD800..=0xFFFF => self.prg_at(0x18000 + 0x5800 + usize::from(address - 0xD800)),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x6000..=0x6BFF => self.prg_ram[usize::from(address - 0x6000)] = value,
+            0xB800..=0xBFFF => self.prg_ram[0xC00 + usize::from(address - 0xB800)] = value,
+            0xCC00..=0xD7FF => self.prg_ram[0xE00 + usize::from(address - 0xCC00)] = value,
+            0x8000..=0x8FFF => {
+                self.bank7000 = (address & 0x07) as u8;
+                self.mirroring = if address & 0x08 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+            0x9000..=0x9FFF => self.bank_c000 = (address & 0x0F) as u8,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        347
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
     }
 }
 
@@ -22449,6 +22641,49 @@ mod tests {
             cart.set_cpu_cycle(100 + bit * 2);
             cart.cpu_write(base, (value >> bit) & 1);
         }
+    }
+
+    #[test]
+    fn realtec_396_outer_and_inner_banks() {
+        // 256 KiB PRG, CHR-RAM.
+        let rom = synth_banked(396, 256, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 396);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 14);
+        cart.cpu_write(0xA000, 1);
+        cart.cpu_write(0x8000, 2);
+        assert_eq!(cart.cpu_read(0x8000), 20);
+        assert_eq!(cart.cpu_read(0xC000), 30);
+        cart.cpu_write(0xA020, 0x20);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+    }
+
+    #[test]
+    fn ks7030_split_layout() {
+        // 128 KiB PRG, CHR-RAM.
+        let rom = synth_banked(347, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 347);
+        assert_eq!(cart.cpu_read(0x7000), 8);
+        assert_eq!(cart.cpu_read(0x8000), 12);
+        assert_eq!(cart.cpu_read(0xC000), 0);
+        cart.cpu_write(0x9002, 0);
+        assert_eq!(
+            cart.cpu_read(0xC000),
+            1,
+            "4 KiB bank 2 starts in 8 KiB bank 1"
+        );
+        cart.cpu_write(0x8002, 0);
+        assert_eq!(cart.cpu_read(0x7000), 9);
+        cart.cpu_write(0x6000, 0x11);
+        cart.cpu_write(0xB800, 0x22);
+        cart.cpu_write(0xCC00, 0x33);
+        assert_eq!(cart.cpu_read(0x6000), 0x11);
+        assert_eq!(cart.cpu_read(0xB800), 0x22);
+        assert_eq!(cart.cpu_read(0xCC00), 0x33);
+        cart.cpu_write(0x8008, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
     #[test]
