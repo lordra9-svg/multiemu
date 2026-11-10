@@ -119,12 +119,14 @@ impl Core for AccuracyCore {
 
     fn load(&mut self, rom: &[u8], options: &LoadOptions) -> Result<(), CoreError> {
         let mut system = System::from_ines(rom).map_err(map_err)?;
-        let region = match options.region {
-            Region::Auto | Region::Ntsc => ClockRegion::Ntsc,
-            Region::Pal => ClockRegion::Pal,
-            Region::Dendy => ClockRegion::Dendy,
-        };
-        system.set_region(region);
+        // `Auto` keeps the timing the header declares; an explicit choice
+        // overrides it.
+        match options.region {
+            Region::Auto => {}
+            Region::Ntsc => system.set_region(ClockRegion::Ntsc),
+            Region::Pal => system.set_region(ClockRegion::Pal),
+            Region::Dendy => system.set_region(ClockRegion::Dendy),
+        }
         self.filter = options.video_filter;
         let rate = if options.sample_rate > 0.0 {
             options.sample_rate

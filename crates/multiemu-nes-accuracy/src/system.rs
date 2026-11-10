@@ -121,8 +121,29 @@ struct Dma {
 
 impl System {
     /// Builds a system from an iNES image.
+    ///
+    /// The regional timing comes from the header: NES 2.0 byte 12 declares
+    /// NTSC/PAL/Dendy, and a legacy iNES image can set the PAL bit in byte 9.
+    /// [`System::set_region`] still overrides it.
     pub fn from_ines(rom: &[u8]) -> Result<Self, CartError> {
-        Ok(Self::from_cartridge(Cartridge::from_ines(rom)?))
+        let timing = Self::header_timing(rom);
+        Ok(Self::build(Cartridge::from_ines(rom)?, timing))
+    }
+
+    /// Timing declared by an iNES / NES 2.0 header (NTSC when absent).
+    fn header_timing(rom: &[u8]) -> Timing {
+        if rom.len() >= 16 {
+            if rom[7] & 0x0C == 0x08 {
+                match rom[12] & 0x03 {
+                    1 => return Timing::PAL,
+                    3 => return Timing::DENDY,
+                    _ => {}
+                }
+            } else if rom[9] & 0x01 != 0 {
+                return Timing::PAL;
+            }
+        }
+        Timing::NTSC
     }
 
     /// Builds a system from a raw FDS disk image and its 8 KiB BIOS.
@@ -131,12 +152,16 @@ impl System {
     }
 
     fn from_cartridge(cart: Cartridge) -> Self {
+        Self::build(cart, Timing::NTSC)
+    }
+
+    fn build(cart: Cartridge, timing: Timing) -> Self {
         let mirroring = matches!(cart.mirroring(), Mirroring::Vertical);
         let chr_ram = cart.chr_is_ram();
-        let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], mirroring, chr_ram);
+        let mut ppu = Ppu::new(timing, vec![0; 0x2000], mirroring, chr_ram);
         // The full system models the console's power-on phase: the PPU starts
         // at the end of the pre-render line (matching the reference capture).
-        ppu.scanline = Timing::NTSC.scanlines - 1;
+        ppu.scanline = timing.scanlines - 1;
         ppu.dot = 340;
         ppu.mirroring = cart.mirroring();
         for address in 0..0x2000u16 {
@@ -175,7 +200,7 @@ impl System {
             zapper: [Zapper::default(); 2],
             zapper_frame: 0,
             strobe: false,
-            timing: Timing::NTSC,
+            timing,
             ppu_credit: 0,
             phase: false,
             shift: [0; 2],
