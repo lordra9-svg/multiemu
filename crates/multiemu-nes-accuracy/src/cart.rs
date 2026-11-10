@@ -828,6 +828,7 @@ impl Cartridge {
             225 => Box::new(Multicart225::new(prg_rom, chr, header)),
             40 => Box::new(Whirlwind40::new(prg_rom, chr, header)),
             303 => Box::new(Kaiser303::new(prg_rom, chr, header)),
+            313 => Box::new(Mmc3_313::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
             552 => Box::new(Taito552::new(prg_rom, chr, header)),
             5 => Box::new(Mmc5::new(prg_rom, chr, header)),
@@ -4664,6 +4665,99 @@ impl Mapper for Taito552 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         matches!(address, 0x7EF0..=0x7EF6)
+    }
+}
+
+/// Reset-TXROM multicarts (mapper 313): MMC3 banking with a 2-bit outer bank
+/// that advances on every soft reset.
+#[derive(Debug)]
+pub struct Mmc3_313 {
+    inner: Mmc3,
+    counter: u8,
+}
+
+impl Mmc3_313 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 313),
+            counter: 0,
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = self.inner.prg_banks();
+        let page = (usize::from(self.counter) << 4) | (self.inner.prg_slot(slot) & 0x0F);
+        page % banks
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let page = (usize::from(self.counter) << 7) | (self.inner.chr_bank(slot) & 0x7F);
+        page % banks
+    }
+}
+
+impl Mapper for Mmc3_313 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot);
+        self.inner.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        self.inner.chr[bank % banks * 0x400 + usize::from(address & 0x3FF)]
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let index = bank % banks * 0x400 + usize::from(address & 0x3FF);
+        if let Some(byte) = self.inner.chr.get_mut(index) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        313
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn soft_reset(&mut self) {
+        self.counter = (self.counter + 1) & 0x03;
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
     }
 }
 
@@ -19259,6 +19353,21 @@ mod tests {
         assert_eq!(cart.cpu_read(0x6000), 0x5A);
         cart.cpu_write(0x7EF6, 0x01);
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
+    }
+
+    #[test]
+    fn reset_txrom_313_advances_the_outer_bank() {
+        // 512 KiB PRG (64 x 8 KiB), 256 KiB CHR (256 x 1 KiB).
+        let rom = synth_banked(313, 512, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 313);
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), 3);
+        cart.soft_reset();
+        assert_eq!(cart.cpu_read(0x8000), 0x13);
+        cart.soft_reset();
+        assert_eq!(cart.cpu_read(0x8000), 0x23);
     }
 
     #[test]
