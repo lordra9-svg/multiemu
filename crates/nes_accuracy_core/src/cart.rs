@@ -810,6 +810,8 @@ impl Cartridge {
             67 => Box::new(Sunsoft3::new(prg_rom, chr, header)),
             72 => Box::new(Jaleco72::new(prg_rom, chr, header)),
             78 => Box::new(Irem78::new(prg_rom, chr, header)),
+            12 => Box::new(Mmc3_12::new(prg_rom, chr, header)),
+            14 => Box::new(Jaleco14::new(prg_rom, chr, header)),
             15 => Box::new(Multicart15::new(prg_rom, chr)),
             57 => Box::new(Bmc57::new(prg_rom, chr, header)),
             120 => Box::new(FdsConv120::new(prg_rom, chr, header)),
@@ -828,6 +830,7 @@ impl Cartridge {
             263 => Box::new(Mmc3_263::new(prg_rom, chr, header)),
             264 => Box::new(Yoko264::new(prg_rom, chr, header)),
             140 => Box::new(Jaleco140::new(prg_rom, chr, header)),
+            144 => Box::new(ColorDreams144::new(prg_rom, chr, header)),
             147 => Box::new(Sachen147::new(prg_rom, chr, header)),
             149 => Box::new(Sachen149::new(prg_rom, chr, header)),
             244 => Box::new(Cne244::new(prg_rom, chr, header)),
@@ -3995,6 +3998,237 @@ impl Mapper for Bmc299 {
 
     fn number(&self) -> u16 {
         299
+    }
+}
+
+/// MMC3 variant (mapper 12): a `$4020-$5FFF` register adds CHR A16 to the
+/// low or high 4 KiB half independently.
+#[derive(Debug)]
+pub struct Mmc3_12 {
+    inner: Mmc3,
+    chr_sel: u8,
+}
+
+impl Mmc3_12 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 12),
+            chr_sel: 0,
+        }
+    }
+
+    fn bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let mut bank = self.inner.chr_bank(slot);
+        if (slot < 4 && self.chr_sel & 0x01 != 0) || (slot >= 4 && self.chr_sel & 0x10 != 0) {
+            bank |= 0x100;
+        }
+        bank % banks
+    }
+}
+
+impl Mapper for Mmc3_12 {
+    fn prg_read(&self, address: u16) -> u8 {
+        self.inner.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address <= 0x5FFF {
+            self.chr_sel = value;
+            return;
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.bank(slot);
+        self.inner
+            .chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.bank(slot);
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        12
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address <= 0x5FFF || (0x8000..=0x9FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// Jaleco JF-11/JF-14 (mapper 14): 32 KiB PRG and 8 KiB CHR banks from a
+/// single `$6000-$7FFF` register.
+#[derive(Debug)]
+pub struct Jaleco14 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Jaleco14 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        let last = (prg.len() / 0x8000).max(1) - 1;
+        Self {
+            prg,
+            chr,
+            prg_bank: last as u8,
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Jaleco14 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        self.prg
+            .get((usize::from(self.prg_bank) % banks) * 0x8000 + usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x7FFF).contains(&address) {
+            self.prg_bank = (value >> 4) & 0x03;
+            self.chr_bank = value & 0x0F;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        self.chr
+            .get((usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        if let Some(byte) = self
+            .chr
+            .get_mut((usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        14
+    }
+}
+
+/// Color Dreams (mapper 144): 32 KiB fixed PRG, 8 KiB CHR bank selected by
+/// the `$8000-$FFFF` write with bus conflicts.
+#[derive(Debug)]
+pub struct ColorDreams144 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl ColorDreams144 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_bank: 0,
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for ColorDreams144 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        self.prg
+            .get((usize::from(self.prg_bank) % banks) * 0x8000 + usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            let rom = self.prg_read(address);
+            let value = value | (rom & 0x01);
+            self.prg_bank = value & 0x0F;
+            self.chr_bank = (value >> 4) & 0x0F;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        self.chr
+            .get((usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        if let Some(byte) = self
+            .chr
+            .get_mut((usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        144
     }
 }
 
@@ -23288,6 +23522,28 @@ mod tests {
             cart.set_cpu_cycle(100 + bit * 2);
             cart.cpu_write(base, (value >> bit) & 1);
         }
+    }
+
+    #[test]
+    fn jaleco_14_banks() {
+        // 128 KiB PRG, 128 KiB CHR.
+        let rom = synth_banked(14, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 14);
+        cart.cpu_write(0x6000, 0x25);
+        assert_eq!(cart.cpu_read(0x8000), 8);
+        assert_eq!(cart.ppu_read(0x0000), 0xA8);
+    }
+
+    #[test]
+    fn color_dreams_144_bus_conflict() {
+        // 64 KiB PRG, 64 KiB CHR.
+        let rom = synth_banked_ff(144, 64, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 144);
+        cart.cpu_write(0x8001, 0x10);
+        assert_eq!(cart.cpu_read(0x8000), 4, "32 KiB bank 1");
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
     }
 
     #[test]
