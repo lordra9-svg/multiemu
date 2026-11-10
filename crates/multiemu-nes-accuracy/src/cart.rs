@@ -828,6 +828,7 @@ impl Cartridge {
             225 => Box::new(Multicart225::new(prg_rom, chr, header)),
             40 => Box::new(Whirlwind40::new(prg_rom, chr, header)),
             303 => Box::new(Kaiser303::new(prg_rom, chr, header)),
+            332 => Box::new(Multicart332::new(prg_rom, chr)),
             5 => Box::new(Mmc5::new(prg_rom, chr, header)),
             11 => Box::new(ColorDreams::new(prg_rom, chr, header)),
             13 => Box::new(Cprom::new(prg_rom, chr, header)),
@@ -4436,6 +4437,91 @@ impl Mapper for Yoko264 {
 
     fn acknowledge_irq(&mut self) {
         self.irq_pending = false;
+    }
+}
+
+/// Super 40-in-1 WS (mapper 332): a locked register pair in `$6000-$6FFF`
+/// selects two 16 KiB PRG banks, an 8 KiB CHR bank and mirroring.
+#[derive(Debug)]
+pub struct Multicart332 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_banks: [u8; 2],
+    chr_bank: u8,
+    mirroring: Mirroring,
+    locked: bool,
+}
+
+impl Multicart332 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_banks: [0, 1],
+            chr_bank: 0,
+            mirroring: Mirroring::Vertical,
+            locked: false,
+        }
+    }
+}
+
+impl Mapper for Multicart332 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x4000).max(1);
+        let slot = usize::from(address >= 0xC000);
+        let bank = usize::from(self.prg_banks[slot]) % banks;
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x6FFF).contains(&address) && !self.locked {
+            if address & 0x01 != 0 {
+                self.chr_bank = value;
+            } else {
+                self.locked = value & 0x20 == 0x20;
+                let low = value & !((!value >> 3) & 0x01);
+                let high = value | ((!value >> 3) & 0x01);
+                self.prg_banks = [low, high];
+                self.mirroring = if value & 0x10 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address) & 0x1FFF) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        332
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x6000..=0x6FFF).contains(&address)
     }
 }
 
@@ -18985,6 +19071,29 @@ mod tests {
         // CHR slot 0 comes from register 3.
         cart.cpu_write(0x8C10, 3);
         assert_eq!(cart.ppu_read(0x0000), 0x86);
+    }
+
+    #[test]
+    fn multicart_332_locks_its_registers() {
+        // 128 KiB PRG (8 x 16 KiB), 64 KiB CHR (8 x 8 KiB).
+        let rom = synth_banked(332, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 332);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+
+        cart.cpu_write(0x6000, 0x14); // 16 KiB bank 4, horizontal
+        assert_eq!(cart.cpu_read(0x8000), 8);
+        assert_eq!(cart.cpu_read(0xC000), 10);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x6001, 3);
+        assert_eq!(cart.ppu_read(0x0000), 0x98);
+
+        // Bit 5 latches the register file.
+        cart.cpu_write(0x6000, 0x24);
+        assert_eq!(cart.cpu_read(0x8000), 8);
+        cart.cpu_write(0x6000, 0x06);
+        assert_eq!(cart.cpu_read(0x8000), 8);
     }
 
     #[test]
