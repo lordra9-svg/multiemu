@@ -26,16 +26,16 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 6,959 | 98.0% |
-| Rendering | 3,780 | 53.2% |
-| Blank | 3,145 | 44.3% |
-| Unsupported mapper | 114 | 1.6% |
+| Loaded (mapper implemented) | 6,977 | 98.3% |
+| Rendering | 3,783 | 53.3% |
+| Blank | 3,194 | 45.0% |
+| Unsupported mapper | 96 | 1.4% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 118 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 6,959 (93.3% → 97.5%) and unsupported fell 446 → 114 (6.3% → 1.6%);
-80+ mapper IDs remain (the ranking prints the top 80), led by 256/515/551
+audit, 126 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 6,977 (93.3% → 98.3%) and unsupported fell 446 → 96 (6.3% → 1.4%);
+63 mapper IDs remain (the ranking prints the top 80), led by 256/515
 (5 images each) and 355/446/547/594 (4 each).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
@@ -148,17 +148,24 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   latches (page 0 is CHR-RAM), toggled by `$FD`/`$FE` pattern fetches and by
   `$2007` reads. The PPU reads and writes through the shared map. 8/8 render at
   600 frames.
-- **Mapper completion sweep (12, 14, 15, 27, 28, 29, 31, 37, 38, 40, 41, 45, 46, 47, 50, 52, 57, 62,
-  63, 65, 67, 70, 72, 73, 74, 78, 81, 89, 90, 92, 93, 94, 96, 97, 103,
-  104, 105, 107, 117, 119, 120, 122, 123, 125, 133, 134, 137, 140, 144,
-  145, 147, 149, 153, 155, 157, 168, 180, 187, 188, 191, 192, 194, 198,
-  205, 218, 221, 225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254,
-  263, 264, 289, 290, 299, 301, 303, 305, 306, 309, 312, 313, 332, 347,
-  396, 399, 512, 513, 516, 519, 522, 529, 533, 534, 535, 548, 551, 552)** — 118 boards
+- **Mapper completion sweep (12, 14, 15, 27, 28, 29, 31, 37, 38, 40, 41, 45, 46, 47, 50, 52, 57,
+  62, 63, 65, 67, 70, 72, 73, 74, 78, 81, 89, 90, 92, 93, 94, 96, 97,
+  103, 104, 105, 107, 117, 119, 120, 122, 123, 125, 133, 134, 137,
+  140, 144, 145, 147, 149, 153, 155, 157, 168, 180, 187, 188, 191,
+  192, 194, 198, 205, 208, 218, 219, 221, 225, 228, 229, 238, 243,
+  244, 245, 246, 250, 252, 254, 258, 263, 264, 284, 289, 290, 298,
+  299, 301, 302, 303, 305, 306, 307, 309, 312, 313, 332, 346, 347,
+  396, 399, 512, 513, 516, 519, 522, 529, 533, 534, 535, 548, 551, 552)** — 126 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
-  discrete boards add CPU-cycle IRQs; the Sachen 3009/3018 and JV001 latches
+  discrete boards add CPU-cycle IRQs; the MesenCE-only group adds the
+  MMC3 208/219/258 outer/protection registers, the Drip 284 homebrew board,
+  the TF1201 298 and the Kaiser 302/307/346 discrete boards. At 120 frames
+  16 of the 18 local images render (the two blanks are MesenCE-blank boot
+  screens too); the 20-frame audit only catches 208/258 because the rest are
+  still in their boot code; the Sachen
+  3009/3018 and JV001 latches
   cover the A8-decoded `$4100-$5FFF` window; Nitra decodes the MMC3 protocol
   from the write address; Datach reuses the Bandai FCG core with the scanner
   window; and the MMC3 clones (123, 187, 198, 245) override PRG/CHR mapping
