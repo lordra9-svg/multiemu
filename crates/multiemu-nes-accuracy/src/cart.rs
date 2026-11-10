@@ -10092,59 +10092,64 @@ pub struct Fs305 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
-    mode: u8,
-    low: u8,
-    high: u8,
-    ram_bank: u8,
-    mirroring: Mirroring,
+    regs: [u8; 4],
 }
 
 impl Fs305 {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, _header: Header) -> Self {
+        // The board always carries 8 KiB of work RAM at $6000.
+        prg_ram.resize(0x2000, 0);
         Self {
             prg,
             chr,
             prg_ram,
-            mode: 0,
-            low: 0,
-            high: 0,
-            ram_bank: 0,
-            mirroring: header.mirroring,
+            regs: [0; 4],
         }
     }
 
-    /// Builds the 8 KiB PRG bank index for `address` in `$8000..=$FFFF`.
-    fn prg_bank(&self, address: u16) -> usize {
-        let a14 = usize::from((address >> 14) & 1);
-        let low = usize::from(self.low & 0x07);
-        let high = usize::from(self.high) << 3;
-        match (self.mode >> 2) & 0x03 {
-            // NROM-256/BNROM: PRG A14 follows the CPU address.
-            0 => (high | (low & !1)) | a14,
-            // UNROM: fixed upper half at `$C000`.
-            1 if a14 == 1 => high | 0x07,
-            1 => high | low,
-            // NROM-128: same 16 KiB bank in both halves.
-            2 => high | (low & !1),
-            // UNROM with selectable bit 0 in the fixed half.
-            _ if a14 == 1 => high | 0x06 | (low & 0x01),
-            _ => high | low,
-        }
+    /// Composed inner+outer 16 KiB bank: outer ($4802) above the 3-bit inner
+    /// ($4801 bits 0-2).
+    fn prg_base16(&self) -> usize {
+        usize::from(self.regs[1] & 0x07) | (usize::from(self.regs[2]) << 3)
+    }
+
+    /// PRG banking mode from `$4800` bits 1-2.
+    fn prg_mode(&self) -> u8 {
+        (self.regs[0] >> 1) & 0x03
+    }
+
+    fn read_16k(&self, bank16: usize, address: u16) -> u8 {
+        let count = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank16 % count) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
 impl Mapper for Fs305 {
     fn prg_read(&self, address: u16) -> u8 {
         match address {
-            0x6000..=0x7FFF => {
-                let offset = usize::from(self.ram_bank) * 0x2000 + usize::from(address - 0x6000);
-                self.prg_ram[offset % self.prg_ram.len()]
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
+            0x8000..=0xBFFF => {
+                let base = self.prg_base16();
+                // Mode 0 presents the even bank of the 32 KiB pair.
+                let bank = if self.prg_mode() == 0 {
+                    base & !1
+                } else {
+                    base
+                };
+                self.read_16k(bank, address)
             }
-            0x8000..=0xFFFF => {
-                let banks = (self.prg.len() / 0x2000).max(1);
-                let offset =
-                    (self.prg_bank(address) % banks) * 0x2000 + usize::from(address & 0x1FFF);
-                self.prg.get(offset).copied().unwrap_or(0)
+            0xC000..=0xFFFF => {
+                let base = self.prg_base16();
+                let bank = match self.prg_mode() {
+                    0 => (base & !1) | 1,
+                    1 => (base & !0x07) | 0x07,
+                    2 => base,
+                    _ => base | 1,
+                };
+                self.read_16k(bank, address)
             }
             _ => 0,
         }
@@ -10152,24 +10157,10 @@ impl Mapper for Fs305 {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         match address {
-            0x4800..=0x4FFF => match address & 0x03 {
-                0 => {
-                    self.mode = value;
-                    self.mirroring = match value & 0x03 {
-                        0 => Mirroring::Vertical,
-                        1 => Mirroring::Horizontal,
-                        2 => Mirroring::SingleLower,
-                        _ => Mirroring::SingleUpper,
-                    };
-                }
-                1 => self.low = value & 0x07,
-                2 => self.high = value,
-                _ => self.ram_bank = value,
-            },
+            0x4800..=0x4803 => self.regs[usize::from(address - 0x4800)] = value,
             0x6000..=0x7FFF => {
-                let offset = usize::from(self.ram_bank) * 0x2000 + usize::from(address - 0x6000);
-                let len = self.prg_ram.len();
-                self.prg_ram[offset % len] = value;
+                let index = usize::from(address - 0x6000) % self.prg_ram.len();
+                self.prg_ram[index] = value;
             }
             _ => {}
         }
@@ -10189,7 +10180,11 @@ impl Mapper for Fs305 {
     }
 
     fn mirroring(&self) -> Mirroring {
-        self.mirroring
+        if self.regs[0] & 0x01 != 0 {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        }
     }
 
     fn number(&self) -> u16 {
@@ -18653,19 +18648,46 @@ impl Mapper for Benshieng286 {
 mod tests {
     #[test]
     fn fs305_switches_prg_modes() {
-        let rom = synth_banked(178, 128, 32);
+        // 256 KiB PRG (16 x 16 KiB) so the 10th bank exists.
+        let rom = synth_banked(178, 256, 32);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        // The 8 KiB bank markers are 2x the 16 KiB bank number.
         // Mode 0 (NROM-256): PRG A14 follows the CPU address.
         assert_eq!(cart.cpu_read(0x8000), 0);
-        assert_eq!(cart.cpu_read(0xC000), 1);
+        assert_eq!(cart.cpu_read(0xC000), 2);
         cart.cpu_write(0x4801, 2);
-        assert_eq!(cart.cpu_read(0x8000), 2);
-        assert_eq!(cart.cpu_read(0xC000), 3);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.cpu_read(0xC000), 6);
         cart.cpu_write(0x4802, 1);
-        assert_eq!(cart.cpu_read(0x8000), 10);
-        // Mode 1 (UNROM): $C000 is fixed to the last 8 KiB bank of the outer.
+        assert_eq!(cart.cpu_read(0x8000), 20);
+        // Mode 1 (UNROM): $C000 is fixed to the last 16 KiB bank of the outer.
+        cart.cpu_write(0x4800, 0x02);
+        assert_eq!(cart.cpu_read(0x8000), 20);
+        assert_eq!(cart.cpu_read(0xC000), 30);
+        // Mode 2 (NROM-128): both halves show the selected bank.
         cart.cpu_write(0x4800, 0x04);
-        assert_eq!(cart.cpu_read(0xC000), 15);
+        assert_eq!(cart.cpu_read(0x8000), 20);
+        assert_eq!(cart.cpu_read(0xC000), 20);
+        // $4800 bit 0 selects horizontal mirroring.
+        cart.cpu_write(0x4800, 0x05);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+    }
+
+    #[test]
+    fn fs305_defaults_have_8k_work_ram() {
+        // 64 KiB PRG (4 x 16 KiB), CHR-RAM: no PRG-RAM in the header.
+        let rom = synth_banked(178, 64, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        assert_eq!(
+            cart.cpu_read(0xC000),
+            2,
+            "$C000 = bank 1 of the 32 KiB pair"
+        );
     }
 
     #[test]
