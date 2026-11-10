@@ -898,6 +898,21 @@ the dots 1-64 clear phase, which provides the seed.
   last dots therefore needs the reference's master-clock bus for frame
   detection, not another split tweak; that is a dedicated port, not a bounded
   change.
+- A quantitative differential corpus mode (`corpus --oracle PATH`) was added.
+  A 120-image / 120-frame sweep (109 images with oracle output) measured
+  overall **video 81.1% and audio 70.1%** identical frame hashes and exposed
+  the real outliers: mapper 58 (117-in-1) 1/120, 115 (1997 Super HIK) 2/120,
+  132/172 (Du Ma Racing) 4/120, 226 (22 Games) 8/120, 242 multicarts 9/120,
+  176 (100-in-1) 13/120, 215 (2-in-1) 37/120 and 142 (Jinpai Mali) 40/120.
+  The harness ranks these by title instead of reporting only render/blank.
+- A `boundary` diagnostic prints the frame-completion CPU cycle and PPU dot.
+  On SMB the completed frames land at cycles 29,781 / 59,566 / 89,343 /
+  119,122 / ... against the reference capture's documented 29,779 / 59,560 /
+  89,340 / 119,121 / ..., i.e. **+1 to +6 cycles, non-accumulating**. The
+  independent second-emulator cross-check remains unavailable: MesenCE ships
+  only `MesenCore.so` (a renderer-backed library with no headless frame-hash
+  entry point) and ares' headless build has no frame-dump CLI, so neither can
+  produce a comparable per-frame hash stream here.
 - Two faithful local ports of the reference's arming were implemented and
   measured, and both were rejected. Moving the odd-frame skip wrap from dot
   340 to the reference's dot 339 left every SMB/SMB3 hash unchanged (inert).

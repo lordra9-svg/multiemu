@@ -50,8 +50,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut limit = usize::MAX;
             let mut skip = 0usize;
             let mut only_mapper: Option<u16> = None;
+            let mut oracle: Option<String> = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
+                    "--oracle" => {
+                        oracle = Some(args.next().ok_or("--oracle needs a path")?);
+                    }
                     "--frames" => {
                         frames = args
                             .next()
@@ -87,6 +91,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut entries = multiemu_rom::scan(Path::new(&dir));
             if let Some(mapper) = only_mapper {
                 entries.retain(|entry| entry.header.is_some_and(|header| header.mapper == mapper));
+            }
+            if let Some(oracle) = oracle {
+                return run_parity(&entries, skip, limit, frames.max(1), &oracle);
             }
             let mut loaded = 0usize;
             let mut rendered = 0usize;
@@ -612,6 +619,25 @@ fn run() -> Result<(), Box<dyn Error>> {
                 print!("{text}");
             }
         }
+        "boundary" => {
+            let path = args.next().ok_or_else(usage)?;
+            let frames: u32 = args
+                .next()
+                .unwrap_or_else(|| "120".into())
+                .parse()
+                .map_err(|_| "boundary: bad frame count")?;
+            let (_entry, rom) = load_arg(&path)?;
+            let mut system =
+                multiemu_nes_accuracy::System::from_ines(&rom).map_err(|e| e.to_string())?;
+            println!("# frame cpu_cycles scanline dot");
+            for index in 0..frames {
+                system.run_frame();
+                println!(
+                    "{index} {} {} {}",
+                    system.cpu.cycles, system.ppu.scanline, system.ppu.dot
+                );
+            }
+        }
         "diff" => {
             let a_path = args.next().ok_or_else(usage)?;
             let b_path = args.next().ok_or_else(usage)?;
@@ -830,7 +856,9 @@ fn usage() -> String {
   multiemu verify <rom|archive> [frames]
   multiemu trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N]
   multiemu diff <a.trace> <b.trace> [--skip N] [--video]
+  multiemu corpus <dir> [--frames N] [--oracle PATH] [--mapper ID] [--skip N] [--limit N]
   multiemu parity <a.trace> <b.trace> [--window N]
+  multiemu boundary <rom|archive> [frames]
   multiemu bench <rom|archive> [frames]"
         .into()
 }
@@ -936,3 +964,162 @@ fn write_ppm(
 /// Keeps the adapter's concrete type name visible in this crate's docs.
 #[allow(dead_code)]
 fn _assert_core_type(_: NesCore) {}
+
+/// Runs a hundreds-of-frames differential audit of one library against a
+/// reference trace producer (the RustyNES oracle). Every image is executed for
+/// `frames` frames by the accuracy core and by the oracle, and the per-frame
+/// video/audio hashes are compared at the same index.
+fn run_parity(
+    entries: &[multiemu_rom::RomEntry],
+    skip: usize,
+    limit: usize,
+    frames: u32,
+    oracle: &str,
+) -> Result<(), Box<dyn Error>> {
+    use std::collections::BTreeMap;
+    use std::process::{Command, Stdio};
+
+    #[derive(Default)]
+    struct Stat {
+        images: usize,
+        video: u64,
+        audio: u64,
+        total: u64,
+    }
+
+    let temp_dir = std::env::temp_dir().join("multiemu-parity");
+    fs::create_dir_all(&temp_dir)?;
+    let mut per_mapper: BTreeMap<u16, Stat> = BTreeMap::new();
+    let mut worst: Vec<(f64, u16, String, u64, u64, u64)> = Vec::new();
+    let mut images = 0usize;
+    let mut oracle_failures = 0usize;
+
+    for entry in entries.iter().skip(skip).take(limit) {
+        let Ok(rom) = multiemu_rom::load(entry) else {
+            continue;
+        };
+        let Ok(mut system) = multiemu_nes_accuracy::System::from_ines(&rom) else {
+            continue;
+        };
+        let mapper = system.cart.mapper();
+
+        let mut ours: Vec<(u64, u64)> = Vec::with_capacity(frames as usize);
+        for _ in 0..frames {
+            system.run_frame();
+            let video = fnv1a(FNV_OFFSET, system.video());
+            let mut audio = FNV_OFFSET;
+            for sample in system.audio() {
+                audio = fnv1a(audio, &sample.to_bits().to_le_bytes());
+            }
+            ours.push((video, audio));
+        }
+
+        let path = match &entry.source {
+            multiemu_rom::Source::File(path) => path.clone(),
+            _ => {
+                let path = temp_dir.join(format!("{}-{}.nes", mapper, entry.id));
+                fs::write(&path, &rom)?;
+                path
+            }
+        };
+        let Ok(output) = Command::new(oracle)
+            .arg(&path)
+            .arg(frames.to_string())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+        else {
+            oracle_failures += 1;
+            continue;
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let Ok((reference, _)) = parse_trace(&text) else {
+            oracle_failures += 1;
+            continue;
+        };
+        let count = ours.len().min(reference.len());
+        if count == 0 {
+            // The oracle produced no frames (unsupported board or load error).
+            oracle_failures += 1;
+            continue;
+        }
+        let mut video = 0u64;
+        let mut audio = 0u64;
+        for index in 0..count {
+            if ours[index].0 == reference[index].0 {
+                video += 1;
+            }
+            if ours[index].1 == reference[index].1 {
+                audio += 1;
+            }
+        }
+        let stat = per_mapper.entry(mapper).or_default();
+        stat.images += 1;
+        stat.video += video;
+        stat.audio += audio;
+        stat.total += count as u64;
+        let pct = |n: u64| {
+            if count == 0 {
+                0.0
+            } else {
+                n as f64 / count as f64
+            }
+        };
+        worst.push((
+            pct(video),
+            mapper,
+            entry.title.clone(),
+            video,
+            audio,
+            count as u64,
+        ));
+        images += 1;
+    }
+
+    println!("parity: {images} images x {frames} frames, oracle {oracle}");
+    if oracle_failures > 0 {
+        println!("oracle failures: {oracle_failures}");
+    }
+    let total: u64 = per_mapper.values().map(|s| s.total).sum();
+    let video: u64 = per_mapper.values().map(|s| s.video).sum();
+    let audio: u64 = per_mapper.values().map(|s| s.audio).sum();
+    let share = |n: u64| {
+        if total == 0 {
+            0.0
+        } else {
+            100.0 * n as f64 / total as f64
+        }
+    };
+    println!(
+        "overall: video {video}/{total} ({:.1}%), audio {audio}/{total} ({:.1}%)",
+        share(video),
+        share(audio)
+    );
+    println!("mapper images   video%  audio%");
+    for (mapper, stat) in &per_mapper {
+        println!(
+            "{mapper:>6} {:>6}   {:>6.1}  {:>6.1}",
+            stat.images,
+            share2(stat.video, stat.total),
+            share2(stat.audio, stat.total)
+        );
+    }
+    worst.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
+    println!("lowest video parity:");
+    for (_, mapper, title, video, audio, count) in worst.iter().take(20) {
+        println!("  [{mapper:>3}] {title:<44} video {video}/{count} audio {audio}/{count}");
+    }
+    Ok(())
+}
+
+fn share2(part: u64, total: u64) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        100.0 * part as f64 / total as f64
+    }
+}
