@@ -828,6 +828,8 @@ impl Cartridge {
             )),
             196 => Box::new(Mmc3::new_196(prg_rom, chr, header)),
             133 => Box::new(Sachen133::new(prg_rom, chr, header)),
+            137 => Box::new(Sachen137::new(prg_rom, chr, header)),
+            145 => Box::new(Sachen145::new(prg_rom, chr, header)),
             225 => Box::new(Multicart225::new(prg_rom, chr, header)),
             40 => Box::new(Whirlwind40::new(prg_rom, chr, header)),
             303 => Box::new(Kaiser303::new(prg_rom, chr, header)),
@@ -5353,6 +5355,167 @@ impl Mapper for FdsConv120 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.routing
+    }
+}
+
+/// Sachen 8259 variant (mapper 137): 32 KiB PRG bank, four 2 KiB CHR banks
+/// plus an outer bank, selected through `$4100`/`$4101`.
+#[derive(Debug)]
+pub struct Sachen137 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    cmd: u8,
+    chr_banks: [u8; 4],
+    chr_outer: u8,
+    prg_bank: u8,
+    horizontal: bool,
+}
+
+impl Sachen137 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            cmd: 0,
+            chr_banks: [0; 4],
+            chr_outer: 0,
+            prg_bank: 0,
+            horizontal: header.mirroring == Mirroring::Horizontal,
+        }
+    }
+}
+
+impl Mapper for Sachen137 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        let bank = usize::from(self.prg_bank) % banks;
+        self.prg
+            .get(bank * 0x8000 + usize::from(address & 0x7FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x4100 => self.cmd = value & 0x07,
+            0x4101 => match self.cmd {
+                0..=3 => self.chr_banks[usize::from(self.cmd)] = value & 0x07,
+                4 => self.chr_outer = value & 0x07,
+                5 => self.prg_bank = value & 0x07,
+                7 => self.horizontal = value & 0x01 != 0,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x800).max(1);
+        let slot = usize::from((address >> 11) & 0x03);
+        let bank = (usize::from(self.chr_banks[slot]) | (usize::from(self.chr_outer) << 4)) % banks;
+        self.chr
+            .get(bank * 0x800 + usize::from(address & 0x07FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x800).max(1);
+        let slot = usize::from((address >> 11) & 0x03);
+        let bank = (usize::from(self.chr_banks[slot]) | (usize::from(self.chr_outer) << 4)) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x800 + usize::from(address & 0x07FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        if self.horizontal {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        }
+    }
+
+    fn number(&self) -> u16 {
+        137
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address == 0x4100 || address == 0x4101
+    }
+}
+
+/// Sachen SA-72007 (mapper 145): fixed 16 KiB PRG and a single CHR bank bit.
+#[derive(Debug)]
+pub struct Sachen145 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Sachen145 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Sachen145 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let offset = usize::from(address - 0x8000) % self.prg.len().max(1);
+        self.prg.get(offset).copied().unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x4100..=0x7FFF).contains(&address) && address & 0x4100 == 0x4100 {
+            self.chr_bank = (value >> 7) & 0x01;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        145
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x4100..=0x7FFF).contains(&address)
     }
 }
 
@@ -20127,6 +20290,41 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 4, "32 KiB bank 1");
         assert_eq!(cart.ppu_read(0x0000), 0x80 | 56, "CHR bank 7");
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn sachen_137_banks_prg_chr_outer_and_mirroring() {
+        // 64 KiB PRG (2 x 32 KiB), 64 KiB CHR (32 x 2 KiB).
+        let rom = synth_banked(137, 64, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 137);
+        cart.cpu_write(0x4100, 5);
+        cart.cpu_write(0x4101, 1);
+        assert_eq!(
+            cart.cpu_read(0x8000),
+            4,
+            "32 KiB bank 1 starts at 8 KiB bank 4"
+        );
+        cart.cpu_write(0x4100, 0);
+        cart.cpu_write(0x4101, 1);
+        cart.cpu_write(0x4100, 4);
+        cart.cpu_write(0x4101, 1);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 34, "outer bank 1 + slot 1");
+        cart.cpu_write(0x4100, 7);
+        cart.cpu_write(0x4101, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn sachen_145_fixed_prg_and_chr_bit() {
+        // 16 KiB PRG (NROM-128 style), 16 KiB CHR (2 x 8 KiB).
+        let rom = synth_banked(145, 16, 16);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 145);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 0, "16 KiB PRG mirrors");
+        cart.cpu_write(0x4100, 0x80);
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
     }
 
     #[test]
