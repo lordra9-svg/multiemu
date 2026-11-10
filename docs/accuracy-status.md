@@ -1041,6 +1041,10 @@ the dots 1-64 clear phase, which provides the seed.
   (80+ IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.
+  A fresh 260-image / 120-frame sweep after the A6 batch measured **video
+  92.9% (94.6% best-aligned) and audio 55.5%**; the 16 oracle failures and
+  the tiny 212-image/`--limit 252` variant are the same selection effect,
+  not a regression.
 - A `boundary` diagnostic prints the frame-completion CPU cycle and PPU dot.
   On SMB the completed frames land at cycles 29,781 / 59,566 / 89,343 /
   119,122 / ... against the reference capture's documented 29,779 / 59,560 /
