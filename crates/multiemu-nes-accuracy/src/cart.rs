@@ -829,6 +829,7 @@ impl Cartridge {
             40 => Box::new(Whirlwind40::new(prg_rom, chr, header)),
             303 => Box::new(Kaiser303::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
+            552 => Box::new(Taito552::new(prg_rom, chr, header)),
             5 => Box::new(Mmc5::new(prg_rom, chr, header)),
             11 => Box::new(ColorDreams::new(prg_rom, chr, header)),
             13 => Box::new(Cprom::new(prg_rom, chr, header)),
@@ -4522,6 +4523,147 @@ impl Mapper for Multicart332 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         (0x6000..=0x6FFF).contains(&address)
+    }
+}
+
+/// Taito X1-017 (mapper 552): 8 KiB PRG pages with a scrambled register,
+/// six 1 KiB CHR registers with a 2 KiB/1 KiB mode, and save-RAM permission
+/// bytes.
+#[derive(Debug)]
+pub struct Taito552 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_banks: [u8; 3],
+    chr_regs: [u8; 6],
+    chr_mode: bool,
+    mirroring: Mirroring,
+    ram_permission: [u8; 3],
+    ram: Vec<u8>,
+}
+
+impl Taito552 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_banks: [0, 1, 2],
+            chr_regs: [0; 6],
+            chr_mode: false,
+            mirroring: header.mirroring,
+            ram_permission: [0; 3],
+            ram: vec![0; 0x1400],
+        }
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let raw = if self.chr_mode {
+            match slot {
+                0 => usize::from(self.chr_regs[2]),
+                1 => usize::from(self.chr_regs[3]),
+                2 => usize::from(self.chr_regs[4]),
+                3 => usize::from(self.chr_regs[5]),
+                4 | 5 => usize::from(self.chr_regs[0] & 0xFE) + (slot & 1),
+                _ => usize::from(self.chr_regs[1] & 0xFE) + (slot & 1),
+            }
+        } else {
+            match slot {
+                0 | 1 => usize::from(self.chr_regs[0] & 0xFE) + (slot & 1),
+                2 | 3 => usize::from(self.chr_regs[1] & 0xFE) + (slot & 1),
+                4 => usize::from(self.chr_regs[2]),
+                5 => usize::from(self.chr_regs[3]),
+                6 => usize::from(self.chr_regs[4]),
+                _ => usize::from(self.chr_regs[5]),
+            }
+        };
+        raw % banks
+    }
+}
+
+impl Mapper for Taito552 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if (0x6000..=0x73FF).contains(&address) {
+            return self.ram[usize::from(address - 0x6000)];
+        }
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = if slot == 3 {
+            banks - 1
+        } else {
+            usize::from(self.prg_banks[slot]) % banks
+        };
+        self.prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x73FF).contains(&address) {
+            self.ram[usize::from(address - 0x6000)] = value;
+            return;
+        }
+        match address {
+            0x7EF0..=0x7EF5 => self.chr_regs[usize::from(address & 0x0F)] = value,
+            0x7EF6 => {
+                self.mirroring = if value & 0x01 != 0 {
+                    Mirroring::Vertical
+                } else {
+                    Mirroring::Horizontal
+                };
+                self.chr_mode = value & 0x02 != 0;
+            }
+            0x7EF7..=0x7EF9 => self.ram_permission[usize::from((address & 0x0F) - 7)] = value,
+            0x7EFA..=0x7EFC => {
+                let page = ((value & 0x20) >> 5)
+                    | ((value & 0x10) >> 3)
+                    | ((value & 0x08) >> 1)
+                    | ((value & 0x04) << 1)
+                    | ((value & 0x02) << 3)
+                    | ((value & 0x01) << 5);
+                self.prg_banks[usize::from(address - 0x7EFA)] = page;
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from((address >> 10) & 0x07);
+        let bank = self.chr_bank(slot);
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from((address >> 10) & 0x07);
+        let bank = self.chr_bank(slot);
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        552
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        matches!(address, 0x7EF0..=0x7EF6)
     }
 }
 
@@ -19094,6 +19236,29 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 8);
         cart.cpu_write(0x6000, 0x06);
         assert_eq!(cart.cpu_read(0x8000), 8);
+    }
+
+    #[test]
+    fn taito_552_registers_beat_the_ram_window() {
+        // 128 KiB PRG (16 x 8 KiB), 64 KiB CHR (64 x 1 KiB).
+        let rom = synth_banked(552, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 552);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+
+        // $7EF0-$7EFF are registers even though $6000-$73FF is save RAM.
+        cart.cpu_write(0x7EFA, 0x28); // bit-reversed 5
+        assert_eq!(cart.cpu_read(0x8000), 5);
+        cart.cpu_write(0x7EF0, 2);
+        assert_eq!(cart.ppu_read(0x0000), 0x82);
+        assert_eq!(cart.ppu_read(0x0400), 0x83);
+
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+        cart.cpu_write(0x7EF6, 0x01);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
     }
 
     #[test]

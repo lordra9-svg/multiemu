@@ -149,16 +149,20 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   latches (page 0 is CHR-RAM), toggled by `$FD`/`$FE` pattern fetches and by
   `$2007` reads. The PPU reads and writes through the shared map. 8/8 render at
   600 frames.
-- **Mapper completion sweep (40, 70, 74, 93, 107, 119, 123, 133, 140, 147,
-  149, 157, 180, 187, 191, 192, 194, 198, 225, 228, 244, 245, 246, 250,
-  303)** — 25 boards added against the RustyNES and Mesen2 references:
+- **Mapper completion sweep (27, 40, 65, 67, 70, 72, 74, 78, 93, 107, 117,
+  119, 123, 133, 140, 147, 149, 157, 168, 180, 187, 191, 192, 194, 198,
+  225, 228, 244, 245, 246, 250, 263, 264, 303, 332)** — 35 boards added
+  against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
   discrete boards add CPU-cycle IRQs; the Sachen 3009/3018 and JV001 latches
   cover the A8-decoded `$4100-$5FFF` window; Nitra decodes the MMC3 protocol
   from the write address; Datach reuses the Bandai FCG core with the scanner
   window; and the MMC3 clones (123, 187, 198, 245) override PRG/CHR mapping
-  while delegating the IRQ. Differential results: 246 and 228 are
+  while delegating the IRQ. The later additions cover VRC4/27, the
+  Irem/Sunsoft/Jaleco discrete boards (65/67/72/78), UNL-117, the Racermate
+  periodic IRQ, the KOF '97 value scramble (263), the Yoko paging modes (264)
+  and the Super 40-in-1 WS latch (332). Differential results: 246 and 228 are
   pixel-identical to the oracle on sampled frames, 70/74/119/133/140/147/149/
   180/187/191/192/194/225/245/250 match 113-119/120, and 93/107 match exactly
   once the known frame-origin drift is accounted for. 123 and 187 follow the
