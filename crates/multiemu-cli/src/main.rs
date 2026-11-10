@@ -667,6 +667,102 @@ fn run() -> Result<(), Box<dyn Error>> {
                 );
             }
         }
+        "parity" => {
+            let a_path = args.next().ok_or_else(usage)?;
+            let b_path = args.next().ok_or_else(usage)?;
+            let mut window = 4usize;
+            while let Some(flag) = args.next() {
+                match flag.as_str() {
+                    "--window" => {
+                        window = args
+                            .next()
+                            .ok_or("--window needs a number")?
+                            .parse()
+                            .map_err(|_| "--window needs a number")?;
+                    }
+                    other => return Err(format!("unknown option {other}").into()),
+                }
+            }
+            let (frames_a, _) = parse_trace(&fs::read_to_string(&a_path)?)?;
+            let (frames_b, _) = parse_trace(&fs::read_to_string(&b_path)?)?;
+            let count = frames_a.len().min(frames_b.len());
+            if count == 0 {
+                return Err("parity: no frames in trace".into());
+            }
+            let mut video_same = 0usize;
+            let mut audio_same = 0usize;
+            let mut both_same = 0usize;
+            let mut first_video = None;
+            let mut first_audio = None;
+            for (i, (&(va, aa), &(vb, ab))) in
+                frames_a.iter().zip(&frames_b).take(count).enumerate()
+            {
+                if va == vb {
+                    video_same += 1;
+                } else if first_video.is_none() {
+                    first_video = Some(i);
+                }
+                if aa == ab {
+                    audio_same += 1;
+                } else if first_audio.is_none() {
+                    first_audio = Some(i);
+                }
+                if va == vb && aa == ab {
+                    both_same += 1;
+                }
+            }
+            let pct = |n: usize| 100.0 * n as f64 / count as f64;
+            println!("frames            {count}");
+            println!(
+                "video same-index  {video_same} ({:.1}%) first divergence {}",
+                pct(video_same),
+                first_video.map_or("-".into(), |n| n.to_string())
+            );
+            println!(
+                "audio same-index  {audio_same} ({:.1}%) first divergence {}",
+                pct(audio_same),
+                first_audio.map_or("-".into(), |n| n.to_string())
+            );
+            println!("both  same-index  {both_same} ({:.1}%)", pct(both_same));
+
+            let mut best_video = (0isize, 0usize);
+            let mut best_audio = (0isize, 0usize);
+            for shift in -(window as isize)..=(window as isize) {
+                let mut video = 0usize;
+                let mut audio = 0usize;
+                for (i, frame) in frames_a.iter().take(count).enumerate() {
+                    let j = i as isize + shift;
+                    if !(0..count as isize).contains(&j) {
+                        continue;
+                    }
+                    let other = &frames_b[j as usize];
+                    if frame.0 == other.0 {
+                        video += 1;
+                    }
+                    if frame.1 == other.1 {
+                        audio += 1;
+                    }
+                }
+                if video > best_video.1 {
+                    best_video = (shift, video);
+                }
+                if audio > best_audio.1 {
+                    best_audio = (shift, audio);
+                }
+            }
+            println!(
+                "video best shift  {:+} -> {} ({:.1}%)",
+                best_video.0,
+                best_video.1,
+                pct(best_video.1)
+            );
+            println!(
+                "audio best shift  {:+} -> {} ({:.1}%)",
+                best_audio.0,
+                best_audio.1,
+                pct(best_audio.1)
+            );
+        }
         "bench" => {
             let path = args.next().ok_or_else(usage)?;
             let frames: u32 = args
@@ -734,6 +830,7 @@ fn usage() -> String {
   multiemu verify <rom|archive> [frames]
   multiemu trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N]
   multiemu diff <a.trace> <b.trace> [--skip N] [--video]
+  multiemu parity <a.trace> <b.trace> [--window N]
   multiemu bench <rom|archive> [frames]"
         .into()
 }

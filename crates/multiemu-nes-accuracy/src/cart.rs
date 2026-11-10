@@ -829,6 +829,8 @@ impl Cartridge {
             40 => Box::new(Whirlwind40::new(prg_rom, chr, header)),
             303 => Box::new(Kaiser303::new(prg_rom, chr, header)),
             313 => Box::new(Mmc3_313::new(prg_rom, chr, header)),
+            519 => Box::new(Eh8813A::new(prg_rom, chr, header)),
+            529 => Box::new(T230::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
             552 => Box::new(Taito552::new(prg_rom, chr, header)),
             5 => Box::new(Mmc5::new(prg_rom, chr, header)),
@@ -4758,6 +4760,314 @@ impl Mapper for Mmc3_313 {
 
     fn acknowledge_irq(&mut self) {
         self.inner.acknowledge_irq();
+    }
+}
+
+/// T230 (mapper 529): VRC-style 8 KiB PRG / 1 KiB CHR banking with an outer
+/// CHR-RAM bank and the VRC CPU-cycle IRQ.
+#[derive(Debug)]
+pub struct T230 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_reg0: u8,
+    prg_reg1: u8,
+    prg_mode: bool,
+    outer: usize,
+    lo_chr: [u8; 8],
+    hi_chr: [u8; 8],
+    chr_is_ram: bool,
+    mirroring: Mirroring,
+    irq_reload: u8,
+    irq_counter: u8,
+    irq_prescaler: i32,
+    irq_enabled: bool,
+    irq_after_ack: bool,
+    irq_cycle_mode: bool,
+    irq_pending: bool,
+}
+
+impl T230 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_reg0: 0,
+            prg_reg1: 0,
+            prg_mode: false,
+            outer: 0,
+            lo_chr: [0; 8],
+            hi_chr: [0; 8],
+            chr_is_ram: header.chr_size == 0,
+            mirroring: header.mirroring,
+            irq_reload: 0,
+            irq_counter: 0,
+            irq_prescaler: 0,
+            irq_enabled: false,
+            irq_after_ack: false,
+            irq_cycle_mode: false,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let fixed = 0x1E | self.outer;
+        let page = match (self.prg_mode, slot) {
+            (false, 0) => usize::from(self.prg_reg0) | self.outer,
+            (false, 2) => fixed,
+            (true, 0) => fixed,
+            (true, 2) => usize::from(self.prg_reg0) | self.outer,
+            (_, 1) => usize::from(self.prg_reg1),
+            _ => banks - 1,
+        };
+        page % banks
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let page = usize::from(self.lo_chr[slot]) | (usize::from(self.hi_chr[slot]) << 4);
+        page % banks
+    }
+}
+
+impl Mapper for T230 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot);
+        self.prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        let reduced = (address & 0xF000)
+            | (if address & 0x2A != 0 { 0x02 } else { 0 })
+            | (if address & 0x15 != 0 { 0x01 } else { 0 });
+        match reduced {
+            0x9000 | 0x9001 => {
+                self.mirroring = match value & 0x03 {
+                    0 => Mirroring::Vertical,
+                    1 => Mirroring::Horizontal,
+                    2 => Mirroring::SingleLower,
+                    _ => Mirroring::SingleUpper,
+                };
+            }
+            0x9002 | 0x9003 => self.prg_mode = value & 0x02 != 0,
+            0xA000..=0xA003 => {
+                self.prg_reg0 = (value & 0x1F) << 1;
+                self.prg_reg1 = self.prg_reg0 | 0x01;
+            }
+            0xB000..=0xE003 => {
+                if self.chr_is_ram {
+                    self.outer = usize::from((value & 0x08) << 2);
+                } else {
+                    let page = usize::from((reduced >> 12) & 0x07);
+                    let reg = ((page - 3) << 1) | usize::from((reduced >> 1) & 1);
+                    if reduced & 1 == 0 {
+                        self.lo_chr[reg] = value & 0x0F;
+                    } else {
+                        self.hi_chr[reg] = value & 0x1F;
+                    }
+                }
+            }
+            0xF000 => self.irq_reload = (self.irq_reload & 0xF0) | (value & 0x0F),
+            0xF001 => self.irq_reload = (self.irq_reload & 0x0F) | ((value & 0x0F) << 4),
+            0xF002 => {
+                self.irq_after_ack = value & 0x01 != 0;
+                self.irq_enabled = value & 0x02 != 0;
+                self.irq_cycle_mode = value & 0x04 != 0;
+                if self.irq_enabled {
+                    self.irq_counter = self.irq_reload;
+                    self.irq_prescaler = 341;
+                }
+                self.irq_pending = false;
+            }
+            0xF003 => {
+                self.irq_enabled = self.irq_after_ack;
+                self.irq_pending = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        if self.chr_is_ram {
+            return self
+                .chr
+                .get(usize::from(address & 0x1FFF))
+                .copied()
+                .unwrap_or(0);
+        }
+        let slot = usize::from((address >> 10) & 0x07);
+        let bank = self.chr_bank(slot);
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if self.chr_is_ram {
+            if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+                *byte = value;
+            }
+            return;
+        }
+        let slot = usize::from((address >> 10) & 0x07);
+        let bank = self.chr_bank(slot);
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        529
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0xB000..=0xE003).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if !self.irq_enabled {
+            return;
+        }
+        self.irq_prescaler -= 3;
+        if self.irq_cycle_mode || self.irq_prescaler <= 0 {
+            if self.irq_counter == 0xFF {
+                self.irq_counter = self.irq_reload;
+                self.irq_pending = true;
+            } else {
+                self.irq_counter += 1;
+            }
+            self.irq_prescaler += 341;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_enabled = self.irq_after_ack;
+        self.irq_pending = false;
+    }
+}
+
+/// Eh8813A (mapper 519): address-decoded 16 KiB PRG / 8 KiB CHR banking with
+/// the DIP-altered register readback.
+#[derive(Debug)]
+pub struct Eh8813A {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_banks: [u8; 2],
+    chr_bank: u8,
+    mirroring: Mirroring,
+    alter_read: bool,
+}
+
+impl Eh8813A {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        let mut mapper = Self {
+            prg,
+            chr,
+            prg_banks: [0, 1],
+            chr_bank: 0,
+            mirroring: Mirroring::Vertical,
+            alter_read: false,
+        };
+        // Power-on reset performs the same write as `Reset` in the reference.
+        mapper.write_register(0x8000, 0);
+        mapper.alter_read = false;
+        mapper
+    }
+
+    fn write_register(&mut self, address: u16, value: u8) {
+        if address & 0x0100 != 0 {
+            return;
+        }
+        self.alter_read = address & 0x40 != 0;
+        if address & 0x80 != 0 {
+            let bank = (address & 0x07) as u8;
+            self.prg_banks = [bank, bank];
+        } else {
+            let base = (address & 0x06) as u8;
+            self.prg_banks = [base, base + 1];
+        }
+        self.chr_bank = value & 0x0F;
+    }
+}
+
+impl Mapper for Eh8813A {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x4000).max(1);
+        let slot = usize::from(address >= 0xC000);
+        let bank = usize::from(self.prg_banks[slot]) % banks;
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        let address = if self.alter_read {
+            address & 0xFFF0
+        } else {
+            address
+        };
+        self.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            self.write_register(address, value);
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        519
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000 && address & 0x0100 == 0
     }
 }
 
@@ -19368,6 +19678,69 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 0x13);
         cart.soft_reset();
         assert_eq!(cart.cpu_read(0x8000), 0x23);
+    }
+
+    #[test]
+    fn t230_529_prg_chr_and_vrc_irq() {
+        // 256 KiB PRG (32 x 8 KiB), 64 KiB CHR (64 x 1 KiB).
+        let rom = synth_banked(529, 256, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 529);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 30);
+        assert_eq!(cart.cpu_read(0xE000), 31);
+
+        // $A000 sets the even/odd 8 KiB pair.
+        cart.cpu_write(0xA000, 0x0A);
+        assert_eq!(cart.cpu_read(0x8000), 20);
+        assert_eq!(cart.cpu_read(0xA000), 21);
+        // $9002 bit 1 swaps $8000/$C000.
+        cart.cpu_write(0x9002, 0x02);
+        assert_eq!(cart.cpu_read(0x8000), 30);
+        assert_eq!(cart.cpu_read(0xC000), 20);
+
+        // CHR register 0: low nibble at $B000, high at $B001.
+        cart.cpu_write(0xB000, 3);
+        cart.cpu_write(0xB001, 1);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 0x13);
+
+        // VRC IRQ: reload $FF, enable, then 114 CPU cycles to the first tick.
+        cart.cpu_write(0xF000, 0x0F);
+        cart.cpu_write(0xF001, 0x0F);
+        cart.cpu_write(0xF002, 0x02);
+        for _ in 0..113 {
+            cart.clock_cpu();
+        }
+        assert!(!cart.irq_line());
+        cart.clock_cpu();
+        assert!(cart.irq_line());
+        cart.cpu_write(0xF003, 0x00);
+        assert!(!cart.irq_line());
+    }
+
+    #[test]
+    fn eh8813a_519_address_decodes_banks() {
+        // 128 KiB PRG (8 x 16 KiB), 64 KiB CHR (8 x 8 KiB).
+        let rom = synth_banked(519, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 519);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 2);
+
+        // $8004 selects the even 16 KiB pair 4/5 and CHR bank 5.
+        cart.cpu_write(0x8004, 5);
+        assert_eq!(cart.cpu_read(0x8000), 8);
+        assert_eq!(cart.cpu_read(0xC000), 10);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 40);
+
+        // Bit 7 duplicates one 16 KiB bank in both halves.
+        cart.cpu_write(0x8080, 2);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 0);
+
+        // Bit 8 of the address disables the register decode.
+        cart.cpu_write(0x8100, 6);
+        assert_eq!(cart.cpu_read(0x8000), 0);
     }
 
     #[test]

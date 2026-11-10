@@ -138,6 +138,10 @@ gating:
   save-state hash so a trace can be compared with a reference capture that has
   no state; `--skip N` ignores start-up frames and `--video` compares video
   only while the audio mixers are still being aligned.
+- `parity a.trace b.trace [--window N]` — quantitative parity: same-index
+  video/audio match counts, the first divergence of each, and the best
+  alignment over ±N frames. This distinguishes a real rendering/audio defect
+  from the known one-cycle frame-origin drift.
 - `trace <disk.fds> --bios disksys.rom ... [--press-start N]` — traces a raw
   FDS disk image with a user-supplied BIOS. `--press-start N` holds Start for
   12 frames from frame `N` so a licence screen can be dismissed deterministically.
@@ -162,6 +166,8 @@ Current local result with the canonical 2C02 palette:
 |---|---|
 | AccuracyCoin (60 frames) | 49/60 |
 | Commercial NROM title (300 frames) | 297/300 |
+| *Super Mario Bros.* NROM (600 frames) | video 599/600, audio 504/600 |
+| *Super Mario Bros. 3* MMC3 (300 frames) | video 70/300, audio 228/300 (best audio shift −4: 259/300) |
 
 Two PPU defects were found and fixed with this harness:
 
