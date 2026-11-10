@@ -12464,249 +12464,246 @@ pub struct Mmc3_176 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
-    select: u8,
-    bank_data: [u8; 8],
-    mode: u8,
-    prg_base: u8,
-    chr_base: u8,
-    unrom_latch: u8,
+    chr_ram: Vec<u8>,
+    chr_is_ram: bool,
+    submapper: u8,
     mirroring: Mirroring,
+    regs: [u8; 8],
+    bank_select: u8,
+    prg_mode: bool,
+    chr_mode: bool,
     irq_latch: u8,
     irq_counter: u8,
     irq_reload: bool,
     irq_enabled: bool,
     irq_pending: bool,
-    ram_config: bool,
-    outer_regs: bool,
-    wram_bank: usize,
-    wram_enable: bool,
+    prg_banking_mode: u8,
+    outer_chr_64k: bool,
+    select_chr_ram: bool,
+    mmc3_chr_mode: bool,
+    cnrom_chr_mode: bool,
+    extended_mmc3: bool,
+    prg_base: u16,
+    chr_base: u8,
+    cnrom_chr_reg: u8,
+    ram_cfg: u8,
 }
 
 impl Mmc3_176 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
-        // FS005 (submapper 2) exposes 32 KiB of banked WRAM.
         prg_ram.resize(0x8000, 0);
+        let chr_is_ram = header.chr_size == 0;
+        let chr_ram = if header.submapper == 2 {
+            vec![0; 0x2000]
+        } else {
+            Vec::new()
+        };
         Self {
             prg,
             chr,
             prg_ram,
-            select: 0,
-            bank_data: [0; 8],
-            mode: 0,
-            prg_base: 0,
-            chr_base: 0,
-            unrom_latch: 0,
+            chr_ram,
+            chr_is_ram,
+            submapper: header.submapper,
             mirroring: header.mirroring,
+            regs: [0; 8],
+            bank_select: 0,
+            prg_mode: false,
+            chr_mode: false,
             irq_latch: 0,
             irq_counter: 0,
             irq_reload: false,
             irq_enabled: false,
             irq_pending: false,
-            ram_config: false,
-            outer_regs: true,
-            wram_bank: 0,
-            wram_enable: true,
+            prg_banking_mode: 0,
+            outer_chr_64k: false,
+            select_chr_ram: false,
+            mmc3_chr_mode: true,
+            cnrom_chr_mode: false,
+            extended_mmc3: false,
+            prg_base: 0,
+            chr_base: 0,
+            cnrom_chr_reg: 0,
+            ram_cfg: 0,
         }
     }
 
-    fn wram_offset(&self, address: u16) -> usize {
-        if self.ram_config {
-            (self.wram_bank * 0x2000 + usize::from(address - 0x6000)) % self.prg_ram.len()
+    fn is_fs005(&self) -> bool {
+        self.submapper == 2
+    }
+
+    fn ram_cfg_enabled(&self) -> bool {
+        self.is_fs005() && self.ram_cfg & 0x20 != 0
+    }
+
+    fn outer_regs_enabled(&self) -> bool {
+        !self.ram_cfg_enabled() || self.ram_cfg & 0x40 != 0
+    }
+
+    fn wram_bank(&self) -> usize {
+        if self.ram_cfg_enabled() {
+            usize::from(self.ram_cfg & 0x03)
         } else {
-            usize::from(address - 0x6000) % self.prg_ram.len()
-        }
-    }
-
-    /// $5000-$5FFF read: outer bank registers, or the upper half of WRAM bank 2
-    /// while the FS005 configuration register has them disabled.
-    fn paged_read(&self, address: u16) -> u8 {
-        if self.outer_regs {
             0
-        } else {
-            self.prg_ram[usize::from(address) % self.prg_ram.len()]
         }
     }
 
-    fn paged_write(&mut self, address: u16, value: u8) {
-        if !self.outer_regs {
-            let index = usize::from(address) % self.prg_ram.len();
-            self.prg_ram[index] = value;
+    fn chr_bank_is_ram(&self, bank: usize) -> bool {
+        self.ram_cfg_enabled() && self.ram_cfg & 0x04 != 0 && bank < 8
+    }
+
+    fn prg_bank_mmc3(&self, slot: usize) -> usize {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let last = banks - 1;
+        let second_last = last.saturating_sub(1);
+        let r6 = usize::from(self.regs[6]);
+        let r7 = usize::from(self.regs[7]);
+        match (slot, self.prg_mode) {
+            (0, false) => r6,
+            (0, true) => second_last,
+            (1, _) => r7,
+            (2, false) => second_last,
+            (2, true) => r6,
+            _ => last,
         }
     }
 
-    fn prg_mode(&self) -> u8 {
-        self.mode & 0x07
-    }
-
-    /// Combines the MMC3 8 KiB bank with the PRG base register for modes 0-2.
-    fn combine(&self, mmc3: usize) -> usize {
-        match self.prg_mode() {
-            0 => ((usize::from(self.prg_base) & 0x60) << 1) | (mmc3 & 0x3F),
-            1 => ((usize::from(self.prg_base) & 0x70) << 1) | (mmc3 & 0x1F),
-            2 => ((usize::from(self.prg_base) & 0x78) << 1) | (mmc3 & 0x0F),
-            _ => mmc3,
-        }
-    }
-
-    fn fixed_low(&self) -> usize {
-        match self.prg_mode() {
-            0 => 0x3E,
-            1 => 0x1E,
-            2 => 0x0E,
-            _ => 0,
-        }
-    }
-
-    fn fixed_high(&self) -> usize {
-        match self.prg_mode() {
-            0 => 0x3F,
-            1 => 0x1F,
-            2 => 0x0F,
-            _ => 0,
-        }
-    }
-
-    fn prg_bank(&self, address: u16) -> usize {
-        let mode = self.prg_mode();
-        if mode >= 3 {
-            let a13 = usize::from((address >> 13) & 1);
-            return match mode {
-                3 => (usize::from(self.prg_base) << 1) | a13,
-                4 => {
-                    ((usize::from(self.prg_base) & 0x7E) << 1) | usize::from((address >> 13) & 0x03)
+    fn resolve_prg(&self, slot: usize) -> usize {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let outer = usize::from(self.prg_base) << 1;
+        let bank = match self.prg_banking_mode {
+            0..=2 => {
+                let inner = self.prg_bank_mmc3(slot);
+                if self.extended_mmc3 {
+                    inner | outer
+                } else {
+                    let inner_mask = 0x3F >> self.prg_banking_mode;
+                    (inner & inner_mask) | (outer & !inner_mask)
                 }
-                _ if address < 0xC000 => {
-                    ((usize::from(self.prg_base) & 0x78) << 1)
-                        | (usize::from(self.unrom_latch & 0x07) << 1)
-                        | a13
-                }
-                _ => ((usize::from(self.prg_base) & 0x78) << 1) | (0x07 << 1) | a13,
-            };
-        }
-        let slot = usize::from((address - 0x8000) / 0x2000);
-        let mmc3_mode = self.select & 0x40;
-        let raw = match (mmc3_mode, slot) {
-            (0, 0) => usize::from(self.bank_data[6]),
-            (0, 1) => usize::from(self.bank_data[7]),
-            (0, 2) => self.fixed_low(),
-            (0, _) => self.fixed_high(),
-            (_, 0) => self.fixed_low(),
-            (_, 1) => usize::from(self.bank_data[7]),
-            (_, 2) => usize::from(self.bank_data[6]),
-            (_, _) => self.fixed_high(),
+            }
+            3 => (outer & !0x03) + slot,
+            _ => (((usize::from(self.prg_base) & 0xFFE) << 1) & !0x07) + slot,
         };
-        self.combine(raw)
+        bank % banks
     }
 
-    fn chr_bank(&self, slot: usize) -> usize {
-        let mode = self.select & 0x80;
-        let mmc3 = if mode == 0 {
-            match slot {
-                0 | 1 => usize::from(self.bank_data[0] & 0xFE) + (slot & 1),
-                2 | 3 => usize::from(self.bank_data[1] & 0xFE) + (slot & 1),
-                4 => usize::from(self.bank_data[2]),
-                5 => usize::from(self.bank_data[3]),
-                6 => usize::from(self.bank_data[4]),
-                _ => usize::from(self.bank_data[5]),
-            }
+    fn chr_bank_mmc3(&self, slot: usize) -> usize {
+        let banks: [usize; 8] = if self.chr_mode {
+            [
+                usize::from(self.regs[2]),
+                usize::from(self.regs[3]),
+                usize::from(self.regs[4]),
+                usize::from(self.regs[5]),
+                usize::from(self.regs[0] & !1),
+                usize::from(self.regs[0] & !1) | 1,
+                usize::from(self.regs[1] & !1),
+                usize::from(self.regs[1] & !1) | 1,
+            ]
         } else {
-            match slot {
-                0 => usize::from(self.bank_data[2]),
-                1 => usize::from(self.bank_data[3]),
-                2 => usize::from(self.bank_data[4]),
-                3 => usize::from(self.bank_data[5]),
-                4 | 5 => usize::from(self.bank_data[0] & 0xFE) + (slot & 1),
-                _ => usize::from(self.bank_data[1] & 0xFE) + (slot & 1),
-            }
+            [
+                usize::from(self.regs[0] & !1),
+                usize::from(self.regs[0] & !1) | 1,
+                usize::from(self.regs[1] & !1),
+                usize::from(self.regs[1] & !1) | 1,
+                usize::from(self.regs[2]),
+                usize::from(self.regs[3]),
+                usize::from(self.regs[4]),
+                usize::from(self.regs[5]),
+            ]
         };
-        let base = usize::from(self.chr_base);
-        let outer = if self.mode & 0x08 == 0 {
-            (base & 0xE0) << 3
-        } else {
-            (base & 0xF0) << 3
-        };
-        let local = if self.mode & 0x08 == 0 {
-            mmc3 & 0xFF
-        } else {
-            mmc3 & 0x7F
-        };
-        outer | local
-    }
-}
-
-impl Mapper for Mmc3_176 {
-    fn prg_read(&self, address: u16) -> u8 {
-        match address {
-            0x5000..=0x5FFF => self.paged_read(address),
-            0x6000..=0x7FFF => {
-                if !self.wram_enable {
-                    return 0;
-                }
-                self.prg_ram[self.wram_offset(address)]
-            }
-            0x8000..=0xFFFF => {
-                let banks = (self.prg.len() / 0x2000).max(1);
-                let bank = self.prg_bank(address) % banks;
-                self.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
-            }
-            _ => 0,
-        }
+        banks[slot & 0x07]
     }
 
-    fn prg_write(&mut self, address: u16, value: u8) {
-        if (0x5000..=0x5FFF).contains(&address) {
-            if self.outer_regs {
-                match address & 0x03 {
-                    0 => self.mode = value,
-                    1 => self.prg_base = value & 0x7F,
-                    2 => self.chr_base = value,
-                    _ => {}
+    fn resolve_chr(&self, slot: usize) -> usize {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = if self.mmc3_chr_mode {
+            let outer = usize::from(self.chr_base) << 3;
+            let inner = self.chr_bank_mmc3(slot);
+            if self.extended_mmc3 {
+                inner | outer
+            } else {
+                let mask = if self.outer_chr_64k { 0x7F } else { 0xFF };
+                (inner & mask) | (outer & !mask)
+            }
+        } else {
+            let mask = if self.cnrom_chr_mode {
+                if self.outer_chr_64k {
+                    1
+                } else {
+                    3
                 }
             } else {
-                self.paged_write(address, value);
+                0
+            };
+            (((usize::from(self.cnrom_chr_reg) & mask) | usize::from(self.chr_base)) << 3) + slot
+        };
+        bank % banks
+    }
+
+    fn write_5000(&mut self, address: u16, value: u8) {
+        match address & 0x03 {
+            0 => {
+                self.prg_banking_mode = value & 0x07;
+                self.outer_chr_64k = value & 0x10 != 0;
+                self.select_chr_ram = value & 0x20 != 0;
+                self.mmc3_chr_mode = value & 0x40 == 0;
+                if self.is_fs005() {
+                    self.prg_base = (self.prg_base & !0x180)
+                        | (u16::from(value & 0x80) << 1)
+                        | (u16::from(value & 0x08) << 4);
+                }
             }
-            return;
-        }
-        if (0x6000..=0x7FFF).contains(&address) {
-            if self.wram_enable {
-                let index = self.wram_offset(address);
-                self.prg_ram[index] = value;
+            1 => self.prg_base = (self.prg_base & !0x7F) | u16::from(value & 0x7F),
+            2 => {
+                if self.is_fs005() {
+                    self.prg_base = (self.prg_base & !0xE00)
+                        | (u16::from(value & 0x40) << 3)
+                        | (u16::from(value & 0x80) << 3)
+                        | (u16::from(value & 0x20) << 6);
+                }
+                self.chr_base = value;
+                self.cnrom_chr_reg = 0;
             }
-            return;
+            _ => {
+                self.extended_mmc3 = value & 0x02 != 0;
+                self.cnrom_chr_mode = value & 0x44 != 0;
+            }
         }
-        if address < 0x8000 {
-            return;
-        }
-        if self.prg_mode() == 5 {
-            self.unrom_latch = value & 0x07;
-            return;
+    }
+
+    fn write_mmc3(&mut self, address: u16, value: u8) {
+        if self.cnrom_chr_mode && (address <= 0x9FFF || address >= 0xC000) {
+            self.cnrom_chr_reg = value & 0x03;
         }
         match address & 0xE003 {
-            0x8000 => self.select = value,
+            0x8000 => {
+                let mut reg = value & 0x0F;
+                if self.is_fs005() && value & 0x40 != 0 && matches!(reg & 7, 6 | 7) {
+                    reg ^= 1;
+                }
+                self.bank_select = reg;
+                self.prg_mode = value & 0x40 != 0;
+                self.chr_mode = value & 0x80 != 0;
+            }
             0x8001 => {
-                let index = usize::from(self.select & 0x07);
-                self.bank_data[index] = value;
+                let index = usize::from(self.bank_select & 0x07);
+                self.regs[index] = value;
             }
             0xA000 => {
-                self.mirroring = match value & 0x03 {
-                    0 => Mirroring::Vertical,
-                    1 => Mirroring::Horizontal,
-                    2 => Mirroring::SingleLower,
-                    _ => Mirroring::SingleUpper,
+                self.mirroring = match (value & 0x03, self.ram_cfg_enabled()) {
+                    (2, true) => Mirroring::SingleLower,
+                    (3, true) => Mirroring::SingleUpper,
+                    (v, _) if v & 0x01 == 0 => Mirroring::Vertical,
+                    _ => Mirroring::Horizontal,
                 };
             }
-            0xA001 => {
-                // FS005 RAM Configuration Register (bit 5 enables it).
-                if value & 0x20 != 0 {
-                    self.ram_config = true;
-                    self.wram_bank = usize::from(value & 0x03);
-                    self.outer_regs = value & 0x40 != 0;
-                    self.wram_enable = value & 0x80 != 0;
-                } else {
-                    self.ram_config = false;
-                    self.outer_regs = true;
-                    self.wram_enable = true;
-                }
+            0xA001 if self.is_fs005() => {
+                self.ram_cfg = value;
+                self.mirroring = match self.mirroring {
+                    Mirroring::SingleLower if !self.ram_cfg_enabled() => Mirroring::Vertical,
+                    Mirroring::SingleUpper if !self.ram_cfg_enabled() => Mirroring::Horizontal,
+                    other => other,
+                };
             }
             0xC000 => self.irq_latch = value,
             0xC001 => {
@@ -12721,21 +12718,70 @@ impl Mapper for Mmc3_176 {
             _ => {}
         }
     }
+}
+
+impl Mapper for Mmc3_176 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x5000..=0x5FFF => {
+                if self.outer_regs_enabled() {
+                    0
+                } else {
+                    self.prg_ram[2 * 0x2000 + 0x1000 + usize::from(address & 0x0FFF)]
+                }
+            }
+            0x6000..=0x7FFF => {
+                self.prg_ram[self.wram_bank() * 0x2000 + usize::from(address & 0x1FFF)]
+            }
+            0x8000..=0xFFFF => {
+                let slot = usize::from((address - 0x8000) / 0x2000);
+                let bank = self.resolve_prg(slot);
+                self.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x5000..=0x5FFF => {
+                if self.outer_regs_enabled() {
+                    self.write_5000(address, value);
+                } else {
+                    self.prg_ram[2 * 0x2000 + 0x1000 + usize::from(address & 0x0FFF)] = value;
+                }
+            }
+            0x6000..=0x7FFF => {
+                let index = self.wram_bank() * 0x2000 + usize::from(address & 0x1FFF);
+                self.prg_ram[index] = value;
+            }
+            0x8000..=0xFFFF => self.write_mmc3(address, value),
+            _ => {}
+        }
+    }
 
     fn chr_read(&self, address: u16) -> u8 {
-        let banks = (self.chr.len() / 0x400).max(1);
         let slot = usize::from(address) / 0x400;
-        let bank = self.chr_bank(slot) % banks;
+        let bank = self.resolve_chr(slot);
+        if self.chr_is_ram || self.select_chr_ram {
+            return self.chr[usize::from(address) & (self.chr.len() - 1)];
+        }
+        if self.chr_bank_is_ram(bank) {
+            return self.chr_ram[bank * 0x400 + usize::from(address & 0x3FF)];
+        }
         self.chr[bank * 0x400 + usize::from(address & 0x3FF)]
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
-        let banks = (self.chr.len() / 0x400).max(1);
+        if self.chr_is_ram {
+            let index = usize::from(address) & (self.chr.len() - 1);
+            self.chr[index] = value;
+            return;
+        }
         let slot = usize::from(address) / 0x400;
-        let bank = self.chr_bank(slot) % banks;
-        let index = bank * 0x400 + usize::from(address & 0x3FF);
-        if let Some(byte) = self.chr.get_mut(index) {
-            *byte = value;
+        let bank = self.resolve_chr(slot);
+        if self.chr_bank_is_ram(bank) {
+            self.chr_ram[bank * 0x400 + usize::from(address & 0x3FF)] = value;
         }
     }
 
@@ -12749,6 +12795,10 @@ impl Mapper for Mmc3_176 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000 || (0x5000..=0x5FFF).contains(&address)
     }
 
     fn irq_line(&self) -> bool {
@@ -12788,6 +12838,8 @@ pub struct Mmc3_215 {
     mode: u8,
     outer: u8,
     scramble: u8,
+    /// Sugar Softec UNL-8237A (submapper 1) wires one more outer bit.
+    sub1: bool,
     mirroring: Mirroring,
     irq_latch: u8,
     irq_counter: u8,
@@ -12845,6 +12897,7 @@ impl Mmc3_215 {
             mode: 0,
             outer: 0x0F,
             scramble: 0,
+            sub1: header.submapper == 1,
             mirroring: header.mirroring,
             irq_latch: 0,
             irq_counter: 0,
@@ -12876,22 +12929,9 @@ impl Mmc3_215 {
     }
 
     fn prg_bank(&self, address: u16) -> usize {
-        if self.mode & 0x40 != 0 {
-            // NROM mode: ignore the MMC3 PRG banks.
-            let a14 = usize::from((address >> 14) & 1);
-            let mut bank16 = usize::from(self.mode & 0x0F);
-            if self.mode & 0x10 != 0 {
-                bank16 = (bank16 & 0x0E) | a14;
-            }
-            let mut outer = (usize::from(self.outer) & 0x03) << 4;
-            if self.mode & 0x20 != 0 {
-                outer |= usize::from((self.outer >> 4) & 0x01) << 3;
-            }
-            return ((outer | bank16) * 2) + usize::from((address >> 13) & 1);
-        }
+        let banks = (self.prg.len() / 0x2000).max(1);
         let slot = usize::from((address - 0x8000) / 0x2000);
         let mmc3_mode = self.select & 0x40;
-        let banks = (self.prg.len() / 0x2000).max(1);
         let last = banks - 1;
         let second_last = banks.saturating_sub(2);
         let raw = match (mmc3_mode, slot) {
@@ -12904,18 +12944,30 @@ impl Mmc3_215 {
             (_, 2) => usize::from(self.bank_data[6]),
             (_, _) => last,
         };
-        let mut bank = (usize::from(self.outer) & 0x03) << 5 | (raw & 0x1F);
-        if self.mode & 0x20 == 0 {
-            bank |= raw & 0x20;
+        // $5000: M (bit 7) = NROM override, C (bit 6) = 128 KiB A17
+        // substitution, S (bit 5) = the NROM A14 input.
+        let inner = if self.mode & 0x80 != 0 {
+            let mut bank16 = usize::from(self.mode & 0x0F);
+            if self.mode & 0x20 != 0 {
+                bank16 = (bank16 & !1) | usize::from((address >> 14) & 1);
+            }
+            (bank16 << 1) | usize::from((address >> 13) & 1)
+        } else if self.mode & 0x40 != 0 {
+            (raw & 0x0F) | (usize::from((self.outer >> 4) & 0x01) << 4)
         } else {
-            bank |= usize::from((self.outer >> 4) & 0x01) << 4;
-        }
-        bank
+            raw & 0x1F
+        };
+        let hi = if self.sub1 {
+            (usize::from(self.outer) & 0x03) | (((usize::from(self.outer) >> 3) & 0x01) << 2)
+        } else {
+            usize::from(self.outer) & 0x03
+        };
+        (inner | (hi << 5)) % banks
     }
 
     fn chr_bank(&self, slot: usize) -> usize {
         let mode = self.select & 0x80;
-        let mmc3 = if mode == 0 {
+        let raw = if mode == 0 {
             match slot {
                 0 | 1 => usize::from(self.bank_data[0] & 0xFE) + (slot & 1),
                 2 | 3 => usize::from(self.bank_data[1] & 0xFE) + (slot & 1),
@@ -12934,14 +12986,18 @@ impl Mmc3_215 {
                 _ => usize::from(self.bank_data[1] & 0xFE) + (slot & 1),
             }
         };
-        let outer = (usize::from(self.outer) & 0x0C) << 6;
-        let mut bank = outer | (mmc3 & 0x7F);
-        if self.mode & 0x20 != 0 {
-            bank |= usize::from((self.outer >> 5) & 0x01) << 7;
+        let inner = if self.mode & 0x40 != 0 {
+            (raw & 0x7F) | (usize::from((self.outer >> 5) & 0x01) << 7)
         } else {
-            bank |= mmc3 & 0x80;
-        }
-        bank
+            raw & 0xFF
+        };
+        let hi = if self.sub1 {
+            (usize::from(self.outer) >> 1) & 0x07
+        } else {
+            (usize::from(self.outer) >> 2) & 0x03
+        };
+        let banks = (self.chr.len() / 0x400).max(1);
+        (inner | (hi << 8)) % banks
     }
 }
 
@@ -18770,16 +18826,17 @@ mod tests {
         assert_eq!(cart.cpu_read(0xE000), 63);
         cart.cpu_write(0xA000, 1);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
-        // NROM-128: 16 KiB bank from the base register, mirrored.
+        // Mode 3: a 32 KiB window from the outer base (slot 0..3).
         cart.cpu_write(0x5000, 3);
         cart.cpu_write(0x5001, 2);
         assert_eq!(cart.cpu_read(0x8000), 4);
         assert_eq!(cart.cpu_read(0xA000), 5);
-        assert_eq!(cart.cpu_read(0xE000), 5);
-        // NROM-256: 32 KiB bank from the base register.
-        cart.cpu_write(0x5000, 4);
-        assert_eq!(cart.cpu_read(0x8000), 4);
         assert_eq!(cart.cpu_read(0xC000), 6);
+        assert_eq!(cart.cpu_read(0xE000), 7);
+        // Mode 4: the whole 256 KiB block from the base.
+        cart.cpu_write(0x5000, 4);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 2);
     }
 
     #[test]
@@ -19499,7 +19556,10 @@ mod tests {
 
     #[test]
     fn mmc3_176_fs005_ram_config_banks_wram() {
-        let rom = synth_banked(176, 128, 0);
+        let mut rom = synth_banked(176, 128, 0);
+        // FS005 is NES 2.0 submapper 2.
+        rom[7] |= 0x08;
+        rom[8] = 0x20;
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.mapper(), 176);
 
