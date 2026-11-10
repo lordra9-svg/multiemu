@@ -796,6 +796,7 @@ impl Cartridge {
             )),
             123 => Box::new(Mmc3_123::new(prg_rom, chr, header)),
             187 => Box::new(Mmc3_187::new(prg_rom, chr, header)),
+            198 => Box::new(Mmc3_198::new(prg_rom, chr, header)),
             245 => Box::new(Mmc3_245::new(prg_rom, chr, header)),
             191 => Box::new(Mmc3::new_hybrid(
                 prg_rom,
@@ -4827,6 +4828,102 @@ impl Mapper for Mmc3_245 {
 
     fn prg_ram(&self) -> &[u8] {
         &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// MMC3 variant with a fixed PRG slot layout and 4 KiB of mirrored work RAM
+/// at `$5000-$7FFF` (mapper 198).
+#[derive(Debug)]
+pub struct Mmc3_198 {
+    inner: Mmc3,
+    ex: [u8; 4],
+    low_ram: Vec<u8>,
+}
+
+impl Mmc3_198 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        let inner = Mmc3::new_as(prg, chr, header, 198);
+        let count = inner.prg_banks();
+        Self {
+            inner,
+            ex: [
+                0,
+                1,
+                u8::try_from(count.saturating_sub(2)).unwrap_or(0),
+                u8::try_from(count.saturating_sub(1)).unwrap_or(0),
+            ],
+            low_ram: vec![0; 0x1000],
+        }
+    }
+}
+
+impl Mapper for Mmc3_198 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if (0x5000..=0x7FFF).contains(&address) {
+            return self.low_ram[usize::from(address - 0x5000) & 0x0FFF];
+        }
+        if address < 0x8000 {
+            return 0;
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let banks = self.inner.prg_banks();
+        let bank = usize::from(self.ex[slot]) % banks;
+        self.inner.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x5000..=0x7FFF).contains(&address) {
+            self.low_ram[usize::from(address - 0x5000) & 0x0FFF] = value;
+            return;
+        }
+        if address == 0x8001 {
+            let index = self.inner.select & 0x07;
+            if index >= 6 {
+                let mask = if value >= 0x40 { 0x4F } else { 0x3F };
+                self.ex[usize::from(index - 6)] = value & mask;
+            }
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        198
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.low_ram
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
     }
 
     fn chr_mapping_write(&self, address: u16) -> bool {
@@ -18287,6 +18384,28 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::SingleLower);
         cart.cpu_write(0x8000, 0x2D); // mirroring bit
         assert_eq!(cart.mirroring(), Mirroring::SingleUpper);
+    }
+
+    #[test]
+    fn mmc3_198_fixed_slots_and_mirrored_work_ram() {
+        // 512 KiB PRG (64 x 8 KiB), CHR-RAM.
+        let rom = synth_banked(198, 512, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 198);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xA000), 1);
+        assert_eq!(cart.cpu_read(0xC000), 62);
+        assert_eq!(cart.cpu_read(0xE000), 63);
+
+        // 4 KiB work RAM mirrored across $5000-$7FFF.
+        cart.cpu_write(0x5000, 0x5A);
+        assert_eq!(cart.cpu_read(0x5000), 0x5A);
+        assert_eq!(cart.cpu_read(0x7000), 0x5A);
+
+        // $8001 with select 6 overrides the first PRG slot.
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x20);
+        assert_eq!(cart.cpu_read(0x8000), 0x20);
     }
 
     #[test]
