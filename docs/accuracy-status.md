@@ -913,8 +913,10 @@ the dots 1-64 clear phase, which provides the seed.
   **70.3%** over 17 images, Qi Wang 4 -> 116/120); mapper **172** wrongly
   banked PRG and took CHR from output bits 4-5 (fixed PRG and output bits
   0-1 now, Venice Beach 117/120); mapper **226** used the wrong bank/mode bits
-  (6.7% -> **58.0%** over 9 images, five titles at 118/120). The same
-  120-image sweep moved from video 81.1% to 82.0%.
+  (6.7% -> **58.0%** over 9 images, five titles at 118/120); mapper **242**
+  (Waixing address-latched multicart) used the 227-family latch instead of
+  the reference A2-A6 decode (8.3% -> **92.4%** over 14 images). The same
+  120-image sweep moved from video 81.1% to 82.0% before the 226/242 fixes.
 - A `boundary` diagnostic prints the frame-completion CPU cycle and PPU dot.
   On SMB the completed frames land at cycles 29,781 / 59,566 / 89,343 /
   119,122 / ... against the reference capture's documented 29,779 / 59,560 /
