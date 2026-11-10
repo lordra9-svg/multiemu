@@ -902,7 +902,7 @@ impl Cartridge {
             80 => Box::new(Taito80::new(prg_rom, chr, header, false, 80)),
             207 => Box::new(Taito80::new(prg_rom, chr, header, true, 207)),
             227 => Box::new(Multicart242::new(prg_rom, chr, header, true, 227)),
-            242 => Box::new(Multicart242::new(prg_rom, chr, header, false, 242)),
+            242 => Box::new(Waixing242::new(prg_rom, chr, header)),
             64 => Box::new(Rambo1::new(prg_rom, chr, header, false, 64)),
             158 => Box::new(Rambo1::new(prg_rom, chr, header, true, 158)),
             184 => Box::new(Sunsoft1::new(prg_rom, chr, header)),
@@ -14436,6 +14436,88 @@ impl Mapper for Multicart242 {
     }
 }
 
+/// Waixing 242: an address-latched 32 KiB PRG bank and mirroring with 8 KiB
+/// of work RAM at `$6000-$7FFF`.
+#[derive(Debug)]
+pub struct Waixing242 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Waixing242 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_ram: vec![0; 0x2000],
+            prg_bank: 0,
+            mirroring: Mirroring::Vertical,
+        }
+    }
+}
+
+impl Mapper for Waixing242 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if (0x6000..=0x7FFF).contains(&address) {
+            return self.prg_ram[usize::from(address - 0x6000)];
+        }
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        let bank = usize::from(self.prg_bank) % banks;
+        self.prg
+            .get(bank * 0x8000 + usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x7FFF).contains(&address) {
+            self.prg_ram[usize::from(address - 0x6000)] = value;
+        } else if address >= 0x8000 {
+            // Address-latched: A2-A4 are the inner 16 KiB page, A5-A6 the
+            // outer 32 KiB bank; the written byte is ignored.
+            let inner = (address >> 2) & 0x07;
+            let outer = (address >> 5) & 0x03;
+            self.prg_bank = ((outer << 2) | (inner >> 1)) as u8;
+            self.mirroring = if address & 0x02 != 0 {
+                Mirroring::Horizontal
+            } else {
+                Mirroring::Vertical
+            };
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address) & 0x1FFF)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address) & 0x1FFF) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        242
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+}
+
 /// Sunsoft-1 (mapper 184): a single CHR latch at `$6000-$7FFF` selecting the
 /// two 4 KiB CHR banks; PRG is a fixed 32 KiB.
 #[derive(Debug)]
@@ -19104,6 +19186,24 @@ mod tests {
         // Mirroring is fixed from the header on this board (flags6 bit 0
         // clear => horizontal).
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn waixing242_address_latch_and_ram() {
+        // 128 KiB PRG (4 x 32 KiB), CHR-RAM.
+        let rom = synth_banked(242, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 242);
+        // A3 set -> inner page 2 -> 32 KiB bank 1; A1 clear -> vertical.
+        cart.cpu_write(0x8008, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        // A1 set flips mirroring without changing the bank.
+        cart.cpu_write(0x800A, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
     }
 
     #[test]
