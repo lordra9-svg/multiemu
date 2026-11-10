@@ -388,6 +388,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut input = false;
             let mut core_id: Option<String> = None;
             let mut dump_ppu = false;
+            let mut dump_chr: Option<String> = None;
             let mut break_pc: Option<u16> = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
@@ -403,6 +404,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     "--press-start" => input = true,
                     "--core" => core_id = Some(args.next().ok_or("--core needs an id")?),
                     "--dump-ppu" => dump_ppu = true,
+                    "--dump-chr" => dump_chr = Some(args.next().ok_or("--dump-chr needs a path")?),
                     "--break" => {
                         let pc = args.next().ok_or("--break needs an address")?;
                         let pc = pc.trim_start_matches("0x").trim_start_matches('$');
@@ -416,7 +418,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
 
             let (_, rom) = load_arg(&path)?;
-            if dump_ppu || break_pc.is_some() {
+            if dump_ppu || dump_chr.is_some() || break_pc.is_some() {
                 let mut system =
                     nes_accuracy_core::System::from_ines(&rom).map_err(|e| e.to_string())?;
                 if let Some(pc) = break_pc {
@@ -436,7 +438,16 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 for _ in 0..frames {
                     system.run_frame();
-                    println!("{}", system.debug_state());
+                    if dump_ppu {
+                        println!("{}", system.debug_state());
+                    }
+                }
+                if let Some(path) = dump_chr {
+                    fs::write(format!("{path}.chr"), system.debug_chr())?;
+                    fs::write(format!("{path}.oam"), system.ppu.oam)?;
+                    fs::write(format!("{path}.vram"), system.ppu.vram)?;
+                    let ram: Vec<u8> = (0..0x800u16).map(|a| system.read_ram(a)).collect();
+                    fs::write(format!("{path}.ram"), ram)?;
                 }
                 return Ok(());
             }

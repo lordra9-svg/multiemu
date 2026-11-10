@@ -455,8 +455,7 @@ impl Ppu {
         self.write_vram(address, value);
     }
 
-    /// Test-only CHR read hook.
-    #[cfg(test)]
+    /// CHR read hook used by the debugger front-end.
     pub(crate) fn debug_chr_byte(&self, address: u16) -> u8 {
         self.chr_byte(address)
     }

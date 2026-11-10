@@ -315,6 +315,14 @@ impl System {
         cycles.max(1)
     }
 
+    /// The active 8 KiB CHR window (including mappers with shared CHR).
+    #[must_use]
+    pub fn debug_chr(&self) -> Vec<u8> {
+        (0..0x2000u16)
+            .map(|address| self.ppu.debug_chr_byte(address))
+            .collect()
+    }
+
     /// A one-line CPU/PPU/APU state summary for debugger output.
     #[must_use]
     pub fn debug_state(&self) -> String {
