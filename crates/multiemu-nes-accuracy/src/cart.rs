@@ -748,6 +748,10 @@ impl Cartridge {
             228 => Box::new(Action52::new(prg_rom, chr)),
             246 => Box::new(FongShenBang::new(prg_rom, chr, header)),
             250 => Box::new(Nitra250::new(prg_rom, chr, header)),
+            140 => Box::new(Jaleco140::new(prg_rom, chr, header)),
+            147 => Box::new(Sachen147::new(prg_rom, chr, header)),
+            149 => Box::new(Sachen149::new(prg_rom, chr, header)),
+            244 => Box::new(Cne244::new(prg_rom, chr, header)),
             136 => Box::new(Sachen136::new(prg_rom, chr, header)),
             156 => Box::new(Daou156::new(prg_rom, chr, header)),
             199 => Box::new(Mmc3_199::new(prg_rom, chr, header)),
@@ -3176,6 +3180,377 @@ impl Mapper for Nitra250 {
 
     fn acknowledge_irq(&mut self) {
         self.irq_pending = false;
+    }
+}
+
+/// Jaleco discrete (mapper 140): a `$6000-$7FFF` write selects a 32 KiB PRG
+/// bank (bits 4-5) and an 8 KiB CHR bank (bits 0-3).
+#[derive(Debug)]
+pub struct Jaleco140 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Jaleco140 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_bank: 0,
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Jaleco140 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        let bank = usize::from(self.prg_bank) % banks;
+        self.prg
+            .get(bank * 0x8000 + usize::from(address & 0x7FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x7FFF).contains(&address) {
+            self.prg_bank = (value >> 4) & 0x03;
+            self.chr_bank = value & 0x0F;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address) & 0x1FFF) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        140
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x6000..=0x7FFF).contains(&address)
+    }
+}
+
+/// Sachen 149: fixed first 32 KiB PRG and a bus-conflicted CHR bank bit.
+#[derive(Debug)]
+pub struct Sachen149 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Sachen149 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Sachen149 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        self.prg
+            .get(usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            let effective = value & self.prg_read(address);
+            self.chr_bank = (effective >> 7) & 0x01;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address) & 0x1FFF) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        149
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
+    }
+}
+
+/// The Sachen `JV001` protection latch used by mapper 147.
+#[derive(Debug, Default)]
+struct Jv001 {
+    accumulator: u8,
+    inverter: u8,
+    staging: u8,
+    output: u8,
+    increase: bool,
+    invert: u8,
+}
+
+impl Jv001 {
+    fn new() -> Self {
+        Self {
+            invert: 0xFF,
+            ..Self::default()
+        }
+    }
+
+    fn read(&self) -> u8 {
+        ((self.inverter ^ self.invert) & 0xF0) | (self.accumulator & 0x0F)
+    }
+
+    fn write(&mut self, absolute: u16, value: u8) {
+        if absolute < 0x8000 {
+            match absolute & 0x0103 {
+                0x0100 => {
+                    self.accumulator = if self.increase {
+                        self.accumulator.wrapping_add(1)
+                    } else {
+                        (self.accumulator & 0xF0) | ((self.staging ^ self.invert) & 0x0F)
+                    };
+                }
+                0x0101 => self.invert = if value & 0x01 != 0 { 0xFF } else { 0x00 },
+                0x0102 => {
+                    self.staging = value & 0x0F;
+                    self.inverter = value & 0xF0;
+                }
+                0x0103 => self.increase = value & 0x01 != 0,
+                _ => {}
+            }
+        } else {
+            self.output = (self.inverter & 0xF0) | (self.accumulator & 0x0F);
+        }
+    }
+}
+
+/// Sachen 3018 / TXC JV001 (mapper 147): 32 KiB PRG and 8 KiB CHR banks
+/// driven by the protection chip's output latch.
+#[derive(Debug)]
+pub struct Sachen147 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    jv001: Jv001,
+    mirroring: Mirroring,
+}
+
+impl Sachen147 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            jv001: Jv001::new(),
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn prg_bank(&self) -> usize {
+        usize::from(((self.jv001.output & 0x20) >> 4) | (self.jv001.output & 0x01))
+    }
+
+    fn chr_bank(&self) -> usize {
+        usize::from((self.jv001.output & 0x1E) >> 1)
+    }
+}
+
+impl Mapper for Sachen147 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        let bank = self.prg_bank() % banks;
+        self.prg
+            .get(bank * 0x8000 + usize::from(address & 0x7FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0x4100..=0x5FFF).contains(&address) && (address & 0x0103) == 0x0100 {
+            let v = self.jv001.read();
+            return ((v & 0x3F) << 2) | ((v & 0xC0) >> 6);
+        }
+        self.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        let scramble = |v: u8| ((v & 0x03) << 6) | ((v & 0xFC) >> 2);
+        match address {
+            0x4100..=0x5FFF => self.jv001.write(address, scramble(value)),
+            0x8000..=0xFFFF => {
+                let effective = value & self.prg_read(address);
+                self.jv001.write(address, scramble(effective));
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = self.chr_bank() % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = self.chr_bank() % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        147
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x4100, 0x5FFF))
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000 || (0x4100..=0x5FFF).contains(&address)
+    }
+}
+
+/// C&E Decathlon (mapper 244): the written byte indexes the PRG/CHR
+/// scramble tables.
+#[derive(Debug)]
+pub struct Cne244 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+const CNE244_PRG: [[u8; 4]; 4] = [[0, 1, 2, 3], [3, 2, 1, 0], [0, 2, 1, 3], [3, 1, 2, 0]];
+const CNE244_CHR: [[u8; 8]; 8] = [
+    [0, 1, 2, 3, 4, 5, 6, 7],
+    [0, 2, 1, 3, 4, 6, 5, 7],
+    [0, 1, 4, 5, 2, 3, 6, 7],
+    [0, 4, 1, 5, 2, 6, 3, 7],
+    [0, 4, 2, 6, 1, 5, 3, 7],
+    [0, 2, 4, 6, 1, 3, 5, 7],
+    [7, 6, 5, 4, 3, 2, 1, 0],
+    [7, 6, 5, 4, 3, 2, 1, 0],
+];
+
+impl Cne244 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_bank: 0,
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Cne244 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        let bank = usize::from(self.prg_bank) % banks;
+        self.prg
+            .get(bank * 0x8000 + usize::from(address & 0x7FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            if value & 0x08 != 0 {
+                self.chr_bank =
+                    CNE244_CHR[usize::from((value >> 4) & 0x07)][usize::from(value & 0x07)];
+            } else {
+                self.prg_bank =
+                    CNE244_PRG[usize::from((value >> 4) & 0x03)][usize::from(value & 0x03)];
+            }
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address) & 0x1FFF) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        244
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
     }
 }
 
@@ -17322,6 +17697,53 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 0);
         assert_eq!(cart.cpu_read(0xA000), 1);
         assert_eq!(cart.cpu_read(0xC000), 0);
+    }
+
+    #[test]
+    fn jaleco_140_banks_from_the_6000_window() {
+        // 128 KiB PRG (4 x 32 KiB), 64 KiB CHR (8 x 8 KiB).
+        let rom = synth_banked(140, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 140);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        cart.cpu_write(0x6000, 0x31); // PRG 3, CHR 1
+        assert_eq!(cart.cpu_read(0x8000), 12);
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
+    }
+
+    #[test]
+    fn sachen_149_chr_bank_bit_with_bus_conflict() {
+        let rom = synth_banked_ff(149, 32, 16);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 149);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        // $8001 holds 0xFF, so bit 7 of the written byte survives.
+        cart.cpu_write(0x8001, 0x80);
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
+    }
+
+    #[test]
+    fn sachen_147_jv001_latch_and_security_read() {
+        // 128 KiB PRG (4 x 32 KiB), 32 KiB CHR (4 x 8 KiB).
+        let rom = synth_banked(147, 128, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 147);
+        // Hard-reset handshake: inverter 0, invert 0xFF, accumulator 0.
+        assert_eq!(cart.cpu_read_io(0x4100), 0xC3);
+    }
+
+    #[test]
+    fn cne_244_uses_the_scramble_tables() {
+        // 128 KiB PRG (4 x 32 KiB), 64 KiB CHR (8 x 8 KiB).
+        let rom = synth_banked(244, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 244);
+        // Bit 3 set selects CHR: LUT_CHR[0][3] = 3.
+        cart.cpu_write(0x8000, 0x0B);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 24);
+        // Bit 3 clear selects PRG: LUT_PRG[3][0] = 3.
+        cart.cpu_write(0x8000, 0x30);
+        assert_eq!(cart.cpu_read(0x8000), 12);
     }
 
     #[test]
