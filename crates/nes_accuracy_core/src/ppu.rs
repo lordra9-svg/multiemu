@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::cart::{HybridChr, Mirroring, Mmc5Aux, N163Nt, Vrc7Chr};
+use crate::cart::{HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr};
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -127,6 +127,8 @@ pub struct Ppu {
     n163_nt: Option<Rc<RefCell<N163Nt>>>,
     /// Shared banked CHR-RAM state (VRC7).
     vrc7_chr: Option<Rc<RefCell<Vrc7Chr>>>,
+    /// Shared Oeka Kids CHR state (mapper 96).
+    oeka_chr: Option<Rc<RefCell<OekaChr>>>,
     /// Extended-attribute byte for the tile currently being fetched (MMC5
     /// mode 1).
     ext_attr: Option<u8>,
@@ -302,6 +304,7 @@ impl Ppu {
             mmc5_aux: None,
             n163_nt: None,
             vrc7_chr: None,
+            oeka_chr: None,
             ext_attr: None,
             nt_rom: Vec::new(),
             nt_banks: None,
@@ -400,6 +403,11 @@ impl Ppu {
     /// Shares the mapper's banked CHR-RAM state (VRC7).
     pub fn set_vrc7_chr(&mut self, chr: Rc<RefCell<Vrc7Chr>>) {
         self.vrc7_chr = Some(chr);
+    }
+
+    /// Installs the Oeka Kids shared CHR state (mapper 96).
+    pub fn set_oeka_chr(&mut self, chr: Rc<RefCell<OekaChr>>) {
+        self.oeka_chr = Some(chr);
     }
 
     /// Installs the full CHR ROM used for ROM nametables.
@@ -505,6 +513,11 @@ impl Ppu {
 
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.oeka_chr {
+            let mut aux = aux.borrow_mut();
+            aux.note_address(address);
+            return aux.read(address);
+        }
         if let Some(aux) = &self.vrc7_chr {
             return aux.borrow().read(address);
         }
@@ -992,6 +1005,9 @@ impl Ppu {
     }
 
     fn nametable_index(&self, address: u16) -> usize {
+        if let Some(aux) = &self.oeka_chr {
+            aux.borrow_mut().note_address(address);
+        }
         let index = usize::from(address & 0x0FFF);
         let table = index / 0x0400;
         let offset = index % 0x0400;
@@ -1090,6 +1106,10 @@ impl Ppu {
 
     fn write_vram(&mut self, address: u16, value: u8) {
         if address < 0x2000 {
+            if let Some(aux) = &self.oeka_chr {
+                aux.borrow_mut().write(address, value);
+                return;
+            }
             if let Some(aux) = &self.vrc7_chr {
                 aux.borrow_mut().write(address, value);
                 return;
@@ -1623,6 +1643,11 @@ impl Ppu {
             row -= 8;
         }
         let address = bank + u16::from(tile) * 16 + row;
+        if let Some(aux) = &self.oeka_chr {
+            // Sprite fetches are preceded by a dummy nametable fetch at
+            // $2000, which latches the Oeka inner bank bits to 0.
+            aux.borrow_mut().note_address(0x2000);
+        }
         let mut low = self.chr_byte(address);
         let mut high = self.chr_byte(address + 8);
         self.note_chr_fetch(address);

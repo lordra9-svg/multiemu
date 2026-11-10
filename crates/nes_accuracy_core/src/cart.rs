@@ -648,6 +648,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Shared Oeka Kids CHR state (mapper 96).
+    fn oeka_chr(&self) -> Option<Rc<RefCell<OekaChr>>> {
+        None
+    }
+
     /// Inserts an FDS disk side (`Some`) or ejects (`None`). No-op elsewhere.
     fn insert_disk_side(&mut self, _side: Option<usize>) {}
 
@@ -892,9 +897,11 @@ impl Cartridge {
             221 => Box::new(Ntdec221::new(prg_rom, chr, header)),
             225 => Box::new(Multicart225::new(prg_rom, chr, header)),
             40 => Box::new(Whirlwind40::new(prg_rom, chr, header)),
+            29 => Box::new(Cufrom29::new(prg_rom, prg_ram, header)),
             31 => Box::new(Inl31::new(prg_rom, chr, header)),
             37 => Box::new(Mmc3_37::new(prg_rom, chr, header)),
             92 => Box::new(Jaleco72::new_variant(prg_rom, chr, header, 92, 0x1F, true)),
+            96 => Box::new(Bandai96::new(prg_rom, chr, header)),
             104 => Box::new(DiscreteBmc::new(prg_rom, chr, header, 104)),
             105 => Box::new(NesEvent105::new(prg_rom, chr, header)),
             134 => Box::new(Mmc3Outer::new(prg_rom, chr, header, 134)),
@@ -1119,6 +1126,12 @@ impl Cartridge {
     #[must_use]
     pub fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
         self.mapper.vrc7_chr()
+    }
+
+    /// Shared Oeka Kids CHR state (mapper 96).
+    #[must_use]
+    pub fn oeka_chr(&self) -> Option<Rc<RefCell<OekaChr>>> {
+        self.mapper.oeka_chr()
     }
 
     /// Inserts an FDS disk side (`Some`) or ejects (`None`).
@@ -3722,6 +3735,248 @@ impl Mapper for Cne244 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         address >= 0x8000
+    }
+}
+
+/// Cufrom (mapper 29): 16 KiB PRG banking with 32 KiB of banked CHR-RAM.
+/// The shared banked window keeps `$2007` uploads in the selected 8 KiB page.
+#[derive(Debug)]
+pub struct Cufrom29 {
+    prg: Vec<u8>,
+    prg_ram: Vec<u8>,
+    chr_aux: Option<Rc<RefCell<Vrc7Chr>>>,
+    prg_bank: u8,
+    chr_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Cufrom29 {
+    fn new(prg: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+        let mut aux = Vrc7Chr::new(vec![0; 0x8000]);
+        aux.set_banks([0, 1, 2, 3, 4, 5, 6, 7]);
+        Self {
+            prg,
+            prg_ram,
+            chr_aux: Some(Rc::new(RefCell::new(aux))),
+            prg_bank: 0,
+            chr_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn refresh_banks(&self) {
+        if let Some(aux) = &self.chr_aux {
+            let base = usize::from(self.chr_bank) * 8;
+            let mut banks = [0u8; 8];
+            for (slot, bank) in banks.iter_mut().enumerate() {
+                *bank = (base + slot) as u8;
+            }
+            aux.borrow_mut().set_banks(banks);
+        }
+    }
+}
+
+impl Mapper for Cufrom29 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            if address >= 0x6000 && !self.prg_ram.is_empty() {
+                let offset = usize::from(address - 0x6000) % self.prg_ram.len();
+                return self.prg_ram[offset];
+            }
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x4000).max(1);
+        let bank = if address < 0xC000 {
+            usize::from(self.prg_bank) % banks
+        } else {
+            banks - 1
+        };
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            self.chr_bank = value & 0x03;
+            self.prg_bank = (value >> 2) & 0x07;
+            self.refresh_banks();
+        } else if address >= 0x6000 && !self.prg_ram.is_empty() {
+            let len = self.prg_ram.len();
+            self.prg_ram[usize::from(address - 0x6000) % len] = value;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.chr_aux {
+            return aux.borrow().read(address);
+        }
+        0
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(aux) = &self.chr_aux {
+            aux.borrow_mut().write(address, value);
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        29
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
+        self.chr_aux.clone()
+    }
+}
+
+/// Shared CHR state for the Oeka Kids tablet board (mapper 96). The low CHR
+/// bank follows the PPU nametable quadrant currently being fetched, so the PPU
+/// updates `inner` through [`OekaChr::note_address`] during rendering.
+#[derive(Debug)]
+pub struct OekaChr {
+    rom: Vec<u8>,
+    ram: Vec<u8>,
+    ram_pages: bool,
+    outer: u8,
+    inner: u8,
+    last_addr: u16,
+}
+
+impl OekaChr {
+    fn new(rom: Vec<u8>, ram_pages: bool) -> Self {
+        Self {
+            ram: if ram_pages {
+                vec![0; 0x2000]
+            } else {
+                Vec::new()
+            },
+            rom,
+            ram_pages,
+            outer: 0,
+            inner: 0,
+            last_addr: 0,
+        }
+    }
+
+    fn set_outer(&mut self, value: u8) {
+        self.outer = value & 0x04;
+    }
+
+    pub(crate) fn note_address(&mut self, address: u16) {
+        let masked = address & 0x3FFF;
+        let was_nametable = self.last_addr & 0x3000 == 0x2000;
+        let is_nametable = masked & 0x3000 == 0x2000;
+        if !was_nametable && is_nametable {
+            // A9/A8 are latched on the /A13 NOR A12 rising edge, i.e. when
+            // the PPU address changes into $2000-$2FFF.
+            self.inner = ((masked >> 8) & 0x03) as u8;
+        }
+        self.last_addr = masked;
+    }
+
+    fn offset(&self, address: u16) -> usize {
+        let slot = usize::from((address >> 12) & 0x01);
+        let bank = if slot == 0 {
+            self.outer | self.inner
+        } else {
+            self.outer | 0x03
+        };
+        let count = if self.ram_pages {
+            (self.ram.len() / 0x1000).max(1)
+        } else {
+            (self.rom.len() / 0x1000).max(1)
+        };
+        (usize::from(bank) % count) * 0x1000 + usize::from(address & 0x0FFF)
+    }
+
+    pub(crate) fn read(&self, address: u16) -> u8 {
+        let index = self.offset(address);
+        if self.ram_pages {
+            self.ram.get(index).copied().unwrap_or(0)
+        } else {
+            self.rom.get(index).copied().unwrap_or(0)
+        }
+    }
+
+    pub(crate) fn write(&mut self, address: u16, value: u8) {
+        if !self.ram_pages {
+            return;
+        }
+        let index = self.offset(address);
+        if let Some(byte) = self.ram.get_mut(index) {
+            *byte = value;
+        }
+    }
+}
+
+/// Bandai Oeka Kids (mapper 96): 32 KiB PRG banks plus CHR whose low bank
+/// follows the PPU nametable quadrant.
+#[derive(Debug)]
+pub struct Bandai96 {
+    prg: Vec<u8>,
+    aux: Rc<RefCell<OekaChr>>,
+    prg_bank: u8,
+    mirroring: Mirroring,
+}
+
+impl Bandai96 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            aux: Rc::new(RefCell::new(OekaChr::new(chr, header.chr_size == 0))),
+            prg_bank: 0,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Bandai96 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        let bank = usize::from(self.prg_bank) % banks;
+        self.prg
+            .get(bank * 0x8000 + usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            self.prg_bank = value & 0x03;
+            self.aux.borrow_mut().set_outer(value);
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.aux.borrow().read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.aux.borrow_mut().write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        96
+    }
+
+    fn oeka_chr(&self) -> Option<Rc<RefCell<OekaChr>>> {
+        Some(self.aux.clone())
     }
 }
 
@@ -21601,6 +21856,47 @@ mod tests {
             cart.set_cpu_cycle(100 + bit * 2);
             cart.cpu_write(base, (value >> bit) & 1);
         }
+    }
+
+    #[test]
+    fn oeka_96_prg_bank_and_nametable_latched_chr() {
+        // 64 KiB PRG (2 x 32 KiB), CHR-RAM.
+        let rom = synth_banked(96, 64, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 96);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        cart.cpu_write(0x8000, 0x01);
+        assert_eq!(
+            cart.cpu_read(0x8000),
+            4,
+            "32 KiB bank 1 starts at 8 KiB bank 4"
+        );
+        // Moving from a pattern fetch into $2100 latches A9/A8 = 1.
+        cart.oeka_chr().unwrap().borrow_mut().note_address(0x0000);
+        cart.oeka_chr().unwrap().borrow_mut().note_address(0x2100);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+        // A second edge at $2200 latches bank 2, a different 4 KiB page.
+        cart.oeka_chr().unwrap().borrow_mut().note_address(0x1000);
+        cart.oeka_chr().unwrap().borrow_mut().note_address(0x2200);
+        assert_eq!(cart.ppu_read(0x0000), 0x00);
+    }
+
+    #[test]
+    fn cufrom_29_banks_prg_and_32k_chr_ram() {
+        // 128 KiB PRG (8 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(29, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 29);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 14, "fixed last 16 KiB bank");
+        // value 0x0A: CHR page 2, PRG 16 KiB bank 2.
+        cart.cpu_write(0x8000, 0x0A);
+        assert_eq!(cart.cpu_read(0x8000), 4);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+        cart.cpu_write(0x8000, 0x00);
+        assert_eq!(cart.ppu_read(0x0000), 0x00);
     }
 
     #[test]

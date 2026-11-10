@@ -224,6 +224,9 @@ NROM title, 226 of 300 frame audio hashes match and 299 of 300 video hashes
 match; frame-boundary alignment is within ±1 cycle (previously ±5).
 - `run <rom> --dump-ppu` / `--break <hex>` — per-frame CPU/PPU/APU state and a
   PC breakpoint.
+- `run <rom> --dump-chr PATH` — writes `PATH.chr` (the active 8 KiB CHR
+  window, including shared mapper CHR), `PATH.oam`, `PATH.vram` and `PATH.ram`
+  after the last frame. Useful for comparing a port against the oracle.
 
 Manifests and traces are local artifacts (they derive from game content) and
 are never committed.

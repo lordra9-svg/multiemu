@@ -1002,6 +1002,26 @@ the dots 1-64 clear phase, which provides the seed.
   **37** (SMB + Tetris + NWC) is an MMC3 plus a 74HC161 register whose three
   bits feed the NAND equations for PRG A16/A17 and CHR A17: **98.3%** video
   over 2 images.
+- The A5 mapper batch added **17** more boards from the RustyNES reference:
+  **29** (Cufrom, 32 KiB banked CHR-RAM), **50** (FDS-conversion SMB2j),
+  **104/301** (Golden Five / BMC-8157), **105** (NES-EVENT/NWC),
+  **134/205/238** (MMC3 clones with outer banks, block select and the
+  `$4020` security LUT), **153** (Bandai LZ93D50 with outer bank and
+  battery WRAM), **218** (Magic Floor flags-6 single-screen wiring),
+  **221/229/289** (NTDEC N625092, BMC 31-in-1 and BMC-60311C), **252**
+  (Waixing VRC4 with RAM pages), **290** (Asder NTD-03), **513** (Sachen
+  9602) and **96** (Oeka Kids, whose inner CHR bank is latched from A9/A8 on
+  the PPU nametable edge). Scores over 2-3 images each:
+  104/105/134/205/238/289/50 **98.3%**, 153/301/513 **99.2%**, 221
+  **96.7%**, 218 **97.5%**, 29 **80.8% best-aligned**. Four remain low for
+  timing or PPU-latch reasons rather than decode: **229** and **290** sample
+  a scrolling/animation step one frame away from the oracle (15.0% and 35.8%
+  raw, 47.5% and 65.0% best-aligned), **252** tries a `$2006` write inside
+  the documented 29,658-cycle post-reset mask window, so its nametable upload
+  is dropped (**30.0%**), and **96** draws the title but misses one
+  nametable-row CHR bank in the centre logo (**40.0%**). The NES 2.0
+  PRG-RAM/NVRAM size decoder was also corrected to `64 << shift` bytes (it
+  had treated the nibbles as 8 KiB units).
 - PPU colour emphasis was then implemented from the documented 2C02
   composite model (levels, phase table, YUV decode, per-colour RGB delta).
   The previously ignored PPUMASK bits 5-7 were why games such as *Du Ma

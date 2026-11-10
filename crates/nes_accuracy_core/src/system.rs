@@ -183,6 +183,9 @@ impl System {
         if let Some(aux) = cart.vrc7_chr() {
             ppu.set_vrc7_chr(aux);
         }
+        if let Some(aux) = cart.oeka_chr() {
+            ppu.set_oeka_chr(aux);
+        }
         if let Some(nt) = cart.n163_nt() {
             ppu.set_n163_nt(nt);
         }
