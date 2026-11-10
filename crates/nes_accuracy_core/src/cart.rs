@@ -885,7 +885,12 @@ impl Cartridge {
             145 => Box::new(Sachen145::new(prg_rom, chr, header)),
             225 => Box::new(Multicart225::new(prg_rom, chr, header)),
             40 => Box::new(Whirlwind40::new(prg_rom, chr, header)),
+            31 => Box::new(Inl31::new(prg_rom, chr, header)),
+            92 => Box::new(Jaleco72::new_variant(prg_rom, chr, header, 92, 0x1F, true)),
             303 => Box::new(Kaiser303::new(prg_rom, chr, header)),
+            305 => Box::new(KaiserMisc::new(prg_rom, chr, header, 305)),
+            306 => Box::new(KaiserMisc::new(prg_rom, chr, header, 306)),
+            312 => Box::new(KaiserMisc::new(prg_rom, chr, header, 312)),
             313 => Box::new(Mmc3_313::new(prg_rom, chr, header)),
             519 => Box::new(Eh8813A::new(prg_rom, chr, header)),
             529 => Box::new(T230::new(prg_rom, chr, header)),
@@ -3693,6 +3698,168 @@ impl Mapper for Cne244 {
     }
 }
 
+/// Later Kaiser boards (mappers 305, 306 and 312) sharing the KS-7017 family:
+/// small-window PRG banking with a fixed last 32 KiB (305/306) or a switchable
+/// 16 KiB half (312), CHR-RAM, and board-specific address decodes.
+#[derive(Debug)]
+pub struct KaiserMisc {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    board: u16,
+    regs4: [u8; 4],
+    win_6000: u8,
+    prg16: u8,
+    mirroring: Mirroring,
+}
+
+impl KaiserMisc {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header, board: u16) -> Self {
+        Self {
+            prg,
+            chr,
+            board,
+            regs4: [0; 4],
+            win_6000: 8,
+            prg16: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn read_2k(&self, bank: usize, address: u16) -> u8 {
+        let count = (self.prg.len() / 0x800).max(1);
+        self.prg
+            .get((bank % count) * 0x800 + usize::from(address & 0x7FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn read_8k(&self, bank: usize, address: u16) -> u8 {
+        let count = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % count) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for KaiserMisc {
+    fn prg_read(&self, address: u16) -> u8 {
+        match self.board {
+            305 => match address {
+                0x6000..=0x7FFF => {
+                    let win = usize::from(address - 0x6000) / 0x800;
+                    self.read_2k(usize::from(self.regs4[win]), address)
+                }
+                0x8000..=0xFFFF => {
+                    let count = (self.prg.len() / 0x800).max(1);
+                    let win = usize::from(address - 0x8000) / 0x800;
+                    let bank = count.saturating_sub(16usize.saturating_sub(win));
+                    self.read_2k(bank, address)
+                }
+                _ => 0,
+            },
+            306 => match address {
+                0x6000..=0x7FFF => self.read_8k(usize::from(self.win_6000), address),
+                0x8000..=0xFFFF => {
+                    let count = (self.prg.len() / 0x2000).max(1);
+                    let win = usize::from(address - 0x8000) / 0x2000;
+                    self.read_8k(count.saturating_sub(4) + win, address)
+                }
+                _ => 0,
+            },
+            312 => match address {
+                0x8000..=0xBFFF => {
+                    let banks = (self.prg.len() / 0x4000).max(1);
+                    let bank = usize::from(self.prg16) % banks;
+                    self.prg
+                        .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+                        .copied()
+                        .unwrap_or(0)
+                }
+                0xC000..=0xFFFF => {
+                    let banks = (self.prg.len() / 0x4000).max(1);
+                    self.prg
+                        .get((banks - 1) * 0x4000 + usize::from(address & 0x3FFF))
+                        .copied()
+                        .unwrap_or(0)
+                }
+                _ => 0,
+            },
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match self.board {
+            305 => {
+                if address >= 0x8000 {
+                    self.regs4[usize::from((address >> 11) & 0x03)] = value;
+                }
+            }
+            306 => {
+                if address >= 0x8000 {
+                    // The register value comes from the write *address*.
+                    let mode = address & 0x30 == 0x30;
+                    match address & 0xD943 {
+                        0xD943 => {
+                            self.win_6000 = if mode {
+                                0x0B
+                            } else {
+                                ((address >> 2) & 0x0F) as u8
+                            };
+                        }
+                        0xD903 => {
+                            self.win_6000 = if mode {
+                                0x08 | ((address >> 2) & 0x03) as u8
+                            } else {
+                                0x0B
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            312 => {
+                if address >= 0x8000 {
+                    self.mirroring = if value & 0x01 != 0 {
+                        Mirroring::Horizontal
+                    } else {
+                        Mirroring::Vertical
+                    };
+                } else if (0x6000..=0x7FFF).contains(&address) {
+                    self.prg16 = value;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        self.board
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        matches!(self.board, 305 | 306)
+    }
+}
+
 /// Irem H3001 (mapper 65): 8 KiB PRG banking, eight 1 KiB CHR banks and a
 /// CPU-cycle down-counter.
 #[derive(Debug)]
@@ -3971,6 +4138,73 @@ impl Mapper for Sunsoft3 {
     }
 }
 
+/// INL (mapper 31): eight independent 4 KiB PRG slots written at `$5FF8-$5FFF`,
+/// with 8 KiB of flat CHR-RAM.
+#[derive(Debug)]
+pub struct Inl31 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    slots: [u8; 8],
+    mirroring: Mirroring,
+}
+
+impl Inl31 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        // Slot 7 powers on at the last 4 KiB bank so the reset vector is
+        // reachable; the other slots start at bank 0.
+        let mut slots = [0u8; 8];
+        slots[7] = ((prg.len() / 0x1000).max(1) - 1) as u8;
+        Self {
+            prg,
+            chr,
+            slots,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Inl31 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x1000).max(1);
+        let slot = usize::from((address >> 12) & 0x07);
+        let bank = usize::from(self.slots[slot]) % banks;
+        self.prg
+            .get(bank * 0x1000 + usize::from(address & 0x0FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x5FF8..=0x5FFF).contains(&address) {
+            self.slots[usize::from(address & 0x07)] = value;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        31
+    }
+}
+
 /// Jaleco JF-17 (mapper 72): bus-conflicted PRG/CHR latches with a strobe.
 #[derive(Debug)]
 pub struct Jaleco72 {
@@ -3981,10 +4215,26 @@ pub struct Jaleco72 {
     prg_strobe: bool,
     chr_strobe: bool,
     mirroring: Mirroring,
+    number: u16,
+    prg_mask: u8,
+    /// JF-19 (mapper 92) keeps the first bank fixed and switches the second;
+    /// JF-17 (mapper 72) does the opposite.
+    switchable_high: bool,
 }
 
 impl Jaleco72 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self::new_variant(prg, chr, header, 72, 0x0F, false)
+    }
+
+    fn new_variant(
+        prg: Vec<u8>,
+        chr: Vec<u8>,
+        header: Header,
+        number: u16,
+        prg_mask: u8,
+        switchable_high: bool,
+    ) -> Self {
         Self {
             prg,
             chr,
@@ -3993,6 +4243,9 @@ impl Jaleco72 {
             prg_strobe: false,
             chr_strobe: false,
             mirroring: header.mirroring,
+            number,
+            prg_mask,
+            switchable_high,
         }
     }
 }
@@ -4003,10 +4256,11 @@ impl Mapper for Jaleco72 {
             return 0;
         }
         let banks = (self.prg.len() / 0x4000).max(1);
-        let bank = if address < 0xC000 {
-            usize::from(self.prg_bank) % banks
-        } else {
-            banks - 1
+        let bank = match (self.switchable_high, address < 0xC000) {
+            (false, true) => usize::from(self.prg_bank) % banks,
+            (false, false) => banks - 1,
+            (true, true) => 0,
+            (true, false) => usize::from(self.prg_bank) % banks,
         };
         self.prg
             .get(bank * 0x4000 + usize::from(address & 0x3FFF))
@@ -4020,7 +4274,7 @@ impl Mapper for Jaleco72 {
             let prg_strobe = effective & 0x80 != 0;
             let chr_strobe = effective & 0x40 != 0;
             if prg_strobe && !self.prg_strobe {
-                self.prg_bank = effective & 0x0F;
+                self.prg_bank = effective & self.prg_mask;
             }
             if chr_strobe && !self.chr_strobe {
                 self.chr_bank = effective & 0x0F;
@@ -4055,7 +4309,7 @@ impl Mapper for Jaleco72 {
     }
 
     fn number(&self) -> u16 {
-        72
+        self.number
     }
 
     fn chr_mapping_write(&self, address: u16) -> bool {
@@ -19829,6 +20083,105 @@ mod tests {
         cart.cpu_write(0x4800, 0x21);
         assert_eq!(cart.cpu_read(0x8000), 8);
         assert_eq!(cart.ppu_read(0x0000), 0x88);
+    }
+
+    fn synth_2k(mapper: u16, prg_kib: usize, chr_kib: usize) -> Vec<u8> {
+        let prg_len = prg_kib * 1024;
+        let chr_len = chr_kib * 1024;
+        let mut rom = vec![0u8; 16 + prg_len + chr_len];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = (prg_len / (16 * 1024)) as u8;
+        rom[5] = (chr_len / (8 * 1024)) as u8;
+        rom[6] = ((mapper & 0x0F) << 4) as u8;
+        rom[7] = (mapper & 0xF0) as u8;
+        if mapper > 0xFF {
+            rom[7] |= 0x08;
+            rom[8] = ((mapper >> 8) & 0x0F) as u8;
+        }
+        for bank in 0..prg_len / 0x800 {
+            let start = 16 + bank * 0x800;
+            for byte in &mut rom[start..start + 0x800] {
+                *byte = bank as u8;
+            }
+        }
+        rom
+    }
+
+    #[test]
+    fn inl_31_has_eight_4k_slots() {
+        // 64 KiB PRG (16 x 4 KiB), CHR-RAM.
+        let rom = synth_2k(31, 64, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 31);
+        // Slot 7 powers on at the last 4 KiB bank.
+        assert_eq!(cart.cpu_read(0xF000), 30);
+        cart.cpu_write(0x5FF8, 1);
+        assert_eq!(
+            cart.cpu_read(0x8000),
+            2,
+            "4 KiB bank 1 starts at 2 KiB bank 2"
+        );
+        cart.cpu_write(0x5FFF, 3);
+        assert_eq!(cart.cpu_read(0xF000), 6);
+    }
+
+    #[test]
+    fn jaleco_92_switches_the_high_bank() {
+        let rom = synth_banked_ff(92, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 92);
+        // $8000 is fixed to bank 0; $C000 is switchable.
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 0);
+        cart.cpu_write(0x8001, 0x85);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 10, "16 KiB bank 5");
+    }
+
+    #[test]
+    fn kaiser_305_small_prg_windows() {
+        // 128 KiB PRG (64 x 2 KiB), CHR-RAM.
+        let rom = synth_2k(305, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 305);
+        cart.cpu_write(0x8000, 5);
+        assert_eq!(cart.cpu_read(0x6000), 5);
+        cart.cpu_write(0x8800, 7); // A11 selects window 1.
+        assert_eq!(cart.cpu_read(0x6800), 7);
+        // $8000-$FFFF is the fixed last 32 KiB (2 KiB banks 48..63).
+        assert_eq!(cart.cpu_read(0x8000), 48);
+        assert_eq!(cart.cpu_read(0xFE00), 63);
+    }
+
+    #[test]
+    fn kaiser_306_address_decoded_window() {
+        // 128 KiB PRG (16 x 8 KiB), CHR-RAM.
+        let rom = synth_banked(306, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 306);
+        // Power-on window is 8 KiB bank 8.
+        assert_eq!(cart.cpu_read(0x6000), 8);
+        // The register value comes from the address: $D903 -> bank 11.
+        cart.cpu_write(0xD903, 0x00);
+        assert_eq!(cart.cpu_read(0x6000), 11);
+        // Fixed last 32 KiB: banks 12..15.
+        assert_eq!(cart.cpu_read(0x8000), 12);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+    }
+
+    #[test]
+    fn kaiser_312_prg16_and_mirroring() {
+        // 128 KiB PRG (8 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(312, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 312);
+        cart.cpu_write(0x6000, 2);
+        assert_eq!(cart.cpu_read(0x8000), 4, "16 KiB bank 2");
+        assert_eq!(cart.cpu_read(0xC000), 14, "fixed last bank 7");
+        cart.cpu_write(0x8000, 0x00);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0x8000, 0x01);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
     #[test]
