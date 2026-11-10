@@ -740,6 +740,10 @@ impl Cartridge {
             4 => Box::new(Mmc3::new(prg_rom, chr, header)),
             9 => Box::new(Mmc2::new(prg_rom, chr, prg_ram, header, 9)),
             10 => Box::new(Mmc2::new(prg_rom, chr, prg_ram, header, 10)),
+            65 => Box::new(Irem65::new(prg_rom, chr, header)),
+            67 => Box::new(Sunsoft3::new(prg_rom, chr, header)),
+            72 => Box::new(Jaleco72::new(prg_rom, chr, header)),
+            78 => Box::new(Irem78::new(prg_rom, chr, header)),
             68 => Box::new(Sunsoft4::new(prg_rom, chr, prg_ram, header)),
             70 => Box::new(Bandai70::new(prg_rom, chr, header)),
             93 => Box::new(Sunsoft3r::new(prg_rom, chr, header)),
@@ -3547,6 +3551,479 @@ impl Mapper for Cne244 {
 
     fn number(&self) -> u16 {
         244
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
+    }
+}
+
+/// Irem H3001 (mapper 65): 8 KiB PRG banking, eight 1 KiB CHR banks and a
+/// CPU-cycle down-counter.
+#[derive(Debug)]
+pub struct Irem65 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_reg0: u8,
+    prg_reg1: u8,
+    prg_layout: bool,
+    chr_regs: [u8; 8],
+    mirroring: Mirroring,
+    irq_reload: u16,
+    irq_counter: u16,
+    irq_enabled: bool,
+    irq_pending: bool,
+}
+
+impl Irem65 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_reg0: 0,
+            prg_reg1: 1,
+            prg_layout: false,
+            chr_regs: [0; 8],
+            mirroring: header.mirroring,
+            irq_reload: 0,
+            irq_counter: 0,
+            irq_enabled: false,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_offset(&self, address: u16) -> usize {
+        let total = (self.prg.len() / 0x2000).max(1);
+        let fixed_last = 0x3F % total;
+        let fixed_second = 0x3E % total;
+        let bank = match (address & 0xE000, self.prg_layout) {
+            (0x8000, false) => usize::from(self.prg_reg0),
+            (0x8000, true) => fixed_second,
+            (0xA000, _) => usize::from(self.prg_reg1),
+            (0xC000, false) => fixed_second,
+            (0xC000, true) => usize::from(self.prg_reg0),
+            (0xE000, _) => fixed_last,
+            _ => 0,
+        };
+        bank % total * 0x2000 + usize::from(address & 0x1FFF)
+    }
+}
+
+impl Mapper for Irem65 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        self.prg.get(self.prg_offset(address)).copied().unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x8000..=0x8FFF => self.prg_reg0 = value,
+            0x9000..=0x9FFF => match address & 0x0007 {
+                0 => self.prg_layout = value & 0x80 != 0,
+                1 => {
+                    self.mirroring = match (value >> 6) & 0x03 {
+                        0 => Mirroring::Vertical,
+                        2 => Mirroring::Horizontal,
+                        _ => Mirroring::SingleLower,
+                    }
+                }
+                3 => {
+                    self.irq_enabled = value & 0x80 != 0;
+                    self.irq_pending = false;
+                }
+                4 => {
+                    self.irq_counter = self.irq_reload;
+                    self.irq_pending = false;
+                }
+                5 => self.irq_reload = (self.irq_reload & 0x00FF) | (u16::from(value) << 8),
+                6 => self.irq_reload = (self.irq_reload & 0xFF00) | u16::from(value),
+                _ => {}
+            },
+            0xA000..=0xAFFF => self.prg_reg1 = value,
+            0xB000..=0xBFFF => self.chr_regs[usize::from(address & 0x0007)] = value,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let slot = usize::from((address >> 10) & 0x07);
+        let bank = usize::from(self.chr_regs[slot]) % banks;
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let slot = usize::from((address >> 10) & 0x07);
+        let bank = usize::from(self.chr_regs[slot]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        65
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0xB000..=0xBFFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if !self.irq_enabled || self.irq_counter == 0 {
+            return;
+        }
+        self.irq_counter -= 1;
+        if self.irq_counter == 0 {
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// Sunsoft-3 (mapper 67): 16 KiB PRG banking, four 2 KiB CHR banks and a
+/// write-twice CPU-cycle counter.
+#[derive(Debug)]
+pub struct Sunsoft3 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    chr_banks: [u8; 4],
+    mirroring: Mirroring,
+    irq_counter: u16,
+    irq_enabled: bool,
+    irq_pending: bool,
+    irq_low_next: bool,
+}
+
+impl Sunsoft3 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_bank: 0,
+            chr_banks: [0; 4],
+            mirroring: header.mirroring,
+            irq_counter: 0,
+            irq_enabled: false,
+            irq_pending: false,
+            irq_low_next: false,
+        }
+    }
+}
+
+impl Mapper for Sunsoft3 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x4000).max(1);
+        let bank = if address < 0xC000 {
+            usize::from(self.prg_bank) % banks
+        } else {
+            banks - 1
+        };
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0xF800 {
+            0x8000 => self.irq_pending = false,
+            0x8800 => self.chr_banks[0] = value,
+            0x9800 => self.chr_banks[1] = value,
+            0xA800 => self.chr_banks[2] = value,
+            0xB800 => self.chr_banks[3] = value,
+            0xC800 => {
+                if self.irq_low_next {
+                    self.irq_counter = (self.irq_counter & 0xFF00) | u16::from(value);
+                } else {
+                    self.irq_counter = (self.irq_counter & 0x00FF) | (u16::from(value) << 8);
+                }
+                self.irq_low_next = !self.irq_low_next;
+            }
+            0xD800 => {
+                self.irq_enabled = value & 0x10 != 0;
+                self.irq_low_next = false;
+            }
+            0xE800 => {
+                self.mirroring = match value & 0x03 {
+                    0 => Mirroring::Vertical,
+                    1 => Mirroring::Horizontal,
+                    2 => Mirroring::SingleLower,
+                    _ => Mirroring::SingleUpper,
+                };
+            }
+            0xF800 => self.prg_bank = value & 0x0F,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x800).max(1);
+        let slot = usize::from((address >> 11) & 0x03);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        self.chr
+            .get(bank * 0x800 + usize::from(address & 0x7FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x800).max(1);
+        let slot = usize::from((address >> 11) & 0x03);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x800 + usize::from(address & 0x7FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        67
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        matches!(address & 0xF800, 0x8800 | 0x9800 | 0xA800 | 0xB800)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if !self.irq_enabled {
+            return;
+        }
+        if self.irq_counter == 0 {
+            self.irq_counter = 0xFFFF;
+            self.irq_pending = true;
+            self.irq_enabled = false;
+        } else {
+            self.irq_counter -= 1;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// Jaleco JF-17 (mapper 72): bus-conflicted PRG/CHR latches with a strobe.
+#[derive(Debug)]
+pub struct Jaleco72 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    chr_bank: u8,
+    prg_strobe: bool,
+    chr_strobe: bool,
+    mirroring: Mirroring,
+}
+
+impl Jaleco72 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg_bank: 0,
+            chr_bank: 0,
+            prg_strobe: false,
+            chr_strobe: false,
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Jaleco72 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x4000).max(1);
+        let bank = if address < 0xC000 {
+            usize::from(self.prg_bank) % banks
+        } else {
+            banks - 1
+        };
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            let effective = value & self.prg_read(address);
+            let prg_strobe = effective & 0x80 != 0;
+            let chr_strobe = effective & 0x40 != 0;
+            if prg_strobe && !self.prg_strobe {
+                self.prg_bank = effective & 0x0F;
+            }
+            if chr_strobe && !self.chr_strobe {
+                self.chr_bank = effective & 0x0F;
+            }
+            self.prg_strobe = prg_strobe;
+            self.chr_strobe = chr_strobe;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        72
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
+    }
+}
+
+/// Irem/Jaleco (mapper 78): UxROM-like banking with a mirroring bit whose
+/// wiring depends on the board variant.
+#[derive(Debug)]
+pub struct Irem78 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_bank: u8,
+    chr_bank: u8,
+    mirroring: Mirroring,
+    holy_diver: bool,
+}
+
+impl Irem78 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        let holy_diver = match (header.nes2, header.submapper) {
+            (true, 1) => false,
+            (true, 3) => true,
+            _ => header.four_screen,
+        };
+        Self {
+            prg,
+            chr,
+            prg_bank: 0,
+            chr_bank: 0,
+            mirroring: if holy_diver {
+                Mirroring::Horizontal
+            } else {
+                Mirroring::SingleLower
+            },
+            holy_diver,
+        }
+    }
+}
+
+impl Mapper for Irem78 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x4000).max(1);
+        let bank = if address < 0xC000 {
+            usize::from(self.prg_bank) % banks
+        } else {
+            banks - 1
+        };
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            self.prg_bank = value & 0x07;
+            self.chr_bank = (value >> 4) & 0x0F;
+            let mbit = value & 0x08 != 0;
+            self.mirroring = if self.holy_diver {
+                if mbit {
+                    Mirroring::Vertical
+                } else {
+                    Mirroring::Horizontal
+                }
+            } else if mbit {
+                Mirroring::SingleUpper
+            } else {
+                Mirroring::SingleLower
+            };
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x2000 + usize::from(address & 0x1FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        78
     }
 
     fn chr_mapping_write(&self, address: u16) -> bool {
@@ -17744,6 +18221,72 @@ mod tests {
         // Bit 3 clear selects PRG: LUT_PRG[3][0] = 3.
         cart.cpu_write(0x8000, 0x30);
         assert_eq!(cart.cpu_read(0x8000), 12);
+    }
+
+    #[test]
+    fn irem_65_banks_and_cycle_irq() {
+        // 128 KiB PRG (16 x 8 KiB), 128 KiB CHR (128 x 1 KiB).
+        let rom = synth_banked(65, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 65);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xA000), 1);
+        assert_eq!(cart.cpu_read(0xC000), 14);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+
+        cart.cpu_write(0x8000, 5);
+        assert_eq!(cart.cpu_read(0x8000), 5);
+        cart.cpu_write(0xB000, 3);
+        assert_eq!(cart.ppu_read(0x0000), 0x83, "1 KiB CHR bank 3");
+
+        cart.cpu_write(0x9003, 0x80);
+        cart.cpu_write(0x9005, 0x00);
+        cart.cpu_write(0x9006, 0x10);
+        cart.cpu_write(0x9004, 0x00);
+        for _ in 0..16 {
+            cart.clock_cpu();
+        }
+        assert!(cart.irq_line());
+    }
+
+    #[test]
+    fn sunsoft_3_banks_and_cycle_irq() {
+        // 128 KiB PRG (8 x 16 KiB), 128 KiB CHR (64 x 2 KiB).
+        let rom = synth_banked(67, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 67);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xC000), 14);
+        cart.cpu_write(0xF800, 5);
+        assert_eq!(cart.cpu_read(0x8000), 10);
+        cart.cpu_write(0x8800, 3);
+        assert_eq!(cart.ppu_read(0x0000), 0x86);
+    }
+
+    #[test]
+    fn jaleco_72_strobed_prg_and_chr_latches() {
+        let rom = synth_banked_ff(72, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 72);
+        // $8001 is 0xFF, so the write reaches the latch: strobes 0x80/0x40,
+        // PRG 15 (mod 8), CHR 15 (mod 8).
+        cart.cpu_write(0x8001, 0xCF);
+        assert_eq!(cart.cpu_read(0x8000), 14);
+        assert_eq!(cart.ppu_read(0x0000), 0x80 | 56);
+    }
+
+    #[test]
+    fn irem_78_banks_chr_and_mirroring() {
+        // 128 KiB PRG (8 x 16 KiB), 64 KiB CHR (8 x 8 KiB).
+        let rom = synth_banked(78, 128, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 78);
+        cart.cpu_write(0x8000, 0x25); // PRG 5, CHR 2
+        assert_eq!(cart.cpu_read(0x8000), 10);
+        assert_eq!(cart.ppu_read(0x0000), 0x90);
+        assert_eq!(cart.mirroring(), Mirroring::SingleLower);
+        cart.cpu_write(0x8000, 0x2D); // mirroring bit
+        assert_eq!(cart.mirroring(), Mirroring::SingleUpper);
     }
 
     #[test]
