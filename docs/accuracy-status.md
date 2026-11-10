@@ -908,6 +908,16 @@ the dots 1-64 clear phase, which provides the seed.
   therefore in the reference's master-clock bus/frame-complete plumbing
   (`master_clock`/`ppu_clock`, DMA and interrupt ordering), not in the dot
   split or the skip position.
+- The reference-style master-clock bus was then ported as an isolated,
+  default-off experiment: `master_clock`/`ppu_clock` counters, `run_ppu_to`
+  ticking whole PPU dots with the reference's one-master-clock sample lag, the
+  5/7 read and 7/5 write splits, and the same path for DMA/reset cycles. On
+  SMB (300 frames) it produced **video 297-298/300 and audio 5/300**, against
+  **299/300 and 226/300** for the shipped scheduler; a sweep of the initial
+  PPU dot (334-340) moved video only between 273 and 298. It was reverted.
+  The remaining gap is therefore coupled to the reference's DMA, interrupt and
+  APU ordering inside the same bus; porting the clock arithmetic alone makes
+  both video and audio worse.
 - A per-instruction `(pc, cycle)` comparison against the reference capture
   finally rules out CPU bus/IRQ timing as the frame-39 cause. Over the window
   around the seeding `$4007` write (cycle ~1,154,2xx) the PC streams are
