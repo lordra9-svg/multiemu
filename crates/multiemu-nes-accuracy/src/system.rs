@@ -824,7 +824,7 @@ impl System {
                 }
             }
             0x6000..=0x7FFF => {
-                if self.cart.prg_ram().is_empty() {
+                if self.cart.prg_ram().is_empty() && !self.cart.prg_rom_at_6000() {
                     self.open_bus
                 } else {
                     self.cart.cpu_read(address)
@@ -907,7 +907,7 @@ impl CpuBus for System {
                 }
             }
             0x6000..=0x7FFF => {
-                if self.cart.prg_ram().is_empty() {
+                if self.cart.prg_ram().is_empty() && !self.cart.prg_rom_at_6000() {
                     self.open_bus
                 } else {
                     self.cart.cpu_read(address)

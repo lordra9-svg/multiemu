@@ -575,6 +575,14 @@ pub trait Mapper: fmt::Debug {
         &[]
     }
 
+    /// Whether the mapper drives PRG-ROM (not work RAM) at `$6000-$7FFF`.
+    ///
+    /// The CPU bus only forwards that window to the cartridge when this is
+    /// true or [`Mapper::prg_ram`] is non-empty; otherwise the window floats.
+    fn prg_rom_at_6000(&self) -> bool {
+        false
+    }
+
     /// Full CHR ROM for mappers whose pattern banks switch during rendering
     /// (MMC2/MMC4). The PPU owns the latch state in that case.
     fn chr_rom(&self) -> Option<&[u8]> {
@@ -1116,6 +1124,12 @@ impl Cartridge {
     #[must_use]
     pub fn prg_ram(&self) -> &[u8] {
         self.mapper.prg_ram()
+    }
+
+    /// Whether the mapper drives PRG-ROM at `$6000-$7FFF`.
+    #[must_use]
+    pub fn prg_rom_at_6000(&self) -> bool {
+        self.mapper.prg_rom_at_6000()
     }
 
     /// Mapper IRQ output (level).
@@ -18112,7 +18126,7 @@ pub struct Ks7032 {
     select: u8,
     irq_reload: u16,
     irq_counter: u16,
-    irq_enabled: bool,
+    irq_control: u8,
     irq_pending: bool,
     mirroring: Mirroring,
 }
@@ -18126,7 +18140,7 @@ impl Ks7032 {
             select: 0,
             irq_reload: 0,
             irq_counter: 0,
-            irq_enabled: false,
+            irq_control: 0,
             irq_pending: false,
             mirroring: header.mirroring,
         }
@@ -18148,30 +18162,38 @@ impl Mapper for Ks7032 {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        match address {
-            0x8000..=0xBFFF => {
-                let shift = u32::from(address & 0x03) * 4;
-                self.irq_reload =
-                    (self.irq_reload & !(0x000F << shift)) | (u16::from(value & 0x0F) << shift);
+        match address & 0xF000 {
+            0x8000 => self.irq_reload = (self.irq_reload & !0x000F) | u16::from(value & 0x0F),
+            0x9000 => {
+                self.irq_reload = (self.irq_reload & !0x00F0) | (u16::from(value & 0x0F) << 4)
             }
-            0xC000..=0xCFFF => {
-                self.irq_enabled = value & 0x06 != 0;
-                self.irq_counter = self.irq_reload;
-                if !self.irq_enabled {
-                    self.irq_pending = false;
+            0xA000 => {
+                self.irq_reload = (self.irq_reload & !0x0F00) | (u16::from(value & 0x0F) << 8)
+            }
+            0xB000 => {
+                self.irq_reload = (self.irq_reload & !0xF000) | (u16::from(value & 0x0F) << 12);
+            }
+            0xC000 => {
+                self.irq_control = value;
+                if value & 0x02 != 0 {
+                    self.irq_counter = self.irq_reload;
+                }
+                self.irq_pending = false;
+            }
+            0xD000 => self.irq_pending = false,
+            0xE000 => self.select = (value & 0x07).wrapping_sub(1),
+            0xF000 => {
+                if let 0..=3 = self.select {
+                    let index = usize::from(self.select);
+                    self.prg_banks[index] = (self.prg_banks[index] & 0x10) | (value & 0x0F);
                 }
             }
-            0xD000..=0xDFFF => self.irq_pending = false,
-            0xE000..=0xEFFF => self.select = value & 0x07,
-            0xF000..=0xFFFF => match self.select {
-                1 => self.prg_banks[0] = value & 0x0F,
-                2 => self.prg_banks[1] = value & 0x0F,
-                3 => self.prg_banks[2] = value & 0x0F,
-                4 => self.prg_banks[3] = value & 0x0F,
-                _ => {}
-            },
             _ => {}
         }
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        true
     }
 
     fn chr_read(&self, address: u16) -> u8 {
@@ -18200,14 +18222,14 @@ impl Mapper for Ks7032 {
     }
 
     fn clock_cpu(&mut self) {
-        if !self.irq_enabled {
+        if self.irq_control & 0x02 == 0 {
             return;
         }
+        self.irq_counter = self.irq_counter.wrapping_add(1);
         if self.irq_counter == 0xFFFF {
             self.irq_counter = self.irq_reload;
+            self.irq_control &= !0x02;
             self.irq_pending = true;
-        } else {
-            self.irq_counter = self.irq_counter.wrapping_add(1);
         }
     }
 
@@ -19418,6 +19440,22 @@ mod tests {
     }
 
     #[test]
+    fn ks7032_exposes_prg_rom_at_6000() {
+        // 128 KiB PRG (16 x 8 KiB), CHR-RAM.
+        let rom = synth_banked(142, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 142);
+        // The CPU bus must forward the window even without PRG-RAM.
+        assert!(cart.prg_rom_at_6000());
+        // $E000 = 4 selects register 3, $F000 = 2 points the window at
+        // 8 KiB bank 2 (the reset vector still lives in the fixed last bank).
+        cart.cpu_write(0xE000, 4);
+        cart.cpu_write(0xF000, 2);
+        assert_eq!(cart.cpu_read(0x6000), 2);
+        assert_eq!(cart.cpu_read(0xE000), 15);
+    }
+
+    #[test]
     fn ks7032_banks_and_irq() {
         let rom = synth_banked(142, 128, 0);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
@@ -19436,9 +19474,15 @@ mod tests {
         cart.cpu_write(0x8002, 0x0F);
         cart.cpu_write(0x8003, 0x0F);
         cart.cpu_write(0xC000, 0x02);
-        cart.clock_cpu();
-        cart.clock_cpu();
-        assert!(cart.irq_line());
+        // The KS7032 counts up from the reload value and fires when it wraps
+        // back to $FFFF, so a $FFFF reload is the longest period.
+        let mut cycles = 0u32;
+        while !cart.irq_line() && cycles < 70_000 {
+            cart.clock_cpu();
+            cycles += 1;
+        }
+        assert!(cart.irq_line(), "IRQ never asserted");
+        assert!(cycles <= 65_536);
     }
 
     #[test]
