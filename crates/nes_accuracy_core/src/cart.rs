@@ -1057,6 +1057,7 @@ impl Cartridge {
             564 => Box::new(LatchData564::new(prg_rom, chr, header)),
             576 => Box::new(LatchAddr576::new(prg_rom, chr, header)),
             585 => Box::new(LatchAddr585::new(prg_rom, chr, header)),
+            547 => Box::new(Mapper547::new(prg_rom, chr, prg_ram, header)),
             594 => Box::new(Mapper594::new(prg_rom, chr, prg_ram, header)),
             557 => Box::new(N118::new(prg_rom, chr, prg_ram, header, 0x20, 557)),
             559 => Box::new(SuborSango559::new(prg_rom, chr, prg_ram, header)),
@@ -10661,6 +10662,209 @@ impl Mapper for LatchAddr585 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         address >= 0x8000
+    }
+}
+
+/// Konami Q-Ta educational computer (mapper 547): VRC5-style PRG/CHR
+/// windows, 4 KiB work RAM at `$6000`/`$7000`, 16 registers at
+/// `$D000-$DFFF`, a CPU-cycle IRQ counter and the JIS glyph lookup used by
+/// the Q-Ta Kanji ROM.
+#[derive(Debug)]
+pub struct Mapper547 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    reg: [u8; 16],
+    irq_counter: u16,
+    irq_pending: bool,
+}
+
+impl Mapper547 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, _header: Header) -> Self {
+        prg_ram.resize(0x40000, 0);
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            reg: [0; 16],
+            irq_counter: 0,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_bank(reg: u8) -> usize {
+        if reg & 0x40 != 0 {
+            usize::from(reg & 0x3F) + 0x10
+        } else {
+            usize::from(reg & 0x0F)
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn ram_4k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg_ram.len() / 0x1000).max(1);
+        self.prg_ram
+            .get((bank % banks) * 0x1000 + usize::from(address & 0x0FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Q-Ta JIS glyph lookup at `$DC00` (tile number) / `$DD00` (bank byte).
+    fn glyph_read(&self, address: u16) -> u8 {
+        const PAGE_TABLE: [u8; 0x24] = [
+            0x0, 0x0, 0x2, 0x2, 0x1, 0x1, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0xE,
+            0xF, 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF,
+            0xD, 0xD,
+        ];
+        let row = self.reg[13].wrapping_sub(0x20);
+        let col = self.reg[12].wrapping_sub(0x20);
+        if row >= 0x60 || col >= 0x60 {
+            return 0;
+        }
+        let code = u16::from(col % 32)
+            + u16::from(row % 16) * 32
+            + u16::from(col / 32) * 32 * 16
+            + u16::from(row / 16) * 32 * 16 * 3;
+        let glyph = (code & 0xFF) | (u16::from(PAGE_TABLE[usize::from(code >> 8) & 0x1F]) << 8);
+        let tile = u32::from(glyph) * 4;
+        if address == 0xDC00 {
+            (tile as u8) | (self.reg[11] & 0x03)
+        } else {
+            ((tile >> 8) as u8) | if self.reg[11] & 0x04 != 0 { 0x80 } else { 0 } | 0x40
+        }
+    }
+}
+
+impl Mapper for Mapper547 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x6FFF => {
+                let bank = usize::from(self.reg[0] & 1) | usize::from(self.reg[0] >> 2);
+                self.ram_4k(bank, address)
+            }
+            0x7000..=0x7FFF => {
+                let bank = usize::from(self.reg[1] & 1) | usize::from(self.reg[1] >> 2);
+                self.ram_4k(bank, address)
+            }
+            0x8000..=0x9FFF => self.prg_8k(Self::prg_bank(self.reg[2]), address),
+            0xA000..=0xBFFF => self.prg_8k(Self::prg_bank(self.reg[3]), address),
+            0xDC00 | 0xDD00 => self.glyph_read(address),
+            0xC000..=0xDFFF => self.prg_8k(Self::prg_bank(self.reg[4]), address),
+            0xE000..=0xFFFF => self.prg_8k(0x4F, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x6000..=0x6FFF => {
+                let bank = usize::from(self.reg[0] & 1) | usize::from(self.reg[0] >> 2);
+                let banks = (self.prg_ram.len() / 0x1000).max(1);
+                self.prg_ram[(bank % banks) * 0x1000 + usize::from(address & 0x0FFF)] = value;
+            }
+            0x7000..=0x7FFF => {
+                let bank = usize::from(self.reg[1] & 1) | usize::from(self.reg[1] >> 2);
+                let banks = (self.prg_ram.len() / 0x1000).max(1);
+                self.prg_ram[(bank % banks) * 0x1000 + usize::from(address & 0x0FFF)] = value;
+            }
+            0xD000..=0xDFFF => {
+                let index = usize::from((address >> 8) & 0x0F);
+                self.reg[index] = value;
+                match index {
+                    8 => {
+                        if self.reg[9] & 1 != 0 {
+                            self.reg[9] |= 2;
+                        } else {
+                            self.reg[9] &= !2;
+                        }
+                        self.irq_pending = false;
+                    }
+                    9 => {
+                        if self.reg[9] & 2 != 0 {
+                            self.irq_counter =
+                                u16::from(self.reg[6]) | (u16::from(self.reg[7]) << 8);
+                        }
+                        self.irq_pending = false;
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let bank = if address < 0x1000 {
+            usize::from(self.reg[5] & 1)
+        } else {
+            1
+        };
+        let banks = (self.chr.len() / 0x1000).max(1);
+        self.chr
+            .get((bank % banks) * 0x1000 + usize::from(address & 0x0FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let bank = if address < 0x1000 {
+            usize::from(self.reg[5] & 1)
+        } else {
+            1
+        };
+        let banks = (self.chr.len() / 0x1000).max(1);
+        if let Some(byte) = self
+            .chr
+            .get_mut((bank % banks) * 0x1000 + usize::from(address & 0x0FFF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        if self.reg[10] & 2 != 0 {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        }
+    }
+
+    fn number(&self) -> u16 {
+        547
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0xD000..=0xDFFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if self.reg[9] & 2 == 0 {
+            return;
+        }
+        self.irq_counter = self.irq_counter.wrapping_add(1);
+        if self.irq_counter == 0 {
+            self.irq_pending = true;
+            self.irq_counter = u16::from(self.reg[6]) | (u16::from(self.reg[7]) << 8);
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
     }
 }
 
@@ -34562,6 +34766,51 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
         cart.ppu_write(0x0123, 0x5A);
         assert_eq!(cart.ppu_read(0x0123), 0x5A);
+    }
+
+    #[test]
+    fn mapper547_prg_chr_wram_and_irq() {
+        // 640 KiB PRG (80 x 8 KiB), 128 KiB CHR.
+        let rom = synth_banked(547, 640, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 547);
+        // Power-on PRG registers map internal bank 0 and the last external bank.
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x4F * 0x2000]);
+        // $D200 bit 6 selects the external 512 KiB chip (bank $10 onward).
+        cart.cpu_write(0xD200, 0x40);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x10 * 0x2000]);
+        cart.cpu_write(0xD400, 0x01);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x2000]);
+        // $D000 selects the 4 KiB work-RAM bank at $6000.
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+        cart.cpu_write(0xD000, 0x01);
+        assert_eq!(cart.cpu_read(0x6000), 0x00);
+        cart.cpu_write(0x7000, 0x11);
+        assert_eq!(cart.cpu_read(0x7000), 0x11);
+        // $D500 selects the 4 KiB CHR-RAM bank (the high window is fixed at 1).
+        cart.cpu_write(0xD500, 0x01);
+        let chr = 16 + 640 * 1024;
+        assert_eq!(cart.ppu_read(0x0000), rom[chr + 0x1000]);
+        assert_eq!(cart.ppu_read(0x1000), rom[chr + 0x1000]);
+        cart.cpu_write(0xD500, 0x00);
+        assert_eq!(cart.ppu_read(0x0000), rom[chr]);
+        // $DA00 bit 1 selects horizontal mirroring.
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0xDA00, 0x02);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        // Cycle IRQ: enable with a zero latch, then wrap a 16-bit counter.
+        cart.cpu_write(0xD600, 0x00);
+        cart.cpu_write(0xD700, 0x00);
+        cart.cpu_write(0xD900, 0x02);
+        for _ in 0..=0xFFFF {
+            cart.clock_cpu();
+        }
+        assert!(cart.irq_line());
+        cart.acknowledge_irq();
+        assert!(!cart.irq_line());
     }
 
     #[test]
