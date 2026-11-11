@@ -417,9 +417,40 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 
 ## Unsupported mappers
 
-446 images (6.3%) name a mapper with no implementation. The printed ranked
-list is capped at 80 IDs and covers 302 of the 446. Top families: **157
-(Datach, needs the barcode peripheral)** and a tail of six-image boards.
+35 images (0.5%) name a mapper with no implementation across 20 IDs. The
+largest groups are 355/547/594 (4 images each) and 394 (3); the rest are
+one- and two-image boards. The sections below record the reference material
+for each ID and what still blocks it.
+
+### NESdev references
+
+Specs and notes for the mapper IDs covered by this audit. "Partial" means the
+board loads and boots but does not render, or renders only some images.
+
+| Mapper | Notes | Status | NESdev reference |
+|---:|---|---|---|
+| 127 | pirate Double Dragon II | unimplemented | [INES Mapper 127](https://www.nesdev.org/wiki/INES_Mapper_127) |
+| 169 | Yuxing 1 MiB PRG | unimplemented | [INES Mapper 169](https://www.nesdev.org/wiki/INES_Mapper_169) |
+| 186 | Study Box (BIOS device) | unimplemented | [INES Mapper 186](https://www.nesdev.org/wiki/INES_Mapper_186) |
+| 256 | VT02+/VT03 OneBus | partial (2/5 render) | [NES 2.0 Mapper 256](https://www.nesdev.org/wiki/NES_2.0_Mapper_256) |
+| 272 | bootleg Boku Dracula-kun | unimplemented | [NES 2.0 Mapper 272](https://www.nesdev.org/wiki/NES_2.0_Mapper_272) |
+| 326 | Contra pirate | unimplemented | [NES 2.0 Mapper 326](https://www.nesdev.org/wiki/NES_2.0_Mapper_326) |
+| 330 | Sangokushi III pirate | unimplemented | [NES 2.0 Mapper 330](https://www.nesdev.org/wiki/NES_2.0_Mapper_330) |
+| 334 | 5-in-1 multicart | unimplemented | [NES 2.0 Mapper 334](https://www.nesdev.org/wiki/NES_2.0_Mapper_334) |
+| 355 | 3D-BLOCK (PIC16C54) | unimplemented | [NES 2.0 Mapper 355](https://www.nesdev.org/wiki/NES_2.0_Mapper_355) |
+| 374 | reset-based MMC1 multicart | implemented | [NES 2.0 Mapper 374](https://www.nesdev.org/wiki/NES_2.0_Mapper_374) |
+| 394 | Realtec HSK007 | unimplemented | [NES 2.0 Mapper 394](https://www.nesdev.org/wiki/NES_2.0_Mapper_394) |
+| 405 | UM6578 enhanced console | unimplemented | [NES 2.0 Mapper 405](https://www.nesdev.org/wiki/NES_2.0_Mapper_405) |
+| 418 | 820106-C/821007C | unimplemented | [NES 2.0 Mapper 418](https://www.nesdev.org/wiki/NES_2.0_Mapper_418) |
+| 446 | Mindkids SMD172B supervisor | partial (1/4 render) | [NES 2.0 Mapper 446](https://www.nesdev.org/wiki/NES_2.0_Mapper_446) |
+| 515 | Family Noraebang (YM2413) | implemented | [NES 2.0 Mapper 515](https://www.nesdev.org/wiki/NES_2.0_Mapper_515) |
+| 525 | Kaiser KS7021A (VRC4) | implemented | [NES 2.0 Mapper 525](https://www.nesdev.org/wiki/NES_2.0_Mapper_525) |
+| 547 | Konami Q-Ta / VRC5 | unimplemented | [NES 2.0 Mapper 547](https://www.nesdev.org/wiki/NES_2.0_Mapper_547) |
+| 549 | Kaiser KS7016B | partial (blank) | [NES 2.0 Mapper 549](https://www.nesdev.org/wiki/NES_2.0_Mapper_549) |
+| 554 | Kaiser KS-7010 | implemented | [NES 2.0 Mapper 554](https://www.nesdev.org/wiki/NES_2.0_Mapper_554) |
+| 555 | Campus Challenge 1991 | unimplemented | [NES 2.0 Mapper 555](https://www.nesdev.org/wiki/NES_2.0_Mapper_555) |
+| 557 | NTDEC 2718 | unimplemented | [NES 2.0 Mapper 557](https://www.nesdev.org/wiki/NES_2.0_Mapper_557) |
+| 594 | Rinco Talkman (OKI ADPCM) | unimplemented | [NES 2.0 Mapper 594](https://www.nesdev.org/wiki/NES_2.0_Mapper_594) |
 
 ### Tail triage (IDs at 6-7 images)
 
