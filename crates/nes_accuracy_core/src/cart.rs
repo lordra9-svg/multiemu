@@ -1024,6 +1024,7 @@ impl Cartridge {
             526 => Box::new(UnlBj56::new(prg_rom, chr, header)),
             529 => Box::new(T230::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
+            334 => Box::new(Mmc3_334::new(prg_rom, chr, header)),
             346 => Box::new(Ks7012::new(prg_rom, chr, prg_ram, header)),
             347 => Box::new(Ks7030::new(prg_rom, chr, prg_ram, header)),
             374 => Box::new(ResetMc374::new(prg_rom, chr, prg_ram, header)),
@@ -10151,6 +10152,91 @@ impl Mapper for Drip284 {
 
     fn acknowledge_irq(&mut self) {
         self.irq_pending = false;
+    }
+}
+
+/// 5/20-in-1 1993 multicart (mapper 334): MMC3 supplies CHR banking,
+/// mirroring and IRQs, while a `$6000` register selects one 32 KiB PRG bank.
+#[derive(Debug)]
+pub struct Mmc3_334 {
+    inner: Mmc3,
+    prg_bank: u8,
+}
+
+impl Mmc3_334 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 334),
+            prg_bank: 0,
+        }
+    }
+
+    fn prg_32k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.inner.prg.len() / 0x8000).max(1);
+        self.inner
+            .prg
+            .get((bank % banks) * 0x8000 + usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Mmc3_334 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6002 => 0x01,
+            0x6000..=0x7FFF => self.inner.prg_read(address),
+            0x8000..=0xFFFF => self.prg_32k(usize::from(self.prg_bank & 0x03), address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x6000 => {
+                if self.inner.ram_enabled {
+                    self.prg_bank = (value >> 2) & 0x03;
+                }
+            }
+            0x6001 | 0x6002 => {}
+            _ => self.inner.prg_write(address, value),
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        334
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        self.inner.chr_mapping_write(address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
     }
 }
 
@@ -31464,6 +31550,33 @@ mod tests {
         assert!(cart.native_ppu_write(0x2016, 6));
         assert_eq!(cart.ppu_read(0x0000), c(6));
         cart.cpu_write(0x4106, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn multibank_334_prg_register() {
+        // 128 KiB PRG (4 x 32 KiB), 128 KiB CHR.
+        let rom = synth_banked(334, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 334);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xFFFF), rom[16 + 0x7FFF]);
+        // The register only latches once MMC3 WRAM is enabled.
+        cart.cpu_write(0xA001, 0x00);
+        cart.cpu_write(0x6000, 0x08);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        cart.cpu_write(0xA001, 0x80);
+        cart.cpu_write(0x6000, 0x08);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 2 * 0x8000]);
+        assert_eq!(cart.cpu_read(0xFFFF), rom[16 + 3 * 0x8000 - 1]);
+        // Jumper register reads as the 5-in-1 setting.
+        assert_eq!(cart.cpu_read(0x6002), 0x01);
+        // MMC3 still provides CHR banking and mirroring.
+        cart.cpu_write(0x8000, 0);
+        cart.cpu_write(0x8001, 3);
+        // MMC3 R0 is a 2 KiB bank, so slot 0 resolves to even bank 2.
+        assert_eq!(cart.ppu_read(0x0000), 0x82);
+        cart.cpu_write(0xA000, 1);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
