@@ -999,6 +999,7 @@ impl Cartridge {
             332 => Box::new(Multicart332::new(prg_rom, chr)),
             346 => Box::new(Ks7012::new(prg_rom, chr, prg_ram, header)),
             347 => Box::new(Ks7030::new(prg_rom, chr, prg_ram, header)),
+            389 => Box::new(Caltron389::new(prg_rom, chr, header)),
             396 => Box::new(Realtec396::new(prg_rom, chr, header)),
             399 => Box::new(Batmap399::new(prg_rom, chr, header)),
             552 => Box::new(Taito552::new(prg_rom, chr, header)),
@@ -1049,7 +1050,8 @@ impl Cartridge {
                 };
                 Box::new(Coolboy::new(prg_rom, chr, prg_ram, header, base))
             }
-            176 => Box::new(Mmc3_176::new(prg_rom, chr, prg_ram, header)),
+            176 => Box::new(Mmc3_176::new(prg_rom, chr, prg_ram, header, false)),
+            523 => Box::new(Mmc3_176::new(prg_rom, chr, prg_ram, header, true)),
             212 => Box::new(Multicart212::new(prg_rom, chr, header)),
             215 => Box::new(Mmc3_215::new(prg_rom, chr, prg_ram, header)),
             114 => Box::new(Mmc3_114::new(prg_rom, chr, header)),
@@ -6589,6 +6591,121 @@ impl Mapper for Ax5705 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         address >= 0xA008
+    }
+}
+
+/// Caltron 9-in-1 (mapper 389): NROM-256/UNROM-064 mode, outer PRG/CHR
+/// banks and the inner PRG/CHR latch.
+#[derive(Debug)]
+pub struct Caltron389 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    reg0: u8,
+    reg1: u8,
+    inner: u8,
+}
+
+impl Caltron389 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            reg0: 0,
+            reg1: 0,
+            inner: 0,
+        }
+    }
+
+    fn outer_prg(&self) -> usize {
+        usize::from((self.reg0 >> 3) & 0x0F)
+    }
+
+    fn outer_chr(&self) -> usize {
+        usize::from((self.reg1 >> 3) & 0x07)
+    }
+
+    fn unrom(&self) -> bool {
+        self.reg1 & 0x02 != 0
+    }
+
+    fn prg_16k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % banks) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_32k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x8000).max(1);
+        self.prg
+            .get((bank % banks) * 0x8000 + usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_page(&self) -> usize {
+        (self.outer_chr() << 2) | usize::from(self.inner & 0x03)
+    }
+}
+
+impl Mapper for Caltron389 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        if self.unrom() {
+            let base = self.outer_prg() << 1;
+            match address {
+                0x8000..=0xBFFF => {
+                    self.prg_16k(base | usize::from((self.inner >> 2) & 0x01), address)
+                }
+                _ => self.prg_16k(base | 0x03, address),
+            }
+        } else {
+            self.prg_32k(self.outer_prg(), address)
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0xF000 {
+            0x8000 => self.reg0 = value,
+            0x9000 => self.reg1 = value,
+            0xA000..=0xF000 => self.inner = value & 0x0F,
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        self.chr
+            .get((self.chr_page() % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let banks = (self.chr.len() / 0x2000).max(1);
+        let index = (self.chr_page() % banks) * 0x2000 + usize::from(address & 0x1FFF);
+        if let Some(byte) = self.chr.get_mut(index) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        if self.reg0 & 0x01 != 0 {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        }
+    }
+
+    fn number(&self) -> u16 {
+        389
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
     }
 }
 
@@ -20626,8 +20743,9 @@ pub struct Mmc3_176 {
     chr_ram: Vec<u8>,
     chr_is_ram: bool,
     submapper: u8,
+    board_523: bool,
     mirroring: Mirroring,
-    regs: [u8; 8],
+    regs: [u8; 16],
     bank_select: u8,
     prg_mode: bool,
     chr_mode: bool,
@@ -20650,7 +20768,13 @@ pub struct Mmc3_176 {
 }
 
 impl Mmc3_176 {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+    fn new(
+        prg: Vec<u8>,
+        chr: Vec<u8>,
+        mut prg_ram: Vec<u8>,
+        header: Header,
+        board_523: bool,
+    ) -> Self {
         prg_ram.resize(0x8000, 0);
         let chr_is_ram = header.chr_size == 0;
         let chr_ram = if header.submapper == 2 {
@@ -20662,15 +20786,16 @@ impl Mmc3_176 {
             HybridKind::Fk23c,
             chr.clone(),
         ))));
-        let mapper = Self {
+        let mut mapper = Self {
             prg,
             chr,
             prg_ram,
             chr_ram,
             chr_is_ram,
             submapper: header.submapper,
+            board_523,
             mirroring: header.mirroring,
-            regs: [0; 8],
+            regs: [0; 16],
             bank_select: 0,
             prg_mode: false,
             chr_mode: false,
@@ -20691,6 +20816,11 @@ impl Mmc3_176 {
             ram_cfg: 0,
             hybrid,
         };
+        if board_523 {
+            let banks = (mapper.prg.len() / 0x2000).max(1);
+            mapper.regs[8] = (banks.saturating_sub(2)) as u8;
+            mapper.regs[9] = (banks - 1) as u8;
+        }
         mapper.sync_chr();
         mapper
     }
@@ -20711,7 +20841,7 @@ impl Mmc3_176 {
     }
 
     fn is_fs005(&self) -> bool {
-        self.submapper == 2
+        self.submapper == 2 || self.board_523
     }
 
     fn ram_cfg_enabled(&self) -> bool {
@@ -20740,6 +20870,18 @@ impl Mmc3_176 {
         let second_last = last.saturating_sub(1);
         let r6 = usize::from(self.regs[6]);
         let r7 = usize::from(self.regs[7]);
+        if self.board_523 {
+            let r8 = usize::from(self.regs[8]);
+            let r9 = usize::from(self.regs[9]);
+            return match (slot, self.prg_mode) {
+                (0, false) => r6,
+                (0, true) => r8,
+                (1, _) => r7,
+                (2, false) => r8,
+                (2, true) => r6,
+                _ => r9,
+            } % banks;
+        }
         match (slot, self.prg_mode) {
             (0, false) => r6,
             (0, true) => second_last,
@@ -20798,6 +20940,17 @@ impl Mmc3_176 {
 
     fn resolve_chr(&self, slot: usize) -> usize {
         let banks = (self.chr.len() / 0x400).max(1);
+        if self.board_523 {
+            let order = if self.chr_mode {
+                [2, 4, 0, 1]
+            } else {
+                [0, 1, 2, 4]
+            };
+            let window = slot / 2;
+            let base = usize::from(self.regs[order[window]]) * 2 + (slot & 1);
+            let outer = usize::from(self.chr_base) << 3;
+            return (base | outer) % banks;
+        }
         let bank = if self.mmc3_chr_mode {
             let outer = usize::from(self.chr_base) << 3;
             let inner = self.chr_bank_mmc3(slot);
@@ -20860,7 +21013,11 @@ impl Mmc3_176 {
         match address & 0xE003 {
             0x8000 => {
                 let mut reg = value & 0x0F;
-                if self.is_fs005() && value & 0x40 != 0 && matches!(reg & 7, 6 | 7) {
+                if !self.board_523
+                    && self.is_fs005()
+                    && value & 0x40 != 0
+                    && matches!(reg & 7, 6 | 7)
+                {
                     reg ^= 1;
                 }
                 self.bank_select = reg;
@@ -20868,7 +21025,7 @@ impl Mmc3_176 {
                 self.chr_mode = value & 0x80 != 0;
             }
             0x8001 => {
-                let index = usize::from(self.bank_select & 0x07);
+                let index = usize::from(self.bank_select & 0x0F);
                 self.regs[index] = value;
             }
             0xA000 => {
@@ -20903,6 +21060,14 @@ impl Mmc3_176 {
 }
 
 impl Mapper for Mmc3_176 {
+    fn mirroring(&self) -> Mirroring {
+        if self.board_523 {
+            Mirroring::Horizontal
+        } else {
+            self.mirroring
+        }
+    }
+
     fn low_window(&self) -> Option<(u16, u16)> {
         // FK23C $5000 window: registers, or WRAM while the FS005 protection check has them swapped out.
         Some((0x5000, 0x5FFF))
@@ -20980,12 +21145,12 @@ impl Mapper for Mmc3_176 {
         }
     }
 
-    fn mirroring(&self) -> Mirroring {
-        self.mirroring
-    }
-
     fn number(&self) -> u16 {
-        176
+        if self.board_523 {
+            523
+        } else {
+            176
+        }
     }
 
     fn prg_ram(&self) -> &[u8] {
@@ -28479,6 +28644,54 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0x83);
         cart.cpu_write(0xA009, 2);
         assert_eq!(cart.ppu_read(0x0000), 0xC3);
+    }
+
+    #[test]
+    fn mmc3_523_rewired_chr() {
+        // 512 KiB PRG and CHR.
+        let rom = synth_banked(523, 512, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 523);
+        let page = |n: usize| rom[16 + n * 0x2000];
+        assert_eq!(cart.cpu_read(0x8000), page(0));
+        assert_eq!(cart.cpu_read(0xC000), page(62));
+        assert_eq!(cart.cpu_read(0xE000), page(63));
+        cart.cpu_write(0x8000, 6);
+        cart.cpu_write(0x8001, 5);
+        assert_eq!(cart.cpu_read(0x8000), page(5));
+        cart.cpu_write(0x8000, 0);
+        cart.cpu_write(0x8001, 3);
+        assert_eq!(cart.ppu_read(0x0000), 0x86);
+        assert_eq!(cart.ppu_read(0x0400), 0x87);
+        cart.cpu_write(0x8000, 0x80);
+        cart.cpu_write(0x8001, 2);
+        assert_eq!(cart.ppu_read(0x1000), 0x84);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        cart.cpu_write(0x8000, 0x46);
+        assert_eq!(cart.cpu_read(0x8000), page(62));
+        assert_eq!(cart.cpu_read(0xC000), page(5));
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn caltron_389_modes() {
+        // 512 KiB PRG, 256 KiB CHR.
+        let rom = synth_banked(389, 512, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 389);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        cart.cpu_write(0x8000, 0x09);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x8000]);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x9000, 0x02);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 2 * 0x4000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 3 * 0x4000]);
+        cart.cpu_write(0xA000, 0x05);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x4000]);
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
+        cart.cpu_write(0x9000, 0x0A);
+        assert_eq!(cart.ppu_read(0x0000), 0xA8);
     }
 
     #[test]
