@@ -7570,14 +7570,24 @@ impl Supervisor446 {
         let chr = self.chr.clone();
         let ram = self.prg_ram.clone();
         Some(match mapper {
+            1 => Box::new(Mmc1::new(prg, chr, ram, header)),
             2 => Box::new(UxRom::new(prg, chr, header)),
             3 => Box::new(CnRom::new(prg, chr, header)),
             4 => Box::new(Mmc3::new(prg, chr, header)),
             7 => Box::new(AxRom::new(prg, chr, header)),
             22 | 23 | 25 => Box::new(Vrc::new(prg, chr, ram, header)),
+            21 => Box::new(Vrc::new(prg, chr, ram, header)),
+            24 => Box::new(Vrc6::new(prg, chr, ram, header, 24)),
             26 => Box::new(Vrc6::new(prg, chr, ram, header, 26)),
+            73 => Box::new(Vrc3_73::new(prg, chr, ram, header)),
             34 => Box::new(Nina::new(prg, chr, header)),
-            65 => Box::new(Irem65::new(prg, chr, header)),
+            65 => Box::new(Irem65::new_windowed(
+                prg,
+                chr,
+                header,
+                usize::from(self.outer_lo) | (usize::from(self.outer_hi) << 8),
+                usize::from(self.mask),
+            )),
             66 => Box::new(GxRom::new(prg, chr, header)),
             75 => Box::new(Vrc1::new(prg, chr, header)),
             152 => Box::new(Bus152::new(prg, chr, header)),
@@ -7587,32 +7597,52 @@ impl Supervisor446 {
     }
 
     /// Decode the `$5000` selection table for the cartridge's submapper.
+    ///
+    /// Submappers 0, 2 and 3 use fuse numbers that are translated to the
+    /// multicart's ASIC numbers first; other submappers write the ASIC number
+    /// directly.
     fn select_inner(&mut self, value: u8) {
         let id = value & 0x1F;
         let mapper = match self.submapper {
             0 => match id {
-                0x01 => None,
+                1 => Some(1),   // SNROM
+                4 => Some(4),   // MMC3
+                6 => Some(21),  // VRC4_21
+                7 => Some(22),  // VRC2_22
+                8 => Some(23),  // VRC4_23
+                9 => Some(24),  // VRC6_24
+                10 => Some(25), // VRC4_25
+                11 => Some(26), // VRC6_26
+                12 => Some(73), // VRC3
+                _ => None,
+            },
+            2 => match id {
+                9 | 13 => Some(4), // MMC3
                 _ => None,
             },
             3 => match id {
-                0x01 => Some(65),
+                1 => Some(65), // H3001
                 _ => None,
             },
             _ => match id {
-                0x00 => Some(2),
-                0x01 | 0x09 | 0x0A | 0x0D | 0x0E => Some(4),
-                0x02 => Some(34),
-                0x03 => Some(3),
-                0x04 => Some(7),
-                0x05..=0x07 => None,
-                0x08 => Some(66),
-                0x0B => Some(152),
-                0x0F => Some(189),
-                0x10 => Some(26),
-                0x12 => Some(22),
-                0x15 => Some(25),
-                0x18 => Some(23),
-                0x1A => Some(75),
+                0 => Some(2),
+                1 => Some(4),
+                2 => Some(34),
+                3 => Some(3),
+                4 => Some(7),
+                5..=7 => Some(1),
+                8 => Some(66),
+                11 => Some(152),
+                15 => Some(189),
+                16 => Some(24),
+                17 => Some(26),
+                18 => Some(22),
+                19 => Some(73),
+                21 => Some(25),
+                24 => Some(23),
+                25 => Some(21),
+                26 => Some(75),
+                31 => Some(65),
                 _ => None,
             },
         };
@@ -7640,6 +7670,25 @@ impl Supervisor446 {
         aux.write_protect = self.protect;
     }
 
+    /// The supervisor's fuse register (`$5000` bit 7) locks the board to the
+    /// selected ASIC; until then a fixed NROM-like mapping runs the menu.
+    fn locked(&self) -> bool {
+        self.select & 0x80 != 0
+    }
+
+    /// Fixed power-on/boot mapping used until `$5000` bit 7 is written.
+    fn unlocked_prg_bank(&self, address: u16) -> usize {
+        let base = usize::from(self.outer_lo) | (usize::from(self.outer_hi) << 8);
+        match (address - 0x8000) / 0x2000 {
+            0 => base,
+            1 => base + 1,
+            2 if self.submapper == 3 => 0x1E,
+            2 => 0x3E,
+            _ if self.submapper == 3 => 0x1F,
+            _ => 0x3F,
+        }
+    }
+
     /// Combine the inner 8 KiB bank with the outer bank using `$5003`.
     ///
     /// Submappers 0-1 use "set bit = outer bank bit"; submapper 2 inverts
@@ -7657,6 +7706,21 @@ impl Supervisor446 {
 
 impl Mapper for Supervisor446 {
     fn prg_read(&self, address: u16) -> u8 {
+        if !self.locked() {
+            if (0x6000..=0x7FFF).contains(&address) {
+                return self.ram[usize::from(address - 0x6000)];
+            }
+            if address < 0x8000 {
+                return 0;
+            }
+            let banks = (self.prg.len() / 0x2000).max(1);
+            let bank = self.unlocked_prg_bank(address) % banks;
+            return self
+                .prg
+                .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+                .copied()
+                .unwrap_or(0);
+        }
         let Inner446::Skrom(mmc1) = &self.inner else {
             if (0x6000..=0x7FFF).contains(&address) {
                 return self.ram[usize::from(address - 0x6000)];
@@ -7677,14 +7741,24 @@ impl Mapper for Supervisor446 {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
+        // Once locked, NRS replaces the whole $5000-$FFFF write handler with a
+        // dummy, so the fuse/outer registers can no longer change.
+        if self.locked() && (0x5000..=0x5007).contains(&address) {
+            return;
+        }
         match address {
             0x5000 => {
                 self.select = value;
-                self.select_inner(value);
+                if value & 0x80 != 0 {
+                    self.select_inner(value);
+                }
             }
             0x5001 => self.outer_lo = value,
             0x5002 => self.outer_hi = value,
-            0x5003 => self.mask = value,
+            0x5003 => {
+                // Submappers other than 2 receive the PRG-AND value inverted.
+                self.mask = if self.submapper == 2 { value } else { !value };
+            }
             0x5004 => self.flags = value,
             0x5005 => {
                 self.protect = value & 0x10 != 0;
@@ -7694,6 +7768,11 @@ impl Mapper for Supervisor446 {
                 self.outer_chr = value & 0x1F;
                 self.sync_chr();
             }
+            _ if !self.locked() => {
+                if (0x6000..=0x7FFF).contains(&address) {
+                    self.ram[usize::from(address - 0x6000)] = value;
+                }
+            }
             _ if !self.is_skrom() && (0x6000..=0x7FFF).contains(&address) => {
                 self.ram[usize::from(address - 0x6000)] = value;
             }
@@ -7702,11 +7781,11 @@ impl Mapper for Supervisor446 {
     }
 
     fn low_window(&self) -> Option<(u16, u16)> {
-        Some((0x5000, 0x5006))
+        Some((0x5000, 0x5007))
     }
 
     fn chr_read(&self, address: u16) -> u8 {
-        if self.is_skrom() {
+        if !self.locked() || self.is_skrom() {
             self.aux.borrow().read(address)
         } else {
             self.inner.chr_read(address)
@@ -7714,7 +7793,7 @@ impl Mapper for Supervisor446 {
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
-        if self.is_skrom() {
+        if !self.locked() || self.is_skrom() {
             self.aux.borrow_mut().write(address, value);
         } else {
             self.inner.chr_write(address, value);
@@ -7722,7 +7801,13 @@ impl Mapper for Supervisor446 {
     }
 
     fn mirroring(&self) -> Mirroring {
-        self.inner.mirroring()
+        if self.locked() {
+            self.inner.mirroring()
+        } else if self.flags & 0x01 != 0 {
+            Mirroring::Vertical
+        } else {
+            Mirroring::Horizontal
+        }
     }
 
     fn number(&self) -> u16 {
@@ -7730,15 +7815,15 @@ impl Mapper for Supervisor446 {
     }
 
     fn prg_ram(&self) -> &[u8] {
-        if self.is_skrom() {
-            self.inner.prg_ram()
-        } else {
+        if !self.locked() || !self.is_skrom() {
             &self.ram
+        } else {
+            self.inner.prg_ram()
         }
     }
 
     fn chr512(&self) -> Option<Rc<RefCell<Chr512>>> {
-        if self.is_skrom() {
+        if !self.locked() || self.is_skrom() {
             Some(self.aux.clone())
         } else {
             self.inner.chr512()
@@ -17323,6 +17408,9 @@ impl Mapper for DiscreteBmc {
 pub struct Irem65 {
     prg: Vec<u8>,
     chr: Vec<u8>,
+    /// Outer PRG bank base and inner mask applied by the 446 supervisor.
+    outer: usize,
+    outer_mask: usize,
     prg_reg0: u8,
     prg_reg1: u8,
     prg_layout: bool,
@@ -17339,6 +17427,8 @@ impl Irem65 {
         Self {
             prg,
             chr,
+            outer: 0,
+            outer_mask: 0xFF,
             prg_reg0: 0,
             prg_reg1: 1,
             prg_layout: false,
@@ -17349,6 +17439,21 @@ impl Irem65 {
             irq_enabled: false,
             irq_pending: false,
         }
+    }
+
+    /// Builds an H3001 whose bank registers are offset and masked by the
+    /// mapper-446 supervisor's `$5001`/`$5003` values.
+    fn new_windowed(
+        prg: Vec<u8>,
+        chr: Vec<u8>,
+        header: Header,
+        outer: usize,
+        outer_mask: usize,
+    ) -> Self {
+        let mut this = Self::new(prg, chr, header);
+        this.outer = outer;
+        this.outer_mask = outer_mask;
+        this
     }
 
     fn prg_offset(&self, address: u16) -> usize {
@@ -17367,6 +17472,7 @@ impl Irem65 {
             (0xE000, _) => fixed_last,
             _ => 0,
         };
+        let bank = (bank & self.outer_mask) | self.outer;
         bank % total * 0x2000 + usize::from(address & 0x1FFF)
     }
 }
@@ -35342,16 +35448,25 @@ mod tests {
 
     #[test]
     fn supervisor_446_submapper3_h3001_tail() {
-        // 1 MiB image: submapper 3 boots H3001 over the whole image, whose
-        // fixed tail is the true last 8 KiB bank.
+        // 1 MiB image: submapper 3 boots with the low $1E/$1F window.
         let mut rom = synth_banked(446, 1024, 0);
         rom[8] = (rom[8] & 0x0F) | (3 << 4);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.mapper(), 446);
-        assert_eq!(cart.cpu_read(0xE000), rom[16 + 127 * 0x2000]);
-        // $5000 = 01 keeps H3001 selected.
-        cart.cpu_write(0x5000, 0x01);
-        assert_eq!(cart.cpu_read(0xE000), rom[16 + 127 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x1E * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x1F * 0x2000]);
+        // Locking with fuse 1 selects H3001; $5001/$5003 offset and mask its
+        // four 8 KiB banks.
+        cart.cpu_write(0x5003, 0xE0); // stored inverted as $1F
+        cart.cpu_write(0x5001, 0x20);
+        cart.cpu_write(0x5000, 0x81);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x20 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x21 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x3E * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x3F * 0x2000]);
+        // Register writes are ignored once locked.
+        cart.cpu_write(0x5001, 0);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x20 * 0x2000]);
     }
 
     #[test]
@@ -35360,14 +35475,15 @@ mod tests {
         let rom = synth_banked(446, 512, 0);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.mapper(), 446);
-        // MMC1 power-on mode 3: bank 0 at $8000, last 16 KiB at $C000.
+        // Unlocked fixed mapping: $8000/$A000 = 0/1, $C000/$E000 = $3E/$3F.
         assert_eq!(cart.cpu_read(0x8000), rom[16]);
-        // SUROM half 0: the fixed tail is the last bank of the first 256 KiB.
-        assert_eq!(cart.cpu_read(0xC000), rom[16 + 15 * 0x4000]);
-        // $5003 = 0 keeps the inner bank (outer bits unused for submapper 0).
-        cart.cpu_write(0x5003, 0);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x3E * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x3F * 0x2000]);
+        // $5001 pages the first two 8 KiB windows.
         cart.cpu_write(0x5001, 3);
-        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 4 * 0x2000]);
         // CHR-RAM is banked by $5006 in 8 KiB pages.
         cart.ppu_write(0x0000, 0x5A);
         assert_eq!(cart.ppu_read(0x0000), 0x5A);
@@ -35386,17 +35502,22 @@ mod tests {
 
     #[test]
     fn supervisor_446_submapper2_outer_bank() {
-        // Submapper 2 inverts $5003: a clear bit selects the outer bank.
         let mut rom = synth_banked(446, 512, 0);
         rom[8] = (rom[8] & 0x0F) | (2 << 4);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.mapper(), 446);
+        // Unlocked, $5001 pages the first two windows; $5003 is not used yet.
         cart.cpu_write(0x5003, 0);
         cart.cpu_write(0x5001, 1);
         assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x2000]);
-        // $5003 = $FF selects the inner bank again.
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x4000]);
         cart.cpu_write(0x5003, 0xFF);
-        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x2000]);
+        // Fuse 9 locks submapper 2 to an MMC3 inner board.
+        cart.cpu_write(0x5000, 0x89);
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
     }
 
     #[test]
