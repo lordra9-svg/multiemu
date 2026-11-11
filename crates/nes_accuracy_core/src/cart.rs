@@ -32425,6 +32425,8 @@ pub struct Fds42 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     chr_ram: bool,
+    /// Kaiser KS-7050 variant (CHR-ROM present).
+    kaiser: bool,
     prg_bank: u8,
     chr_bank: u8,
     mirroring: Mirroring,
@@ -32439,7 +32441,9 @@ impl Fds42 {
             prg,
             chr,
             chr_ram: header.chr_size == 0,
-            prg_bank: 0,
+            kaiser: header.chr_size != 0,
+            // KS-7050 powers on with the last 8 KiB PRG bank in $6000.
+            prg_bank: if header.chr_size != 0 { 0xFF } else { 0 },
             chr_bank: 0,
             mirroring: header.mirroring,
             irq_counter: 0,
@@ -32467,6 +32471,16 @@ impl Mapper for Fds42 {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
+        if self.kaiser {
+            // KS-7050: $8000-$8FFF selects CHR, $E000-$FFFF selects PRG;
+            // mirroring and IRQ are fixed/absent.
+            if (0x8000..=0x8FFF).contains(&address) {
+                self.chr_bank = value;
+            } else if address >= 0xE000 {
+                self.prg_bank = value;
+            }
+            return;
+        }
         match address & 0xE003 {
             0x8000 => self.chr_bank = value & 0x0F,
             0xE000 => self.prg_bank = value & 0x0F,
@@ -32530,7 +32544,7 @@ impl Mapper for Fds42 {
     }
 
     fn clock_cpu(&mut self) {
-        if !self.irq_enabled {
+        if self.kaiser || !self.irq_enabled {
             return;
         }
         self.irq_counter = self.irq_counter.wrapping_add(1) & 0x7FFF;
@@ -34520,13 +34534,13 @@ mod tests {
 
     #[test]
     fn fds42_banks_and_irq() {
-        let rom = synth_banked(42, 128, 32);
+        // Mario Baby (CHR-RAM): $E000 registers, mirroring and 15-bit IRQ.
+        let rom = synth_banked(42, 128, 0);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.cpu_read(0x6000), 0);
         cart.cpu_write(0xE000, 2);
         assert_eq!(cart.cpu_read(0x6000), 2);
         assert_eq!(cart.cpu_read(0x8000), 12);
-        cart.cpu_write(0x8000, 2);
-        assert_eq!(cart.ppu_read(0x0000), 0x90);
         cart.cpu_write(0xE001, 0x08);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
         cart.cpu_write(0xE002, 1);
@@ -34534,6 +34548,22 @@ mod tests {
             cart.clock_cpu();
         }
         assert!(cart.irq_line());
+
+        // Kaiser KS-7050 (CHR-ROM): $6000 powers on at bank $FF, $8000
+        // selects CHR, $E000-$FFFF selects PRG and there is no mapper IRQ.
+        let rom = synth_banked(42, 128, 32);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.cpu_read(0x6000), 15);
+        cart.cpu_write(0x8000, 2);
+        assert_eq!(cart.ppu_read(0x0000), 0x90);
+        cart.cpu_write(0xE123, 4);
+        assert_eq!(cart.cpu_read(0x6000), 4);
+        cart.cpu_write(0xF000, 1);
+        assert_eq!(cart.cpu_read(0x6000), 1);
+        for _ in 0..0x6000 {
+            cart.clock_cpu();
+        }
+        assert!(!cart.irq_line());
     }
 
     #[test]
