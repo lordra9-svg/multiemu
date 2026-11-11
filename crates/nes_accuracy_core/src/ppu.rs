@@ -2235,6 +2235,20 @@ impl Ppu {
         self.frame.clone()
     }
 
+    /// Renders any deferred video mode into the reusable frame buffer.
+    /// Normal 2C02 output is already composed dot by dot, so this is a no-op.
+    pub fn present(&mut self) {
+        if self.um6578 {
+            self.frame = self.render_um_frame();
+        }
+    }
+
+    /// The most recently presented RGBA8 frame.
+    #[must_use]
+    pub fn video(&self) -> &[u8] {
+        &self.frame
+    }
+
     /// Renders one frame of the UM6578 enhanced video mode: word name tables,
     /// optional 4-bits-per-pixel background and the 64-entry palette.
     fn render_um_frame(&self) -> Vec<u8> {

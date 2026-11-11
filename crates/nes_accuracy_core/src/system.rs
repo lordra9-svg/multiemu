@@ -40,7 +40,6 @@ pub struct System {
     /// Global CPU cycle phase (get/put).
     phase: bool,
     shift: [u8; 2],
-    frame: Vec<u8>,
     audio: Vec<f32>,
     audio_rate: f32,
     resampler: crate::resampler::Resampler,
@@ -229,7 +228,6 @@ impl System {
             ppu_credit: 0,
             phase: false,
             shift: [0; 2],
-            frame: vec![0; 256 * 240 * 4],
             audio: Vec::with_capacity(1024),
             audio_rate: 44_100.0,
             resampler: crate::resampler::Resampler::new(44_100, 1_789_773.0),
@@ -418,7 +416,7 @@ impl System {
         self.audio.clear();
         if self.first_frame_pending {
             self.first_frame_pending = false;
-            self.frame = self.ppu.render_frame();
+            self.ppu.present();
             return 0;
         }
         let start = self.ppu.frames;
@@ -433,7 +431,7 @@ impl System {
                 break;
             }
         }
-        self.frame = self.ppu.render_frame();
+        self.ppu.present();
         self.resampler.drain_into(&mut self.audio);
         steps
     }
@@ -441,7 +439,7 @@ impl System {
     /// The most recently rendered RGBA8 frame.
     #[must_use]
     pub fn video(&self) -> &[u8] {
-        &self.frame
+        self.ppu.video()
     }
 
     /// Audio produced by the last frame.
@@ -556,7 +554,7 @@ impl System {
                 && dot < u16::from(zapper.x) + 8
             {
                 let index = (usize::from(scanline) * 256 + usize::from(dot)) * 4;
-                if let Some(pixel) = self.frame.get(index..index + 3) {
+                if let Some(pixel) = self.ppu.video().get(index..index + 3) {
                     let luma =
                         (u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2])) / 3;
                     if luma > 0x60 {
