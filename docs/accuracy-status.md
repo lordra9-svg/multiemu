@@ -301,9 +301,15 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-7,073 loaded (99.6%), 3,845 rendering (54.1%), 3,228 blank (45.5%), 0
+7,073 loaded (99.6%), 3,857 rendering (54.3%), 3,216 blank (45.3%), 0
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
+A 120-frame pass renders 6,401 with 672 blank; a 240-frame pass renders
+6,331 with 742 blank (both before the mapper-121 fix, which brings 121 from
+0/20 to 18/20 at 240). The 120-frame pass attributes 2,556 of the 20-frame
+blanks to slow boot (MMC3 +654, MMC1 +424, UxROM +254, mapper 163 +69).
+Only 60 images across 18 IDs render at neither 120 nor 240; after the 121
+fix the largest is mapper 42 (9 images).
 The sweep added the MesenCE-only 208/219/258/284/298/302/307/346 group,
 the 43/106/170/
 262/285/304/521 batch, the TEC9719/167/190/266/314 batch and the
@@ -1071,7 +1077,7 @@ contract as the RustyNES oracle.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **7,073 loaded, 3,845 rendering, 3,228 blank, 0 unsupported
+  audit is **7,073 loaded, 3,857 rendering, 3,216 blank, 0 unsupported
   (0 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.

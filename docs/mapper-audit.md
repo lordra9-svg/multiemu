@@ -27,8 +27,8 @@ unko corpus <library-dir> --mapper 136 --frames 600
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
 | Loaded (mapper implemented) | 7,073 | 99.6% |
-| Rendering | 3,845 | 54.1% |
-| Blank | 3,229 | 45.5% |
+| Rendering | 3,857 | 54.3% |
+| Blank | 3,216 | 45.3% |
 | Unsupported mapper | 0 | 0.0% |
 | Load/run failure | 28 | 0.39% |
 
