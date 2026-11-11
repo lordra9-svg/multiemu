@@ -7588,17 +7588,40 @@ impl Supervisor446 {
         let prg = self.prg.clone();
         let chr = self.chr.clone();
         let ram = self.prg_ram.clone();
+        let outer = usize::from(self.outer_lo) | (usize::from(self.outer_hi) << 8);
+        let mask = usize::from(self.mask);
         Some(match mapper {
             1 => Box::new(Mmc1::new(prg, chr, ram, header)),
             2 => Box::new(UxRom::new(prg, chr, header)),
             3 => Box::new(CnRom::new(prg, chr, header)),
-            4 => Box::new(Mmc3::new(prg, chr, header)),
+            4 => {
+                let mut core = Mmc3::new(prg, chr, header);
+                core.set_prg_outer(outer, mask);
+                Box::new(core)
+            }
             7 => Box::new(AxRom::new(prg, chr, header)),
-            22 | 23 | 25 => Box::new(Vrc::new(prg, chr, ram, header)),
-            21 => Box::new(Vrc::new(prg, chr, ram, header)),
-            24 => Box::new(Vrc6::new(prg, chr, ram, header, 24)),
-            26 => Box::new(Vrc6::new(prg, chr, ram, header, 26)),
-            73 => Box::new(Vrc3_73::new(prg, chr, ram, header)),
+            22 | 23 | 25 | 21 => {
+                let mut core = Vrc::new(prg, chr, ram, header);
+                core.set_prg_outer(outer, mask);
+                Box::new(core)
+            }
+            24 => {
+                let mut core = Vrc6::new(prg, chr, ram, header, 24);
+                core.set_prg_outer(outer, mask);
+                Box::new(core)
+            }
+            26 => {
+                let mut core = Vrc6::new(prg, chr, ram, header, 26);
+                core.set_prg_outer(outer, mask);
+                Box::new(core)
+            }
+            73 => {
+                let mut core = Vrc3_73::new(prg, chr, ram, header);
+                // VRC3 resolves 16 KiB pages, so the supervisor's 8 KiB mask
+                // and outer base are shifted down one bit.
+                core.set_prg_outer(outer >> 1, mask >> 1);
+                Box::new(core)
+            }
             34 => Box::new(Nina::new(prg, chr, header)),
             65 => Box::new(Irem65::new_windowed(
                 prg,
@@ -14071,6 +14094,9 @@ pub struct Vrc3_73 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
+    /// Outer PRG base and inner mask in 16 KiB units (446 supervisor).
+    prg_outer: usize,
+    prg_mask: usize,
     prg_bank: u8,
     mirroring: Mirroring,
     irq_latch: u16,
@@ -14086,6 +14112,8 @@ impl Vrc3_73 {
             prg,
             chr,
             prg_ram,
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             prg_bank: 0,
             mirroring: header.mirroring,
             irq_latch: 0,
@@ -14104,14 +14132,27 @@ impl Vrc3_73 {
     }
 }
 
+impl Vrc3_73 {
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    /// Both are in 16 KiB units for this board.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
+    }
+}
+
 impl Mapper for Vrc3_73 {
     fn prg_read(&self, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
         match address {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000)],
-            0x8000..=0xBFFF => self.prg_16k(usize::from(self.prg_bank), address),
+            0x8000..=0xBFFF => {
+                let bank = ((usize::from(self.prg_bank) & self.prg_mask) | self.prg_outer) % banks;
+                self.prg_16k(bank, address)
+            }
             0xC000..=0xFFFF => {
-                let last = (self.prg.len() / 0x4000).max(1) - 1;
-                self.prg_16k(last, address)
+                let bank = (((banks - 1) & self.prg_mask) | self.prg_outer) % banks;
+                self.prg_16k(bank, address)
             }
             _ => 0,
         }
@@ -19695,6 +19736,9 @@ pub struct Mmc3 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
+    /// Outer PRG bank base and inner mask supplied by the 446 supervisor.
+    prg_outer: usize,
+    prg_mask: usize,
     /// The board mounts CHR-RAM (the 8 KiB buffer the PPU owns).
     chr_is_ram: bool,
     mapper: u16,
@@ -19756,6 +19800,8 @@ impl Mmc3 {
             // zeroed; games that rely on the power-on layout (e.g. TQROM's
             // CHR upload) depend on R2-R5 reading back as zero.
             bank_data: [0; 8],
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             mirroring: header.mirroring,
             ram_enabled: true,
             irq_latch: 0,
@@ -19772,7 +19818,15 @@ impl Mmc3 {
     }
 
     fn prg_slot(&self, index: usize) -> usize {
-        self.prg_slot_in(index, self.prg_banks())
+        let banks = self.prg_banks();
+        let slot = self.prg_slot_in(index, banks);
+        ((slot & self.prg_mask) | self.prg_outer) % banks
+    }
+
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
     }
 
     /// MMC3 PRG slot resolution inside a bank window of `banks` 8 KiB pages.
@@ -21671,6 +21725,9 @@ pub struct Vrc {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
+    /// Outer PRG bank base and inner mask supplied by the 446 supervisor.
+    prg_outer: usize,
+    prg_mask: usize,
     prg_banks: [usize; 2],
     chr_banks: [u16; 8],
     mirroring: Mirroring,
@@ -21716,6 +21773,8 @@ impl Vrc {
             prg,
             chr,
             prg_ram,
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             prg_banks: [0, 1],
             chr_banks: [0, 1, 2, 3, 4, 5, 6, 7],
             mirroring: header.mirroring,
@@ -21751,6 +21810,14 @@ impl Vrc {
             VrcVariant::Vrc4e => usize::from(((address >> 2) & 1) | (((address >> 3) & 1) << 1)),
             VrcVariant::Vrc2b | VrcVariant::Vrc4b | VrcVariant::Vrc4f => usize::from(address & 3),
         }
+    }
+}
+
+impl Vrc {
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
     }
 }
 
@@ -21793,6 +21860,7 @@ impl Mapper for Vrc {
             }
             _ => banks - 1,
         } % banks;
+        let bank = ((bank & self.prg_mask) | self.prg_outer) % banks;
         self.prg
             .get(bank * 0x2000 + usize::from(address & 0x1FFF))
             .copied()
@@ -31214,6 +31282,9 @@ pub struct Vrc6 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
+    /// Outer PRG bank base and inner mask supplied by the 446 supervisor.
+    prg_outer: usize,
+    prg_mask: usize,
     mapper: u16,
     prg16: u8,
     prg8: u8,
@@ -31235,6 +31306,8 @@ impl Vrc6 {
             prg,
             chr,
             prg_ram,
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             mapper,
             prg16: 0,
             prg8: 0,
@@ -31294,22 +31367,33 @@ impl Vrc6 {
     }
 }
 
+impl Vrc6 {
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
+    }
+}
+
 impl Mapper for Vrc6 {
     fn prg_read(&self, address: u16) -> u8 {
+        let outer8 = self.prg_outer;
+        let mask8 = self.prg_mask;
         match address {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
             0x8000..=0xBFFF => {
                 let banks = (self.prg.len() / 0x4000).max(1);
-                let bank = usize::from(self.prg16) % banks;
+                let bank = ((usize::from(self.prg16) & (mask8 >> 1)) | (outer8 >> 1)) % banks;
                 self.prg[bank * 0x4000 + usize::from(address & 0x3FFF)]
             }
             0xC000..=0xDFFF => {
                 let banks = (self.prg.len() / 0x2000).max(1);
-                let bank = usize::from(self.prg8) % banks;
+                let bank = ((usize::from(self.prg8) & mask8) | outer8) % banks;
                 self.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
             }
             0xE000..=0xFFFF => {
-                let bank = (self.prg.len() / 0x2000).max(1) - 1;
+                let banks = (self.prg.len() / 0x2000).max(1);
+                let bank = (((banks - 1) & mask8) | outer8) % banks;
                 self.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
             }
             _ => 0,
@@ -35549,6 +35633,32 @@ mod tests {
         cart.cpu_write(0x5005, 0x00);
         cart.ppu_write(0x0001, 0x77);
         assert_eq!(cart.ppu_read(0x0001), 0x77);
+    }
+
+    #[test]
+    fn supervisor_446_locked_mmc3_and_vrc_mask() {
+        // 512 KiB PRG, 256 KiB CHR, submapper 0.
+        let rom = synth_banked(446, 512, 256);
+        // Fuse 4 -> MMC3. Mask $0F and outer base $20 apply to every slot.
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x5003, 0xF0); // stored inverted as $0F
+        cart.cpu_write(0x5001, 0x20);
+        cart.cpu_write(0x5000, 0x84);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x20 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x2E * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x2F * 0x2000]);
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x23 * 0x2000]);
+        // Fuse 8 -> VRC4: the same mask/outer applies to its page registers.
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x5003, 0xF0);
+        cart.cpu_write(0x5001, 0x20);
+        cart.cpu_write(0x5000, 0x88);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x2E * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x2F * 0x2000]);
+        cart.cpu_write(0x8000, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x23 * 0x2000]);
     }
 
     #[test]
