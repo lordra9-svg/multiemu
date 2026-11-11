@@ -992,6 +992,7 @@ impl Cartridge {
             512 => Box::new(Si512::new(prg_rom, chr, header)),
             513 => Box::new(Sachen9602::new(prg_rom, chr, header)),
             530 => Box::new(Ax5705::new(prg_rom, chr, header)),
+            549 => Box::new(Ks7016B::new(prg_rom, chr, header)),
             538 => Box::new(Soccer538::new(prg_rom, chr, header)),
             359 => Box::new(BmcSb5013::new(prg_rom, chr, header, false)),
             540 => Box::new(BmcSb5013::new(prg_rom, chr, header, true)),
@@ -6687,6 +6688,93 @@ impl Mapper for LuckyRabbit415 {
 
     fn prg_rom_at_6000(&self) -> bool {
         true
+    }
+}
+
+/// Kaiser KS7016B FDS conversion (mapper 549): the 306 address-decoded
+/// latch with the fixed 32 KiB window at bank 8 and CHR-RAM.
+#[derive(Debug)]
+pub struct Ks7016B {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    window: u8,
+    mirroring: Mirroring,
+}
+
+impl Ks7016B {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            window: 8,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn read_8k(&self, bank: usize, address: u16) -> u8 {
+        let count = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % count) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Ks7016B {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.read_8k(usize::from(self.window), address),
+            0x8000..=0xFFFF => {
+                let slot = usize::from((address - 0x8000) / 0x2000);
+                self.read_8k(8 + slot, address)
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            let mode = address & 0x30 == 0x30;
+            match address & 0xD943 {
+                0xD943 => {
+                    self.window = if mode {
+                        0x0B
+                    } else {
+                        ((address >> 2) & 0x0F) as u8
+                    };
+                }
+                0xD903 => {
+                    self.window = if mode {
+                        0x08 | ((address >> 2) & 0x03) as u8
+                    } else {
+                        0x0B
+                    };
+                }
+                _ => {}
+            }
+            let _ = value;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        549
     }
 }
 
@@ -30259,6 +30347,19 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0x82);
         cart.cpu_write(0x6000, 0x42);
         assert_eq!(cart.cpu_read(0x6000), 0x42);
+    }
+
+    #[test]
+    fn ks7016b_549_window() {
+        // 128 KiB PRG, CHR-RAM.
+        let rom = synth_banked(549, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 549);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 8 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 11 * 0x2000]);
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 8 * 0x2000]);
+        cart.cpu_write(0xD943, 0);
+        assert_eq!(cart.cpu_read(0x6000), rom[16]);
     }
 
     #[test]
