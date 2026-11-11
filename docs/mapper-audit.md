@@ -26,16 +26,16 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 7,010 | 98.7% |
+| Loaded (mapper implemented) | 7,013 | 98.8% |
 | Rendering | 3,803 | 53.6% |
-| Blank | 3,207 | 45.2% |
-| Unsupported mapper | 63 | 0.9% |
+| Blank | 3,210 | 45.2% |
+| Unsupported mapper | 60 | 0.8% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 156 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 7,010 (93.3% → 98.7%) and unsupported fell 446 → 63 (6.3% → 0.9%);
-33 mapper IDs remain (the ranking prints the top 80), led by 256/515
+audit, 159 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 7,013 (93.3% → 98.8%) and unsupported fell 446 → 60 (6.3% → 0.8%);
+30 mapper IDs remain (the ranking prints the top 80), led by 256/515
 (5 images each) and 355/446/547/594 (4 each).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
@@ -155,10 +155,10 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   183, 187, 188, 190, 191, 192, 194, 198, 205, 208, 218, 219, 221,
   225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254, 258, 262,
   263, 264, 266, 284, 285, 289, 290, 292, 298, 299, 301, 302, 303,
-  304, 305, 306, 307, 309, 312, 313, 314, 332, 346, 347, 359, 389,
-  396, 399, 400, 415, 417, 422, 487, 493, 512, 513, 516, 517, 518,
-  519, 521, 522, 523, 526, 529, 530, 533, 534, 535, 538, 539, 540,
-  544, 548, 551, 552, 553)** — 156 boards
+  304, 305, 306, 307, 308, 309, 312, 313, 314, 332, 346, 347, 359,
+  368, 389, 396, 399, 400, 415, 417, 422, 470, 487, 493, 512, 513,
+  516, 517, 518, 519, 521, 522, 523, 526, 529, 530, 533, 534, 535,
+  538, 539, 540, 544, 548, 551, 552, 553)** — 159 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
@@ -177,7 +177,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   Jncota 523 FS005 variant complete the last batch. The latest additions
   cover Lucky Rabbit 415, Fine Studio 417, Super Soccer 538 and Kid Icarus
   539. The SB-5013 core now serves 359 and its 2 KiB-CHR 540 variant; the
-  latest pair adds 8-BIT XMAS 2017 (400) and Waixing FS306 (544). At 120 frames
+  latest pair adds 8-BIT XMAS 2017 (400) and Waixing FS306 (544), followed
+  by TH2131-1 (308), Yung-08 (368) and INX_007T (470). At 120 frames
   16 of the 18 local images render (the two blanks are MesenCE-blank boot
   screens too); the 20-frame audit only catches 208/258 because the rest are
   still in their boot code; the Sachen
