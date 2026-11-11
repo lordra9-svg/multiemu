@@ -645,6 +645,11 @@ pub trait Mapper: fmt::Debug {
     /// Observes every CPU bus address (mapper 355's protection MCU).
     fn set_cpu_address(&mut self, _address: u16) {}
 
+    /// Shared CHR-RAM state for mapper 169's computer modes.
+    fn chr169(&self) -> Option<Rc<RefCell<Chr169>>> {
+        None
+    }
+
     /// Whether the board is a UM6578 enhanced famiclone.
     fn um6578(&self) -> bool {
         false
@@ -1076,6 +1081,7 @@ impl Cartridge {
             396 => Box::new(Realtec396::new(prg_rom, chr, header)),
             399 => Box::new(Batmap399::new(prg_rom, chr, header)),
             351 => Box::new(Techline351::new(prg_rom, chr, header)),
+            169 => Box::new(Mapper169::new(prg_rom, chr, header)),
             355 => Box::new(Mapper355::new(prg_rom, chr, &misc_rom, header)),
             368 => Box::new(Yung08::new(prg_rom, chr, header)),
             400 => Box::new(Xmas400::new(prg_rom, chr, header)),
@@ -1385,6 +1391,11 @@ impl Cartridge {
     /// Passes the current CPU bus address to the mapper.
     pub fn set_cpu_address(&mut self, address: u16) {
         self.mapper.set_cpu_address(address);
+    }
+
+    /// Shared CHR-RAM state, if the board provides it (mapper 169).
+    pub fn chr169(&self) -> Option<Rc<RefCell<Chr169>>> {
+        self.mapper.chr169()
     }
 
     /// Whether the cartridge is a UM6578 enhanced famiclone.
@@ -10649,6 +10660,311 @@ impl Mapper for LatchAddr585 {
 
     fn chr_mapping_write(&self, address: u16) -> bool {
         address >= 0x8000
+    }
+}
+
+/// Shared CHR-RAM state for mapper 169's Yuxing computer modes: an 8 KiB
+/// page selected by `$5501`, plus the 1-bpp all-points-addressable mode and
+/// the nametable-in-CHR split mode selected by `$4800`/`$5500`.
+#[derive(Debug)]
+pub struct Chr169 {
+    ram: Vec<u8>,
+    page: u8,
+    one_bpp: bool,
+    nt_split: bool,
+    pa00: bool,
+    pa09: bool,
+    pa13: bool,
+}
+
+impl Chr169 {
+    fn new() -> Self {
+        Self {
+            ram: vec![0; 0x40000],
+            page: 0,
+            one_bpp: false,
+            nt_split: false,
+            pa00: false,
+            pa09: false,
+            pa13: false,
+        }
+    }
+
+    fn configure(&mut self, page: u8, one_bpp: bool, nt_split: bool) {
+        self.page = page & 0x1F;
+        self.one_bpp = one_bpp;
+        self.nt_split = nt_split;
+    }
+
+    /// Latches PPU A0/A9 on the rising edge of A13, as the board does.
+    pub(crate) fn note_address(&mut self, address: u16) {
+        let a13 = address & 0x2000 != 0;
+        if !self.pa13 && a13 {
+            self.pa00 = address & 0x0001 != 0;
+            self.pa09 = address & 0x0200 != 0;
+        }
+        self.pa13 = a13;
+    }
+
+    fn base(&self) -> usize {
+        usize::from(self.page) * 0x2000
+    }
+
+    pub(crate) fn read(&mut self, address: u16) -> u8 {
+        self.note_address(address);
+        let mut offset = usize::from(address & 0x1FFF);
+        if self.one_bpp {
+            offset = (offset & !8) | if self.pa00 { 8 } else { 0 };
+        }
+        let len = self.ram.len().max(1);
+        self.ram
+            .get((self.base() + offset) % len)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn write(&mut self, address: u16, value: u8) {
+        self.note_address(address);
+        let len = self.ram.len().max(1);
+        let index = (self.base() + usize::from(address & 0x1FFF)) % len;
+        if let Some(byte) = self.ram.get_mut(index) {
+            *byte = value;
+        }
+    }
+
+    pub(crate) fn nt_split(&self) -> bool {
+        self.nt_split
+    }
+
+    pub(crate) fn nt_read(&mut self, address: u16) -> u8 {
+        self.note_address(0x2000 | (address & 0x0FFF));
+        let len = self.ram.len().max(1);
+        self.ram
+            .get((self.base() + usize::from(address & 0x0FFF)) % len)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn nt_write(&mut self, address: u16, value: u8) {
+        let len = self.ram.len().max(1);
+        let index = (self.base() + usize::from(address & 0x0FFF)) % len;
+        if let Some(byte) = self.ram.get_mut(index) {
+            *byte = value;
+        }
+    }
+}
+
+/// Yuxing educational computer (mapper 169): MMC3-register game mode when
+/// `$5501.7` is set, otherwise a computer mode with `$4800` selecting a
+/// 32 KiB PRG-ROM bank (or PRG-RAM windows) and `$4800`/`$5500`/`$5501`
+/// selecting the CHR-RAM paging and 1-bpp/NT-split graphics modes.
+#[derive(Debug)]
+pub struct Mapper169 {
+    mmc3: Mmc3,
+    prg_ram: Vec<u8>,
+    reg4800: u8,
+    reg5500: u8,
+    reg5501: u8,
+    ram_latch: u8,
+    keyboard_row: u16,
+    chr: Rc<RefCell<Chr169>>,
+}
+
+impl Mapper169 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            mmc3: Mmc3::new_as(prg, chr, header, 169),
+            prg_ram: vec![0; 0x80000],
+            reg4800: 0,
+            reg5500: 0,
+            reg5501: 0,
+            ram_latch: 0,
+            keyboard_row: 0,
+            chr: Rc::new(RefCell::new(Chr169::new())),
+        }
+    }
+
+    fn sync_chr(&self) {
+        let r = self.reg5501;
+        let page = (r & 0x10) | ((r << 2) & 0x0C) | ((r >> 2) & 0x03);
+        let special = self.reg4800 & 0x80 != 0;
+        let nt_split = special && self.reg5500 & 0x80 != 0;
+        self.chr
+            .borrow_mut()
+            .configure(page, special && !nt_split, nt_split);
+    }
+
+    fn ram_8k_bank(&self) -> usize {
+        if self.reg5500 & 0x03 == 0 {
+            0x3C
+        } else {
+            usize::from(self.reg5500 & 0x03)
+        }
+    }
+
+    /// Byte offset of a `$8000-$FFFF` access in the mapped RAM windows.
+    fn ram_offset(&self, address: u16) -> usize {
+        if self.reg5500 & 0x40 != 0 {
+            (usize::from(self.ram_latch) >> 1) * 0x8000 + usize::from(address - 0x8000)
+        } else if address < 0xC000 {
+            usize::from(self.ram_latch) * 0x4000 + usize::from(address - 0x8000)
+        } else {
+            0x3C000 + usize::from(address - 0xC000)
+        }
+    }
+
+    fn ram_byte(&self, offset: usize) -> u8 {
+        let len = self.prg_ram.len().max(1);
+        self.prg_ram.get(offset % len).copied().unwrap_or(0)
+    }
+}
+
+impl Mapper for Mapper169 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if self.reg5501 & 0x80 != 0 {
+            return self.mmc3.prg_read(address);
+        }
+        match address {
+            0x6000..=0x7FFF => {
+                let bank = self.ram_8k_bank();
+                self.ram_byte(bank * 0x2000 + usize::from(address - 0x6000))
+            }
+            0x8000..=0xFFFF => {
+                if self.reg5500 & 0x04 != 0 {
+                    self.ram_byte(self.ram_offset(address))
+                } else {
+                    let bank = usize::from(self.reg4800 & 0x1F);
+                    let len = self.mmc3.prg.len().max(1);
+                    self.mmc3
+                        .prg
+                        .get((bank * 0x8000 + usize::from(address - 0x8000)) % len)
+                        .copied()
+                        .unwrap_or(0)
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x4200 => {}
+            0x4201 => {}
+            0x4202 | 0x4302 | 0x5004 => {
+                self.keyboard_row = (self.keyboard_row & 0xFF00) | u16::from(value);
+            }
+            0x4203 | 0x4303 | 0x5005 => {
+                self.keyboard_row = (self.keyboard_row & 0x00FF) | (u16::from(value) << 8);
+            }
+            0x4205 => {}
+            0x4800 => {
+                self.reg4800 = value;
+                self.sync_chr();
+            }
+            0x5500 => {
+                self.reg5500 = value;
+                self.sync_chr();
+            }
+            0x5501 => {
+                self.reg5501 = value;
+                self.sync_chr();
+            }
+            0x8000..=0xFFFF => {
+                if self.reg5501 & 0x80 != 0 {
+                    self.mmc3.prg_write(address, value);
+                    return;
+                }
+                if self.reg5500 & 0x04 != 0 {
+                    if self.reg4800 & 0x20 != 0 {
+                        self.ram_latch = value;
+                    } else {
+                        let len = self.prg_ram.len().max(1);
+                        let index = self.ram_offset(address) % len;
+                        self.prg_ram[index] = value;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        match address {
+            0x4207 => {
+                // No keyboard is attached: every row reads back released.
+                let _ = self.keyboard_row;
+                0
+            }
+            0x4204 | 0x4205 | 0x4304 | 0x4305 => 0x80,
+            0x5002 => 0x02,
+            0x8000..=0xFFFF => self.prg_read(address),
+            _ => 0,
+        }
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x4200, 0x5FFF))
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        if self.reg5501 & 0x80 != 0 {
+            return self.mmc3.chr_read(address);
+        }
+        self.chr.borrow_mut().read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if self.reg5501 & 0x80 != 0 {
+            self.mmc3.chr_write(address, value);
+            return;
+        }
+        self.chr.borrow_mut().write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        if self.reg5501 & 0x80 != 0 {
+            self.mmc3.mirroring()
+        } else if self.reg5500 & 0x08 != 0 {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        }
+    }
+
+    fn number(&self) -> u16 {
+        169
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        matches!(address, 0x4800 | 0x5500 | 0x5501)
+    }
+
+    fn chr169(&self) -> Option<Rc<RefCell<Chr169>>> {
+        Some(self.chr.clone())
+    }
+
+    fn irq_line(&self) -> bool {
+        if self.reg5501 & 0x80 != 0 {
+            self.mmc3.irq_line()
+        } else {
+            false
+        }
+    }
+
+    fn clock_scanline(&mut self) {
+        if self.reg5501 & 0x80 != 0 {
+            self.mmc3.clock_scanline();
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        if self.reg5501 & 0x80 != 0 {
+            self.mmc3.acknowledge_irq();
+        }
     }
 }
 
@@ -34062,6 +34378,51 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
         cart.ppu_write(0x0123, 0x5A);
         assert_eq!(cart.ppu_read(0x0123), 0x5A);
+    }
+
+    #[test]
+    fn mapper169_computer_and_game_modes() {
+        // 1 MiB PRG, CHR-RAM.
+        let rom = synth_banked(169, 1024, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 169);
+        // Computer mode: $8000 is a 32 KiB ROM bank selected by $4800.
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xFFFF), rom[16 + 0x7FFF]);
+        cart.cpu_write(0x4800, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x8000]);
+        // Mirroring comes from $5500 bit 3.
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0x5500, 0x08);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        // $5500 bit 2 maps PRG-RAM; $4800 bit 5 arms the bank latch.
+        cart.cpu_write(0x5500, 0x04);
+        cart.cpu_write(0x4800, 0x20);
+        cart.cpu_write(0x8000, 3);
+        cart.cpu_write(0x4800, 0x00);
+        cart.cpu_write(0x8000, 0x5A);
+        assert_eq!(cart.cpu_read(0x8000), 0x5A);
+        // $5501 selects the 8 KiB CHR-RAM page.
+        cart.cpu_write(0x5501, 0x00);
+        cart.ppu_write(0x0000, 0x11);
+        cart.cpu_write(0x5501, 0x04);
+        assert_eq!(cart.ppu_read(0x0000), 0x00);
+        cart.ppu_write(0x0000, 0x22);
+        cart.cpu_write(0x5501, 0x00);
+        assert_eq!(cart.ppu_read(0x0000), 0x11);
+        // 1-bpp mode remaps address bit 3 from the latched PPU A0.
+        cart.cpu_write(0x4800, 0x80);
+        cart.ppu_write(0x0008, 0xAA);
+        cart.chr169()
+            .expect("chr169")
+            .borrow_mut()
+            .note_address(0x2001);
+        assert_eq!(cart.ppu_read(0x0000), 0xAA);
+        // MMC3 game mode ($5501 bit 7) takes over $8000-$FFFF.
+        cart.cpu_write(0x5501, 0x80);
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x05);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x2000]);
     }
 
     #[test]

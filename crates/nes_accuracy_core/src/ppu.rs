@@ -6,7 +6,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::cart::{A12Irq, Aux77, Chr512, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr};
+use crate::cart::{
+    A12Irq, Aux77, Chr169, Chr512, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr,
+};
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -161,6 +163,8 @@ pub struct Ppu {
     um_ctrl: u8,
     /// UM6578 64-entry palette.
     um_palette: [u8; 64],
+    /// Shared CHR-RAM state for mapper 169's computer modes.
+    chr169: Option<Rc<RefCell<Chr169>>>,
     /// NMI output line.
     pub nmi_line: bool,
     /// Latched NMI edge waiting for the CPU.
@@ -323,6 +327,7 @@ impl Ppu {
             um_vram: vec![0; 0x2800],
             um_ctrl: 0,
             um_palette: [0; 64],
+            chr169: None,
             mmc2: None,
             hybrid: None,
             mmc5_aux: None,
@@ -568,6 +573,11 @@ impl Ppu {
         self.um6578 = enabled;
     }
 
+    /// Installs mapper 169's shared CHR-RAM state.
+    pub fn set_chr169(&mut self, aux: Rc<RefCell<Chr169>>) {
+        self.chr169 = Some(aux);
+    }
+
     /// Writes one byte from a cartridge DMA transfer to the PPU bus.
     pub fn dma_write(&mut self, address: u16, value: u8) {
         self.write_vram(address, value);
@@ -575,6 +585,9 @@ impl Ppu {
 
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.chr169 {
+            return aux.borrow_mut().read(address);
+        }
         if let Some(aux) = &self.a12 {
             aux.borrow_mut().observe(address);
         }
@@ -1121,6 +1134,13 @@ impl Ppu {
     }
 
     fn read_nametable(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.chr169 {
+            let mut aux = aux.borrow_mut();
+            aux.note_address(0x2000 | (address & 0x0FFF));
+            if aux.nt_split() {
+                return aux.nt_read(address);
+            }
+        }
         if let Some(aux) = &self.a12 {
             aux.borrow_mut().observe(address);
         }
@@ -1238,6 +1258,16 @@ impl Ppu {
                 if aux.borrow_mut().nametable_write(address, value) {
                     return;
                 }
+            }
+        }
+        if let Some(aux) = &self.chr169 {
+            if address < 0x2000 {
+                aux.borrow_mut().write(address, value);
+                return;
+            }
+            if (0x2000..0x3000).contains(&address) && aux.borrow().nt_split() {
+                aux.borrow_mut().nt_write(address, value);
+                return;
             }
         }
         if address < 0x2000 {
