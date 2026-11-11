@@ -186,6 +186,8 @@ writes, and MMC1 bank switching.
 | Whirlwind LH51 (309) | 8 KiB WRAM at `$6000`, switchable `$8000` bank, fixed last three banks, `$F000` mirroring |
 | SA-9602B (513) | MMC3 core whose outer PRG bits come from R0 and apply to `$8000`/`$A000` only |
 | N-32 SMB2j conversion (50) | `$6000`=bank 15, `$8000`/`$A000`=8/9, `$C000` from the scrambled `$4020` register, `$E000`=11; 13-bit CPU-cycle IRQ with inverted line polarity |
+| Nintendo NES-QJ (47) | MMC3 with a `$6000` outer register whose high nibble is added to every PRG slot (`syncPRG(0x0F, reg<<4)`) and CHR A17-A18; renders by 120 frames |
+| ING005 (52) | MMC3 with `prgAND = reg&8?0x0F:0x1F`, `prgOR = (reg<<4)&0x70`, `chrAND = reg&0x40?0x7F:0xFF`, `chrOR = (reg<<3)&0x180 | (reg<<7)&0x200`, locked by reg bit 7 |
 | FDS conversions (42) | `$6000` switchable 8 KiB PRG-ROM bank (`$E000`), fixed last 32 KiB at `$8000-$FFFF`, `$8000` CHR bank, `$E001` mirroring, and the free-running 15-bit CPU-cycle timer enabled by `$E002 = $02`; the patched BIOS acknowledges it through `$4030`. All nine Ai Senshi Nicol images render by 120 frames. |
 | SOMARI-P (116) | power-on MMC3 mode of the 3-mode VRC2/MMC3/MMC1 ASIC |
 | Waixing FS304 (162) | 32 KiB PRG banking from `$5000`/`$5100`/`$5200`/`$5300`, 8 KiB CHR-RAM |
@@ -309,7 +311,7 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-7,073 loaded (99.6%), 3,866 rendering (54.3%), 3,207 blank (45.3%), 0
+7,073 loaded (99.6%), 3,867 rendering (54.3%), 3,206 blank (45.3%), 0
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
 A 120-frame pass renders 6,401 with 672 blank; a 240-frame pass renders
@@ -320,8 +322,12 @@ Only 60 images across 18 IDs rendered at neither 120 nor 240 before the
 follow-up work. All of the multi-image IDs in that set have since been
 traced: 121, 303, 13, 12, 14, 50, 301, 305, 308, 309 and 513 render by
 120 frames (308 after Start), and 42 now renders 9/9 at 120 after fixing
-its `$6000` PRG window and `$4030` timer acknowledge. The five remaining
-never-rendering IDs are single-image entries: 47, 52, 63, 153 and 252.
+its `$6000` PRG window and `$4030` timer acknowledge. All but three of
+the single-image entries in that set have now been traced: 47 renders by
+120 frames after its outer-bank fix, and 52 renders at 20 frames; 252
+uploads CHR and palette and waits for input (it draws by 240 frames when
+Start is pressed). The two genuinely unresolved single-image IDs are 63
+(Powerful 255-in-1) and 153 (Famicom Jump II).
 Mapper 303 (6 images) was
 fixed next: the KS-7017 model was missing its `$6000` work RAM and the
 `$5100` commit for the `$4A00` bank latch; all sampled Armana no Kiseki
@@ -1114,7 +1120,7 @@ contract as the RustyNES oracle.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **7,073 loaded, 3,866 rendering, 3,207 blank, 0 unsupported
+  audit is **7,073 loaded, 3,867 rendering, 3,206 blank, 0 unsupported
   (0 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.
