@@ -1006,6 +1006,7 @@ impl Cartridge {
             389 => Box::new(Caltron389::new(prg_rom, chr, header)),
             396 => Box::new(Realtec396::new(prg_rom, chr, header)),
             399 => Box::new(Batmap399::new(prg_rom, chr, header)),
+            400 => Box::new(Xmas400::new(prg_rom, chr, header)),
             415 => Box::new(LuckyRabbit415::new(prg_rom, chr, header)),
             417 => Box::new(FineStudio417::new(prg_rom, chr, header)),
             552 => Box::new(Taito552::new(prg_rom, chr, header)),
@@ -1028,6 +1029,7 @@ impl Cartridge {
             226 => Box::new(Multicart226::new(prg_rom, chr, header)),
             240 => Box::new(Gnrom240::new(prg_rom, chr, prg_ram, header)),
             178 => Box::new(Fs305::new(prg_rom, chr, prg_ram, header)),
+            544 => Box::new(Fs306::new(prg_rom, chr, prg_ram, header)),
             548 => Box::new(Ctc15::new(prg_rom, chr, prg_ram)),
             551 => Box::new(Fs305::new_551(prg_rom, chr, prg_ram, header)),
             16 => Box::new(BandaiFcg::new(prg_rom, chr, prg_ram, header, 16)),
@@ -6678,6 +6680,216 @@ impl Mapper for LuckyRabbit415 {
 
     fn prg_rom_at_6000(&self) -> bool {
         true
+    }
+}
+
+/// Waixing FS306 (mapper 544): a VRC4 whose register A0/A1 lines are CPU
+/// A10/A11, with a third switchable PRG bank at `$9C00` and per-nametable
+/// CIRAM registers. CHR-RAM uploads reuse the writable CHR image.
+#[derive(Debug)]
+pub struct Fs306 {
+    inner: Vrc,
+    prg3: u8,
+    ciram: [u8; 4],
+}
+
+impl Fs306 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Vrc::new(prg, chr, prg_ram, header),
+            prg3: 0,
+            ciram: [0; 4],
+        }
+    }
+
+    /// Move CPU A10/A11 onto the VRC4's A0/A1 inputs.
+    fn translate(address: u16) -> u16 {
+        (address & !0x0006) | ((address >> 9) & 0x0006)
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.inner.prg.len() / 0x2000).max(1);
+        self.inner
+            .prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Fs306 {
+    fn prg_read(&self, address: u16) -> u8 {
+        let banks = (self.inner.prg.len() / 0x2000).max(1);
+        match address {
+            0x6000..=0x7FFF => {
+                if self.inner.prg_ram.is_empty() {
+                    0
+                } else {
+                    self.inner.prg_ram[usize::from(address - 0x6000) % self.inner.prg_ram.len()]
+                }
+            }
+            0x8000..=0x9FFF => self.prg_8k(self.inner.prg_banks[0], address),
+            0xA000..=0xBFFF => self.prg_8k(self.inner.prg_banks[1], address),
+            0xC000..=0xDFFF => self.prg_8k(usize::from(self.prg3), address),
+            0xE000..=0xFFFF => self.prg_8k(banks - 1, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if (0x6000..=0x7FFF).contains(&address) {
+            if !self.inner.prg_ram.is_empty() {
+                let offset = usize::from(address - 0x6000) % self.inner.prg_ram.len();
+                self.inner.prg_ram[offset] = value;
+            }
+            return;
+        }
+        if (address & 0xFFFC) == 0x9C00 {
+            self.prg3 = value & 0x1F;
+            return;
+        }
+        if (address & 0xFFFC) == 0x9C0C {
+            self.ciram[usize::from(address & 0x03)] = value & 0x01;
+            return;
+        }
+        self.inner.prg_write(Self::translate(address), value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        544
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_cpu(&mut self) {
+        self.inner.clock_cpu();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
+/// 8-BIT XMAS 2017 (mapper 400): an UNROM-512-like 16 KiB outer/inner PRG
+/// window, 32 KiB of banked CHR-RAM and the LCD command/data ports
+/// (the LCD is not part of the TV output and is ignored).
+#[derive(Debug)]
+pub struct Xmas400 {
+    prg: Vec<u8>,
+    aux: Rc<RefCell<Vrc7Chr>>,
+    outer_lo: u8,
+    outer_hi: u8,
+    inner: u8,
+    mirroring: Mirroring,
+}
+
+impl Xmas400 {
+    fn new(prg: Vec<u8>, _chr: Vec<u8>, header: Header) -> Self {
+        let mut aux = Vrc7Chr::new(vec![0; 0x8000]);
+        aux.set_banks([0, 1, 2, 3, 4, 5, 6, 7]);
+        Self {
+            prg,
+            aux: Rc::new(RefCell::new(aux)),
+            outer_lo: 0,
+            outer_hi: 0,
+            inner: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn sync_chr(&self) {
+        let bank = usize::from((self.inner >> 4) & 0x03) * 8;
+        let mut banks = [0u8; 8];
+        for (slot, value) in banks.iter_mut().enumerate() {
+            *value = (bank + slot) as u8;
+        }
+        self.aux.borrow_mut().set_banks(banks);
+    }
+
+    fn prg_16k(&self, page: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((page % banks) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Xmas400 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x8000..=0xBFFF => {
+                let page = usize::from(self.outer_lo) * 8 + usize::from(self.inner & 0x07);
+                self.prg_16k(page, address)
+            }
+            0xC000..=0xFFFF => {
+                let page = usize::from(self.outer_hi) * 8 + 7;
+                self.prg_16k(page, address)
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address & 0xF803 == 0x7000 {
+            self.outer_lo = (value >> 3) & 0x1F;
+        } else if address & 0xF800 == 0x7800 {
+            self.outer_hi = (value >> 3) & 0x0F;
+            self.mirroring = if value & 0x80 != 0 {
+                Mirroring::Horizontal
+            } else {
+                Mirroring::Vertical
+            };
+        } else if address >= 0xC000 {
+            self.inner = value;
+            self.sync_chr();
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.aux.borrow().read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.aux.borrow_mut().write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        400
+    }
+
+    fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
+        Some(self.aux.clone())
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0xC000
     }
 }
 
@@ -29302,6 +29514,47 @@ mod tests {
         cart.cpu_write(0x8000, 0x46);
         assert_eq!(cart.cpu_read(0x8000), page(62));
         assert_eq!(cart.cpu_read(0xC000), page(5));
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn fs306_544_vrc4_and_third_bank() {
+        // 128 KiB PRG, 512 KiB CHR.
+        let rom = synth_banked(544, 128, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 544);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 15 * 0x2000]);
+        cart.cpu_write(0x8000, 3);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
+        cart.cpu_write(0x9C00, 5);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 5 * 0x2000]);
+        cart.cpu_write(0xB000, 2);
+        assert_eq!(cart.ppu_read(0x0000), 0x82);
+        cart.cpu_write(0x6000, 0x42);
+        assert_eq!(cart.cpu_read(0x6000), 0x42);
+    }
+
+    #[test]
+    fn xmas_400_windows_and_chr_ram() {
+        // 2 MiB PRG, CHR-RAM.
+        let rom = synth_banked(400, 2048, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 400);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 7 * 0x4000]);
+        cart.cpu_write(0xC000, 0x05);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x4000]);
+        cart.cpu_write(0x7000, 0x08);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 13 * 0x4000]);
+        cart.cpu_write(0x7800, 0x08);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 15 * 0x4000]);
+        cart.cpu_write(0xC000, 0x15);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+        cart.cpu_write(0x7800, 0x88);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
