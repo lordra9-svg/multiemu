@@ -304,7 +304,7 @@ Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
 7,038 loaded (99.1%), 3,816 rendering (53.7%), 3,222 blank (45.4%), 35
 unsupported (0.5%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. The remaining 20 unsupported IDs
-are led by 355/446/547/594 (4 images each) and 394 (3); the
+are led by 355/547/594 (4 images each) and 394 (3); the
 MesenCE-only 208/219/258/284/298/302/307/346 group, the 43/106/170/
 262/285/304/521 batch, the TEC9719/167/190/266/314 batch and the
 292/518 pair, the 183/487/530 batch, the 493/517/526/553 group, the
@@ -312,7 +312,12 @@ MesenCE-only 208/219/258/284/298/302/307/346 group, the 43/106/170/
 400/544 pair, the 308/368/470 group, the Techline 351 MMC3 mode and mapper
 380, mapper 413, the 525 KS7021A VRC4 conversion, the 549 KS7016B latch,
 the 515/554 pair, the 256 OneBus core, the 374 reset-based MMC1 multicart and
-the 446 SMD172B supervisor are now implemented.
+the 446 SMD172B supervisor are now implemented. The supervisor decodes the
+full `$5000` board table onto the UNROM/CNROM/MMC3/AxROM/GNROM/NINA/VRC1/
+VRC2-4/VRC6/152/189/H3001 cores and starts on the submapper's power-on board;
+one of its four local images renders at the 20-frame mark and a second
+renders once Start is pressed, while two still need their inner-board
+initialisation.
 See `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
 tail triage.
 

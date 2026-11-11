@@ -183,7 +183,9 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   351 MMC3 mode, plus the 380 address-latched multicart, the 413
   BATMAP-SRR-X, the 525 KS7021A VRC4 conversion, the 549 KS7016B latch, the
   515 Noraebang board, the 554 read-triggered conversion, the 374 reset-based
-  MMC1 multicart and the 446 SMD172B supervisor. The 256 OneBus
+  MMC1 multicart and the 446 SMD172B supervisor, whose `$5000` table maps
+  onto the UNROM/CNROM/MMC3/AxROM/GNROM/NINA/VRC1/VRC2-4/VRC6/152/189/H3001
+  cores. The 256 OneBus
   core is partial: all five images load and boot, two reach video by 120
   frames. At 120 frames, 16 of the MesenCE group's 18 local images render
   (the two blanks are MesenCE-blank boot screens too); the 20-frame audit
