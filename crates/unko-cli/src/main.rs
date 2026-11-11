@@ -55,6 +55,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut frames_set = false;
             let mut min_video: Option<f64> = None;
             let mut min_audio: Option<f64> = None;
+            let mut jobs_arg: Option<usize> = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--parity" => parity = true,
@@ -107,6 +108,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                                 .map_err(|_| "--mapper needs an id")?,
                         );
                     }
+                    "--jobs" => {
+                        jobs_arg = Some(
+                            args.next()
+                                .ok_or("--jobs needs a number")?
+                                .parse()
+                                .map_err(|_| "--jobs needs a number")?,
+                        );
+                    }
                     other => return Err(format!("unknown option {other}").into()),
                 }
             }
@@ -136,6 +145,83 @@ fn run() -> Result<(), Box<dyn Error>> {
             if parity {
                 return Err("--parity needs --oracle PATH or UNKO_ORACLE".into());
             }
+            // Parallel corpus scan. By default leave one logical CPU for the
+            // rest of the system; --jobs 0 uses every core, --jobs 1 is the
+            // old single-threaded behaviour.
+            let cores = std::thread::available_parallelism()
+                .map(std::num::NonZeroUsize::get)
+                .unwrap_or(1);
+            let jobs = match jobs_arg {
+                Some(0) => cores,
+                Some(n) => n,
+                None => cores.saturating_sub(1),
+            }
+            .max(1);
+            let selected: Vec<&unko_rom::RomEntry> =
+                entries.iter().skip(skip).take(limit).collect();
+            enum Outcome {
+                Loaded { mapper: u16, uniform: bool },
+                Unsupported(String),
+                Failed(String),
+                Panic { message: String, title: String },
+            }
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let outcomes = std::sync::Mutex::new(Vec::with_capacity(selected.len()));
+            let previous_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            std::thread::scope(|scope| {
+                for _ in 0..jobs.min(selected.len().max(1)) {
+                    scope.spawn(|| loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(entry) = selected.get(index) else {
+                            break;
+                        };
+                        let outcome = match unko_rom::load(entry) {
+                            Err(err) => Outcome::Failed(err.to_string()),
+                            Ok(rom) => {
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        let mut system = nes_accuracy_core::System::from_ines(&rom)
+                                            .map_err(|e| e.to_string())?;
+                                        for _ in 0..frames {
+                                            system.run_frame();
+                                        }
+                                        let frame = system.video();
+                                        let first = frame[0..3].to_vec();
+                                        let uniform = frame.chunks(4).all(|p| p[0..3] == first[..]);
+                                        Ok::<_, String>((system.cart.mapper(), uniform))
+                                    }));
+                                match result {
+                                    Ok(Ok((mapper, uniform))) => {
+                                        Outcome::Loaded { mapper, uniform }
+                                    }
+                                    Ok(Err(err)) if err.contains("mapper") => {
+                                        Outcome::Unsupported(err)
+                                    }
+                                    Ok(Err(err)) => Outcome::Failed(err),
+                                    Err(payload) => {
+                                        let message = payload
+                                            .downcast_ref::<&str>()
+                                            .map(|text| (*text).to_string())
+                                            .or_else(|| payload.downcast_ref::<String>().cloned())
+                                            .unwrap_or_else(|| "panic".into());
+                                        Outcome::Panic {
+                                            message,
+                                            title: entry.title.clone(),
+                                        }
+                                    }
+                                }
+                            }
+                        };
+                        if let Ok(mut outcomes) = outcomes.lock() {
+                            outcomes.push((index, outcome));
+                        }
+                    });
+                }
+            });
+            std::panic::set_hook(previous_hook);
+            let mut outcomes = outcomes.into_inner().unwrap_or_default();
+            outcomes.sort_by_key(|(index, _)| *index);
             let mut loaded = 0usize;
             let mut rendered = 0usize;
             let mut blank = 0usize;
@@ -148,26 +234,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut failures: std::collections::BTreeMap<String, usize> =
                 std::collections::BTreeMap::new();
             let mut panics: Vec<String> = Vec::new();
-            let previous_hook = std::panic::take_hook();
-            std::panic::set_hook(Box::new(|_| {}));
-            for entry in entries.iter().skip(skip).take(limit) {
-                let Ok(rom) = unko_rom::load(entry) else {
-                    failed += 1;
-                    continue;
-                };
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut system =
-                        nes_accuracy_core::System::from_ines(&rom).map_err(|e| e.to_string())?;
-                    for _ in 0..frames {
-                        system.run_frame();
-                    }
-                    let frame = system.video();
-                    let first = frame[0..3].to_vec();
-                    let uniform = frame.chunks(4).all(|p| p[0..3] == first[..]);
-                    Ok::<_, String>((system.cart.mapper(), uniform))
-                }));
-                match result {
-                    Ok(Ok((mapper, uniform))) => {
+            for (_, outcome) in outcomes {
+                match outcome {
+                    Outcome::Loaded { mapper, uniform } => {
                         loaded += 1;
                         let stats = mappers.entry(mapper).or_insert((0, 0));
                         if uniform {
@@ -178,27 +247,22 @@ fn run() -> Result<(), Box<dyn Error>> {
                             stats.0 += 1;
                         }
                     }
-                    Ok(Err(err)) if err.contains("mapper") => {
+                    Outcome::Unsupported(err) => {
                         unsupported += 1;
                         *unsupported_mappers.entry(err).or_default() += 1;
                     }
-                    Ok(Err(err)) => {
+                    Outcome::Failed(err) => {
                         failed += 1;
                         *failures.entry(err).or_default() += 1;
                     }
-                    Err(payload) => {
+                    Outcome::Panic { message, title } => {
                         failed += 1;
-                        let message = payload
-                            .downcast_ref::<&str>()
-                            .map(|text| (*text).to_string())
-                            .or_else(|| payload.downcast_ref::<String>().cloned())
-                            .unwrap_or_else(|| "panic".into());
                         *failures.entry(format!("panic: {message}")).or_default() += 1;
-                        panics.push(entry.title.clone());
+                        panics.push(title);
                     }
                 }
             }
-            std::panic::set_hook(previous_hook);
+
             println!(
                 "{loaded} loaded, {rendered} rendering, {blank} blank, {unsupported} unsupported mapper, {failed} load/run failures ({} scanned, {frames} frames each)",
                 entries.len().saturating_sub(skip).min(limit)
@@ -908,7 +972,7 @@ fn usage() -> String {
   unko verify <rom|archive> [frames]
   unko trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N]
   unko diff <a.trace> <b.trace> [--skip N] [--video]
-  unko corpus <dir> [--parity] [--frames N] [--oracle PATH] [--mapper ID] [--skip N] [--limit N] [--min-video PCT] [--min-audio PCT]
+  unko corpus <dir> [--parity] [--frames N] [--oracle PATH] [--mapper ID] [--skip N] [--limit N] [--min-video PCT] [--min-audio PCT] [--jobs N]
   unko parity <a.trace> <b.trace> [--window N]
   unko boundary <rom|archive> [frames]
   unko bench <rom|archive> [frames]"
