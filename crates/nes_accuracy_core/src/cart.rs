@@ -28339,11 +28339,14 @@ pub struct Mmc3_121 {
     chr: Vec<u8>,
     select: u8,
     bank_data: [u8; 8],
-    array_index: u8,
+    /// Protection banks for CPU $A000/$C000/$E000.
+    prg_prot: [u8; 3],
+    /// Outer 256 KiB bank bit (0 or $80), supplied via $5100-bit writes.
+    a18: u8,
+    lut_index: u8,
     prot_index: u8,
-    latch: u8,
-    prot_slot: Option<usize>,
-    outer: u8,
+    prot_value: u8,
+    a9713: bool,
     mirroring: Mirroring,
     irq_latch: u8,
     irq_counter: u8,
@@ -28352,8 +28355,7 @@ pub struct Mmc3_121 {
     irq_pending: bool,
 }
 
-const PROT_ARRAY: [u8; 4] = [0x83, 0x83, 0x42, 0x00];
-const PROT_ARRAY_ALT: [u8; 4] = [0x00, 0x02, 0x02, 0x03];
+const PROT_LUT: [u8; 8] = [0x83, 0x83, 0x42, 0x00, 0x00, 0x02, 0x02, 0x03];
 
 fn reverse_lower_six(value: u8) -> u8 {
     let mut result = 0u8;
@@ -28368,15 +28370,16 @@ fn reverse_lower_six(value: u8) -> u8 {
 impl Mmc3_121 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
         Self {
+            a9713: prg.len() > 0x40000,
             prg,
             chr,
             select: 0,
             bank_data: [0; 8],
-            array_index: 0,
-            prot_index: 0xFF,
-            latch: 0,
-            prot_slot: None,
-            outer: 0,
+            prg_prot: [0; 3],
+            a18: 0,
+            lut_index: 0,
+            prot_index: 0,
+            prot_value: 0,
             mirroring: header.mirroring,
             irq_latch: 0,
             irq_counter: 0,
@@ -28401,17 +28404,7 @@ impl Mmc3_121 {
             (_, 2) => usize::from(self.bank_data[6]),
             (_, _) => last,
         };
-        (raw | (usize::from(self.outer >> 7) << 5)) % banks
-    }
-
-    fn override_slot(&self, slot: usize) -> Option<usize> {
-        if self.prot_slot == Some(slot) {
-            let banks = (self.prg.len() / 0x2000).max(1);
-            let raw = usize::from(self.latch & 0x3F) | (usize::from(self.outer >> 7) << 5);
-            Some(raw % banks)
-        } else {
-            None
-        }
+        ((raw & 0x1F) | (usize::from(self.a18) >> 2)) % banks
     }
 
     fn chr_bank(&self, slot: usize) -> usize {
@@ -28436,44 +28429,34 @@ impl Mmc3_121 {
                 _ => usize::from(self.bank_data[1] & 0xFE) + (slot & 1),
             }
         };
-        (raw | (usize::from(self.outer >> 7) << 8)) % banks
-    }
-
-    fn apply_protection(&mut self) {
-        let slot = match self.prot_index {
-            0x26 => Some(3),
-            0x28 => Some(2),
-            0x2A => Some(1),
-            0x2C | 0x20 | 0x29 | 0x2B | 0x3C | 0x3F => {
-                if self.latch & 0x3F != 0 {
-                    Some(3)
-                } else {
-                    None
-                }
-            }
-            _ => None,
+        let page = if self.a9713 {
+            raw | (usize::from(self.a18) << 1)
+        } else if slot >= 4 {
+            raw | 0x100
+        } else {
+            raw
         };
-        self.prot_slot = slot;
+        page % banks
     }
 }
 
 impl Mapper for Mmc3_121 {
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
-            0x5000..=0x5FFF => {
-                let array = if address & 0x0100 != 0 {
-                    PROT_ARRAY_ALT
-                } else {
-                    PROT_ARRAY
-                };
-                array[usize::from(self.array_index & 0x03)]
-            }
+            0x5000..=0x5FFF => PROT_LUT[usize::from(self.lut_index & 0x07)],
             0x6000..=0x7FFF => 0,
             0x8000..=0xFFFF => {
+                let banks = (self.prg.len() / 0x2000).max(1);
                 let slot = usize::from((address - 0x8000) / 0x2000);
-                let bank = self
-                    .override_slot(slot)
-                    .unwrap_or_else(|| self.prg_slot(slot));
+                let bank = if self.prot_index & 0x20 != 0 && slot >= 1 {
+                    (usize::from(self.prg_prot[slot - 1]) | (usize::from(self.a18) >> 2)) % banks
+                } else {
+                    self.prg_slot(slot)
+                };
                 self.prg[bank * 0x2000 + usize::from(address & 0x1FFF)]
             }
             _ => 0,
@@ -28482,27 +28465,34 @@ impl Mapper for Mmc3_121 {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         if address < 0x8000 {
-            if address & 0xF180 == 0x5180 {
-                self.outer = value;
-            } else if (0x5000..=0x5FFF).contains(&address) {
-                self.array_index = value & 0x03;
+            if (0x5000..=0x5FFF).contains(&address) {
+                // Index bit 2 is address bit 8 (NRS: addr >> 6 & 4).
+                self.lut_index = (value & 0x03) | (((address >> 6) as u8) & 0x04);
+                if address & 0x0100 != 0 {
+                    self.a18 = value & 0x80;
+                }
             }
             return;
         }
         match address & 0xE003 {
             0x8000 => self.select = value,
             0x8001 => {
-                self.latch = reverse_lower_six(value);
+                self.prot_value = reverse_lower_six(value);
+                if matches!(self.prot_index, 0x26 | 0x28 | 0x2A) {
+                    let index = usize::from(0x15 - (self.prot_index >> 1));
+                    self.prg_prot[index] = self.prot_value;
+                }
                 let index = usize::from(self.select & 0x07);
                 self.bank_data[index] = value;
-                if matches!(self.prot_index, 0x26 | 0x28 | 0x2A) {
-                    self.apply_protection();
-                }
             }
             0x8003 => {
                 self.prot_index = value & 0x3F;
-                self.select = value;
-                self.apply_protection();
+                if self.prot_index & 0x20 != 0 && self.prot_value != 0 {
+                    self.prg_prot[2] = self.prot_value;
+                }
+                // NRS forwards $8003 to the MMC3 data register (odd address).
+                let index = usize::from(self.select & 0x07);
+                self.bank_data[index] = value;
             }
             0xA000 => {
                 self.mirroring = if value & 1 != 0 {
@@ -34260,6 +34250,9 @@ mod tests {
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         cart.cpu_write(0x5000, 1);
         assert_eq!(cart.cpu_read(0x5000), 0x83);
+        // Address bit 8 selects the alternate protection array.
+        cart.cpu_write(0x5100, 1);
+        assert_eq!(cart.cpu_read(0x5100), 0x02);
         cart.cpu_write(0x8000, 6);
         cart.cpu_write(0x8001, 4);
         assert_eq!(cart.cpu_read(0x8000), 4);
