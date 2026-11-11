@@ -301,7 +301,7 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-7,073 loaded (99.6%), 3,843 rendering (54.1%), 3,230 blank (45.5%), 0
+7,073 loaded (99.6%), 3,842 rendering (54.1%), 3,231 blank (45.5%), 0
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
 The sweep added the MesenCE-only 208/219/258/284/298/302/307/346 group,
@@ -315,10 +315,14 @@ the 43/106/170/
 the 515/554 pair, the 256 OneBus core, the 374 reset-based MMC1 multicart and
 the 446 SMD172B supervisor are now implemented. The supervisor decodes the
 full `$5000` board table onto the UNROM/CNROM/MMC3/AxROM/GNROM/NINA/VRC1/
-VRC2-4/VRC6/152/189/H3001 cores and starts on the submapper's power-on board;
-one of its four local images renders at the 20-frame mark and a second
-renders once Start is pressed, while two still need their inner-board
-initialisation.
+VRC2-4/VRC6/152/189/H3001 cores. It now uses NRS's fixed unlocked mapping
+(`$8000/$A000` from `$5001`/`$5002`, `$C000/$E000` fixed to `$3E/$3F`, or
+`$1E/$1F` for submapper 3) instead of an MMC1 stand-in, with the `$5003`
+inversion and the sub-0/2/3 fuse tables; locked writes are ignored as
+`applyMode` does. Three of the four local images render by 240 frames
+(m446-25 and m446-49 at 120, m446-42 at 240); the 20-frame audit is blank
+because the multicart loader needs 1-2 s. m446-65 still crashes after its
+loader, and the outer base/mask is applied to the H3001 inner board only.
 See `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
 tail triage.
 
@@ -1059,7 +1063,7 @@ contract as the RustyNES oracle.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **7,073 loaded, 3,843 rendering, 3,230 blank, 0 unsupported
+  audit is **7,073 loaded, 3,842 rendering, 3,231 blank, 0 unsupported
   (0 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.

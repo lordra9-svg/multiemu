@@ -27,7 +27,7 @@ unko corpus <library-dir> --mapper 136 --frames 600
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
 | Loaded (mapper implemented) | 7,073 | 99.6% |
-| Rendering | 3,843 | 54.1% |
+| Rendering | 3,842 | 54.1% |
 | Blank | 3,229 | 45.5% |
 | Unsupported mapper | 0 | 0.0% |
 | Load/run failure | 28 | 0.39% |
@@ -427,7 +427,9 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 **None.** All 7,073 images with a valid iNES/NES 2.0 header name a mapper that
 now has an implementation. The 28 remaining non-loading images are truncated
 dumps, not unsupported boards; the partial ports below still need hardware
-work (256 and 446, plus the 351 CHR-RAM/PRG-enlargement path).
+work (256, and the 446 supervisor's remaining inner-board and flash cases;
+446 renders 3/4 by 240 frames but is still blank at the 20-frame smoke point
+because its multicart loader runs for ~1-2 s).
 
 ### NESdev references
 
@@ -449,7 +451,7 @@ board loads and boots but does not render, or renders only some images.
 | 394 | Realtec HSK007 | implemented | [NES 2.0 Mapper 394](https://www.nesdev.org/wiki/NES_2.0_Mapper_394) |
 | 405 | UM6578 enhanced console | implemented | [NES 2.0 Mapper 405](https://www.nesdev.org/wiki/NES_2.0_Mapper_405) |
 | 418 | 820106-C/821007C (NINA-118) | implemented | [NES 2.0 Mapper 418](https://www.nesdev.org/wiki/NES_2.0_Mapper_418) |
-| 446 | Mindkids SMD172B supervisor | partial (1/4 render) | [NES 2.0 Mapper 446](https://www.nesdev.org/wiki/NES_2.0_Mapper_446) |
+| 446 | Mindkids SMD172B supervisor | partial (3/4 render by 240 frames) | [NES 2.0 Mapper 446](https://www.nesdev.org/wiki/NES_2.0_Mapper_446) |
 | 515 | Family Noraebang (YM2413) | implemented | [NES 2.0 Mapper 515](https://www.nesdev.org/wiki/NES_2.0_Mapper_515) |
 | 525 | Kaiser KS7021A (VRC4) | implemented | [NES 2.0 Mapper 525](https://www.nesdev.org/wiki/NES_2.0_Mapper_525) |
 | 547 | Konami Q-Ta / VRC5 | implemented (QTRAM CHR banking pending) | [NES 2.0 Mapper 547](https://www.nesdev.org/wiki/NES_2.0_Mapper_547) |
