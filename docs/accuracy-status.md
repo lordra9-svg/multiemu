@@ -322,10 +322,13 @@ VRC2-4/VRC6/152/189/H3001 cores. It now uses NRS's fixed unlocked mapping
 (`$8000/$A000` from `$5001`/`$5002`, `$C000/$E000` fixed to `$3E/$3F`, or
 `$1E/$1F` for submapper 3) instead of an MMC1 stand-in, with the `$5003`
 inversion and the sub-0/2/3 fuse tables; locked writes are ignored as
-`applyMode` does. Three of the four local images render by 240 frames
-(m446-25 and m446-49 at 120, m446-42 at 240); the 20-frame audit is blank
-because the multicart loader needs 1-2 s. m446-65 still crashes after its
-loader, and the outer base/mask is applied to the H3001 inner board only.
+`applyMode` does. MMC1-family fuses now apply the supervisor's 8 KiB mask to
+the MMC1 16 KiB page (`page & (mask >> 1) | (outer >> 1)`), which fixes the
+`JMP ($FFFC)` entry after m446-65 locks to SNROM. All four local images render
+by 240 frames (m446-25 and m446-49 at 120, m446-42 and m446-65 at 240); the
+20-frame audit is blank because the multicart loader needs 1-2 s. The outer
+base/mask is applied to the MMC1 and H3001 inner boards; locked MMC3/VRC
+selections still delegate without it.
 See `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
 tail triage.
 
