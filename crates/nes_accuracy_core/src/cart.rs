@@ -854,7 +854,9 @@ impl Cartridge {
         }
         let prg_rom = bytes[offset..prg_end].to_vec();
         let chr = bytes[prg_end..chr_end].to_vec();
-        let chr_is_ram = header.chr_size == 0;
+        // A mapper-256 image with no CHR ROM uses the PRG ROM as a single
+        // address space; its CHR data is read through the mapper, not RAM.
+        let chr_is_ram = header.chr_size == 0 && header.mapper != 256;
         let chr = if chr_is_ram {
             let size = match header.mapper {
                 13 => 0x4000,
@@ -7086,6 +7088,7 @@ impl Mapper for Ks7010 {
 pub struct OneBus256 {
     prg: Vec<u8>,
     chr: Vec<u8>,
+    submapper: u8,
     pq_outer: u8,
     va_outer: u8,
     comr6: bool,
@@ -7111,6 +7114,7 @@ impl OneBus256 {
         Self {
             prg,
             chr,
+            submapper: header.submapper,
             pq_outer: 0,
             va_outer: 0,
             comr6: false,
@@ -7135,34 +7139,29 @@ impl OneBus256 {
     const INNER_MASKS: [u8; 8] = [0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01, 0x00, 0xFF];
 
     fn merge(inner: u8, middle: u8, mask: u8) -> u8 {
-        let bits = mask.count_ones();
-        if bits >= 8 {
-            return inner;
-        }
-        (inner & mask) | ((middle.wrapping_shl(bits)) & !mask)
+        // `Bank = (Inner & Mask) | (Middle & ~Mask)`; the middle-bank bits
+        // occupy the same positions as the inner bits they replace.
+        (inner & mask) | (middle & !mask)
     }
 
     fn prg_slot_inner(&self, slot: usize) -> u8 {
-        if self.comr6 {
-            match slot {
-                0 => 0xFE,
-                1 => 0xFF,
-                2 => self.pq[0],
-                _ => self.pq[1],
-            }
+        // COMR6 swaps $8000/$C000 (the even 8 KiB slots), as on the MMC3.
+        let slot = if self.comr6 && slot & 1 == 0 {
+            slot ^ 2
         } else {
-            match slot {
-                0 => self.pq[0],
-                1 => self.pq[1],
-                2 => {
-                    if self.pq2en {
-                        self.pq[2]
-                    } else {
-                        0xFE
-                    }
+            slot
+        };
+        match slot {
+            0 => self.pq[0],
+            1 => self.pq[1],
+            2 => {
+                if self.pq2en {
+                    self.pq[2]
+                } else {
+                    0xFE
                 }
-                _ => 0xFF,
             }
+            _ => 0xFF,
         }
     }
 
@@ -7201,20 +7200,30 @@ impl OneBus256 {
         (self.chr_regs[group], odd)
     }
 
+    /// OneBus images without CHR ROM use the PRG ROM as one address space;
+    /// the CHR registers then address that same data.
+    fn chr_source(&self) -> &[u8] {
+        if self.chr.is_empty() {
+            &self.prg
+        } else {
+            &self.chr
+        }
+    }
+
     fn chr_bank(&self, slot: usize) -> usize {
-        let banks = (self.chr.len() / 0x400).max(1);
+        let banks = (self.chr_source().len() / 0x400).max(1);
         let (value, odd) = self.chr_slot_reg(slot);
         let inner = if odd { value | 0x01 } else { value & 0xFE };
+        // NRS VB0STable: {0,1,2,0,3,4,5,1}, so 0xFF >> table[VB0S].
         let mask = match self.vb0s & 0x07 {
-            0 => 0xFF,
-            1 => 0x7F,
+            0 | 3 => 0xFF,
+            1 | 7 => 0x7F,
             2 => 0x3F,
             4 => 0x1F,
             5 => 0x0F,
-            6 => 0x07,
-            _ => 0xFF,
+            _ => 0x07,
         };
-        let middle = self.vb0s >> 3;
+        let middle = self.vb0s & 0xF8;
         let merged = Self::merge(inner, middle, mask);
         let intermediate = usize::from((self.va18 >> 4) & 0x07);
         let bank = (usize::from(merged) | (intermediate << 8)) | (usize::from(self.va_outer) << 11);
@@ -7323,13 +7332,17 @@ impl Mapper for OneBus256 {
     fn chr_read(&self, address: u16) -> u8 {
         let slot = usize::from(address) / 0x400;
         let bank = self.chr_bank(slot);
-        self.chr
+        self.chr_source()
             .get(bank * 0x400 + usize::from(address & 0x3FF))
             .copied()
             .unwrap_or(0)
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
+        // With no CHR ROM the source is mask ROM; writes have no effect.
+        if self.chr.is_empty() {
+            return;
+        }
         let slot = usize::from(address) / 0x400;
         let bank = self.chr_bank(slot);
         if let Some(byte) = self
@@ -7349,16 +7362,22 @@ impl Mapper for OneBus256 {
     }
 
     fn native_ppu_write(&mut self, address: u16, value: u8) -> bool {
+        // Submapper 1 (Waixing VT03) swaps the six 1K/2K CHR registers.
+        let groups = if self.submapper == 1 {
+            [3usize, 2, 1, 0, 5, 4]
+        } else {
+            [2usize, 3, 4, 5, 0, 1]
+        };
         match address {
-            0x2012 => self.chr_regs[2] = value,
-            0x2013 => self.chr_regs[3] = value,
-            0x2014 => self.chr_regs[4] = value,
-            0x2015 => self.chr_regs[5] = value,
-            0x2016 => self.chr_regs[0] = value,
-            0x2017 => self.chr_regs[1] = value,
+            0x2012..=0x2017 => {
+                let index = groups[usize::from(address - 0x2012)];
+                self.chr_regs[index] = value;
+            }
             0x2018 => self.va18 = value,
             0x201A => self.vb0s = value,
-            _ => return false,
+            // The rest of $2008-$3FFF is OneBus register space; it must not
+            // alias the NES PPU's $2000-$2007 registers.
+            _ => {}
         }
         true
     }
@@ -34858,9 +34877,10 @@ mod tests {
         cart.cpu_write(0x410B, 0x40);
         cart.cpu_write(0x4109, 5);
         assert_eq!(cart.cpu_read(0xC000), p(5));
-        // COMR6 swaps the low and high PRG pairs.
+        // COMR6 swaps the even $8000/$C000 slots: $8000 takes PQ2 (5) and
+        // $C000 takes PQ0 (7).
         cart.cpu_write(0x8000, 0x40);
-        assert_eq!(cart.cpu_read(0x8000), p(62));
+        assert_eq!(cart.cpu_read(0x8000), p(5));
         assert_eq!(cart.cpu_read(0xC000), p(7));
         // CHR: MMC3 index 0 forwards to $2016 (slots 0/1 = banks 4/5).
         cart.cpu_write(0x8000, 0);
@@ -35444,6 +35464,37 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0x82);
         cart.cpu_write(0xA000, 1);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn one_bus_256_single_space_and_registers() {
+        // 512 KiB PRG and no CHR ROM: CHR reads come from the PRG space.
+        let rom = synth_banked(256, 512, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 256);
+        assert!(!cart.chr_is_ram());
+        cart.cpu_write(0x8000, 0x00);
+        cart.cpu_write(0x8001, 0x20);
+        assert_eq!(cart.ppu_read(0x0000), rom[16 + 0x20 * 0x400]);
+        // PS=5 masks inner bit 0; PQ3 supplies the remaining bank bits
+        // without shifting.
+        cart.cpu_write(0x410B, 0x05);
+        cart.cpu_write(0x410A, 0x1B);
+        cart.cpu_write(0x4107, 0x01);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x1B * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x1A * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x1B * 0x2000]);
+        // COMR6 swaps the even $8000/$C000 slots.
+        cart.cpu_write(0x4105, 0x40);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x1A * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x1B * 0x2000]);
+        // Submapper 1 (Waixing VT03) swaps the $2012-$2017 CHR registers.
+        let mut rom1 = synth_banked(256, 128, 64);
+        rom1[8] = 0x11;
+        let mut cart1 = Cartridge::from_ines(&rom1).expect("cart");
+        cart1.native_ppu_write(0x2012, 0x20);
+        assert_eq!(cart1.ppu_read(0x1400), rom1[16 + 128 * 1024 + 0x20 * 0x400]);
+        assert_eq!(cart1.ppu_read(0x1000), rom1[16 + 128 * 1024]);
     }
 
     #[test]
