@@ -1012,6 +1012,7 @@ impl Cartridge {
             351 => Box::new(Techline351::new(prg_rom, chr, header)),
             368 => Box::new(Yung08::new(prg_rom, chr, header)),
             400 => Box::new(Xmas400::new(prg_rom, chr, header)),
+            413 => Box::new(Srrx413::new(prg_rom, chr, header)),
             415 => Box::new(LuckyRabbit415::new(prg_rom, chr, header)),
             417 => Box::new(FineStudio417::new(prg_rom, chr, header)),
             552 => Box::new(Taito552::new(prg_rom, chr, header)),
@@ -6685,6 +6686,162 @@ impl Mapper for LuckyRabbit415 {
 
     fn prg_rom_at_6000(&self) -> bool {
         true
+    }
+}
+
+/// Batlab BATMAP-SRR-X (mapper 413): PRG 8 KiB banks at `$6000`/`$8000`/
+/// `$A000`, a fixed `$5000` 4 KiB window, fixed `$D000-$FFFF`, 4 KiB CHR
+/// banks, a scanline IRQ and the DPCM data port.
+#[derive(Debug)]
+pub struct Srrx413 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    chr0: u8,
+    prg6000: u8,
+    prg8000: u8,
+    prga000: u8,
+    mirroring: Mirroring,
+    irq_latch: u8,
+    irq_counter: u8,
+    irq_enabled: bool,
+    irq_pending: bool,
+    dpcm_addr: u32,
+}
+
+impl Srrx413 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            chr0: 0,
+            prg6000: 0,
+            prg8000: 0,
+            prga000: 0,
+            mirroring: header.mirroring,
+            irq_latch: 0,
+            irq_counter: 0,
+            irq_enabled: false,
+            irq_pending: false,
+            dpcm_addr: 0,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_4k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.chr.len() / 0x1000).max(1);
+        self.chr
+            .get((bank % banks) * 0x1000 + usize::from(address & 0x0FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Srrx413 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x4800..=0x4FFF => 0,
+            0x5000..=0x5FFF => self
+                .prg
+                .get(0x1000 + usize::from(address - 0x5000))
+                .copied()
+                .unwrap_or(0),
+            0x6000..=0x7FFF => self.prg_8k(usize::from(self.prg6000), address),
+            0x8000..=0x9FFF => self.prg_8k(usize::from(self.prg8000), address),
+            0xA000..=0xBFFF => self.prg_8k(usize::from(self.prga000), address),
+            0xC000..=0xCFFF => 0,
+            0xD000..=0xDFFF => self.prg_8k(3, address),
+            0xE000..=0xFFFF => self.prg_8k(4, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address < 0x8000 {
+            return;
+        }
+        match address & 0x7000 {
+            0x0000 => self.irq_latch = value,
+            0x1000 => self.irq_counter = 0,
+            0x2000 | 0x3000 => {
+                self.irq_enabled = address & 0x1000 != 0;
+                if !self.irq_enabled {
+                    self.irq_pending = false;
+                }
+            }
+            0x4000 => self.dpcm_addr = (self.dpcm_addr << 1) | u32::from(value >> 7),
+            0x5000 => {}
+            0x6000 | 0x7000 => match value >> 6 {
+                0 => self.prg6000 = value & 0x3F,
+                1 => self.prg8000 = value & 0x3F,
+                2 => self.prga000 = value & 0x3F,
+                _ => self.chr0 = value & 0x3F,
+            },
+            _ => {}
+        }
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0x4800..=0x4FFF).contains(&address) {
+            return 0;
+        }
+        self.prg_read(address)
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x4800, 0x5FFF))
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x1000;
+        if slot == 0 {
+            self.chr_4k(usize::from(self.chr0), address)
+        } else {
+            self.chr_4k(0x3D, address)
+        }
+    }
+
+    fn chr_write(&mut self, _address: u16, _value: u8) {}
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        413
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        true
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0xE000
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_scanline(&mut self) {
+        if self.irq_counter == 0 {
+            self.irq_counter = self.irq_latch;
+        } else {
+            self.irq_counter -= 1;
+        }
+        if self.irq_enabled && self.irq_counter == 0 {
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
     }
 }
 
@@ -30101,6 +30258,36 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0x82);
         cart.cpu_write(0x6000, 0x42);
         assert_eq!(cart.cpu_read(0x6000), 0x42);
+    }
+
+    #[test]
+    fn srrx_413_banks_and_irq() {
+        // 256 KiB PRG and CHR.
+        let rom = synth_banked(413, 256, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 413);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16]);
+        assert_eq!(cart.cpu_read(0x6000), rom[16]);
+        assert_eq!(cart.cpu_read(0xD000), rom[16 + 3 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 4 * 0x2000]);
+        assert_eq!(cart.cpu_read(0x5000), rom[16 + 0x1000]);
+        cart.cpu_write(0xE000, 0x45);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x2000]);
+        cart.cpu_write(0xE000, 0x85);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 5 * 0x2000]);
+        cart.cpu_write(0xE000, 0xC5);
+        assert_eq!(cart.ppu_read(0x0000), 0x94);
+        assert_eq!(cart.ppu_read(0x1000), 0xF4);
+        cart.cpu_write(0x8000, 2);
+        cart.cpu_write(0x9000, 0);
+        cart.cpu_write(0xB000, 0);
+        cart.clock_scanline();
+        cart.clock_scanline();
+        cart.clock_scanline();
+        assert!(cart.irq_line());
+        cart.cpu_write(0xA000, 0);
+        assert!(!cart.irq_line());
     }
 
     #[test]

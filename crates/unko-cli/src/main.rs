@@ -421,6 +421,26 @@ fn run() -> Result<(), Box<dyn Error>> {
             if dump_ppu || dump_chr.is_some() || break_pc.is_some() {
                 let mut system =
                     nes_accuracy_core::System::from_ines(&rom).map_err(|e| e.to_string())?;
+                if let Ok(n) = std::env::var("UNKO_PCTRACE") {
+                    let n: usize = n.parse().unwrap_or(20_000);
+                    for _ in 0..n {
+                        let pc = system.cpu.registers.pc;
+                        eprintln!(
+                            "{:04X} op={:02X} {:02X}{:02X} sp={:02X} halted={}",
+                            pc,
+                            system.cart.cpu_read(pc),
+                            system.cart.cpu_read(pc.wrapping_add(1)),
+                            system.cart.cpu_read(pc.wrapping_add(2)),
+                            system.cpu.registers.sp,
+                            system.cpu.halted
+                        );
+                        if system.cpu.halted {
+                            break;
+                        }
+                        system.step_instruction();
+                    }
+                    return Ok(());
+                }
                 if let Some(pc) = break_pc {
                     let limit = 2_000_000u32;
                     for _ in 0..limit {
