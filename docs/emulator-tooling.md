@@ -126,9 +126,15 @@ refs/rustynes   0 uninitialized
 `unko` carries the scriptable checks used for the audit and for change
 gating:
 
-- `corpus <dir> [--frames N] [--mapper ID] [--skip N] [--limit N]` — smoke
-  audit; reports loaded/rendering/blank/unsupported/failed, ranks unsupported
-  mapper IDs and prints failing titles. `--parity` makes the quantitative
+- `corpus <dir> [--frames N] [--mapper ID] [--skip N] [--limit N] [--jobs N]`
+  — smoke audit; reports loaded/rendering/blank/unsupported/failed, ranks
+  unsupported mapper IDs and prints failing titles. Scans run in parallel:
+  the default is logical CPUs minus one so the rest of the system keeps a
+  core, `--jobs 1` restores the serial behaviour and `--jobs 0` uses every
+  core. Results are merged by entry index, so the output is identical for
+  every job count (7,101 images at 20 frames: 5.5 min serial, 42 s with the
+  default; 120 frames: 4.9 min; 240 frames: 9.8 min). A full audit under
+  eight competing CPU hogs still completes in 62 s with identical totals. `--parity` makes the quantitative
   differential audit the standard run: the oracle path comes from
   `--oracle PATH` or `UNKO_ORACLE`, `--frames` defaults to 120, and every
   image is executed by both the accuracy core and the reference producer with

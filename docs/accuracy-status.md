@@ -139,7 +139,7 @@ writes, and MMC1 bank switching.
 | Action 53 (28) | reference inner/outer PRG bank formula, 32 KiB CHR-RAM window, H/V/1-screen mirroring |
 | J.Y. ASIC (35/90/209/211) | 8/16/32 KiB PRG, 1/2/4/8 KiB CHR, mirroring, multiplier, prescaled M2/A12 IRQ; ROM nametables missing |
 | Waixing FS305 (178) | 8 KiB CHR-RAM, NROM-256/UNROM/NROM-128/UNROM-fixed PRG modes, banked 8 KiB PRG-RAM |
-| J87 (87/101) | 32 KiB fixed PRG, 8 KiB CHR latch at `$6000-$7FFF`; mapper 101 reverses CHR bit order |
+| J87 (87/101) | 32 KiB fixed PRG, 8 KiB CHR latch at `$6000-$7FFF` (87 swaps register bits 0/1); mapper 101 uses the raw value and reverses CHR bit order |
 | J.Y. clone (91) | two 8 KiB PRG banks + fixed last, four 2 KiB CHR banks, outer 128 KiB PRG/512 KiB CHR, 64-rise A12 IRQ |
 | Bandai FCG (16) | 16 KiB PRG, eight 1 KiB CHR, mirroring, 16-bit CPU-cycle IRQ latch/counter |
 | Bandai FCG 153 | `$8000-$8007` CHR registers double as the outer PRG bank, sampled as `chr[PPU addr>>10 & 3]` on PPU fetches; 8 KiB WRAM |
@@ -203,7 +203,7 @@ writes, and MMC1 bank switching.
 | Multicart 212 | write-address latch: 16/32 KiB PRG, 8 KiB CHR, mirroring, DIP-switch read |
 | Protected NROM (143) | NROM plus a `$4100-$5FFF` protection read of inverted low address bits |
 | Golden Game 235 | write-address latch: 32 KiB page, 16 KiB half, ROM chip, 1/2-screen mirroring |
-| Benshieng BMC-BS-5 (286) | address-latched 8 KiB PRG and 2 KiB CHR windows (partial; menus still blank) |
+| Benshieng BMC-BS-5 (286) | address latches: 8-bit PRG pages (DIP-gated address bit 4), 2 KiB CHR pages, `$C000` mirroring; all 10 images render |
 | MMC5 (5) | PRG modes/CHR banking/IRQ, multiplier, per-slot `$5105` nametable mapping (CIRAM page 0/1, ExRAM, fill), split screen, extended attributes with >256 KiB CHR, two-pulse + PCM audio (write/read DAC modes with the `$5010` IRQ) |
 
 NES 2.0 PRG (16 KiB units) and CHR (8 KiB units) sizes are parsed correctly.
@@ -313,14 +313,14 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-7,073 loaded (99.6%), 3,867 rendering (54.3%), 3,206 blank (45.3%), 0
+7,073 loaded (99.6%), 3,896 rendering (54.3%), 3,177 blank (45.3%), 0
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
-A 120-frame pass renders 6,459 with 614 blank; a 240-frame pass renders
-6,387 with 686 blank. The 240 total is slightly lower because several
+A 120-frame pass renders 6,489 with 584 blank; a 240-frame pass renders
+6,419 with 654 blank. The 240 total is slightly lower because several
 hundred games sit on a fade or transition frame at that exact sample;
-across both passes every loaded image renders except two input-gated
-titles. The 120-frame pass attributes 2,556 of the 20-frame blanks to
+across both passes every loaded image renders except mapper 308 (NTDEC
+Batman), which waits for Start. The 120-frame pass attributes 2,556 of the 20-frame blanks to
 slow boot (MMC3 +654, MMC1 +424, UxROM +254, mapper 163 +69).
 The follow-up work closed the original 18-ID never-rendering set:
 121/303/13/12/14/50/301/305/309/513 render by 120 frames, 42 renders
@@ -330,9 +330,10 @@ after the NTDEC 2291 latch and PPU-driven FCG outer-bank fixes. MMC2
 (9, 10 Punch-Out!! images) needed its full 5-bit PRG register and
 renders 10/10 by 240 (~frame 210). Mapper 512 fades through a blank
 frame at 120 and renders at 240; 330 renders by 240. The only images
-with 0 rendering at both 120 and 240 are 252 and 308, which wait for
-Start; both render once input is pressed (308: 6 colors / 7,760 px at
-120 and 10 / 16,638 at 240; 252: 2 / 962 at 240).
+with 0 rendering at both 120 and 240 is 308, which waits for Start (6
+colors / 7,760 px at 120 and 10 / 16,638 at 240 with input). Mapper 252
+now renders headless from 120 (3 colors / 2,789 px) after the `$2006`
+warm-up fix.
 The 28 load failures are all `image truncated`, in four groups:
 expected 40,976 got 16,400 (20 images), expected 172,048 got 49,168 (4),
 expected 32,784 got 8,208 (3) and expected 81,936 got 18,448 (1). No
@@ -1104,9 +1105,9 @@ the dots 1-64 clear phase, which provides the seed.
   **96.7%**, 218 **97.5%**, 29 **80.8% best-aligned**. Four remain low for
   timing or PPU-latch reasons rather than decode: **229** and **290** sample
   a scrolling/animation step one frame away from the oracle (15.0% and 35.8%
-  raw, 47.5% and 65.0% best-aligned), **252** tries a `$2006` write inside
-  the documented 29,658-cycle post-reset mask window, so its nametable upload
-  is dropped (**30.0%**), and **96** draws the title but misses one
+  raw, 47.5% and 65.0% best-aligned), **252**'s nametable upload used to be
+  dropped by the post-reset mask (**30.0%**; `$2006` is now exempt, so the
+  upload lands), and **96** draws the title but misses one
   nametable-row CHR bank in the centre logo (**40.0%**). The NES 2.0
   PRG-RAM/NVRAM size decoder was also corrected to `64 << shift` bytes (it
   had treated the nibbles as 8 KiB units).
@@ -1135,7 +1136,7 @@ contract as the RustyNES oracle.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **7,073 loaded, 3,867 rendering, 3,206 blank, 0 unsupported
+  audit is **7,073 loaded, 3,896 rendering, 3,177 blank, 0 unsupported
   (0 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.
