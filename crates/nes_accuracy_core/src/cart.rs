@@ -17347,7 +17347,7 @@ impl Mmc3Outer {
     fn prg_bank(&self, slot: usize) -> usize {
         let banks = (self.inner.prg.len() / 0x2000).max(1);
         let base = self.inner.prg_slot(slot);
-        if matches!(self.board, 47 | 52) && slot >= 2 {
+        if self.board == 52 && slot >= 2 {
             return base % banks;
         }
         let bank = match self.board {
@@ -17356,7 +17356,9 @@ impl Mmc3Outer {
                 let block = usize::from(self.outer & 0x03);
                 (base & if block <= 1 { 0x1F } else { 0x0F }) | (block * 0x10)
             }
-            47 => (base & 0x0F) | (usize::from(self.outer & 0x01) << 4),
+            // NRS syncPRG(0x0F, reg << 4): the register's high nibble
+            // supplies the outer PRG bits for every slot.
+            47 => (base & 0x0F) | (usize::from(self.outer) << 4),
             52 => {
                 if self.outer & 0x40 != 0 {
                     (base & 0x7F)
@@ -17379,7 +17381,7 @@ impl Mmc3Outer {
         let base = self.inner.chr_bank(slot);
         let bank = match self.board {
             134 => (base & 0xFF) | (usize::from(self.outer & 0x20) << 3),
-            47 => (base & 0x7F) | (usize::from(self.outer & 0x01) << 7),
+            47 => (base & 0x7F) | (usize::from(self.outer) << 7),
             52 => {
                 if self.outer & 0x08 != 0 {
                     (base & 0x0F) | (usize::from(self.outer & 0x07) << 4)
@@ -17440,7 +17442,8 @@ impl Mapper for Mmc3Outer {
                     self.security = LUT[usize::from(value & 0x03)];
                 }
                 47 => {
-                    if (0x6000..=0x7FFF).contains(&address) && self.inner.ram_enabled {
+                    // NRS latches any $6000-$7FFF write (submapper 0).
+                    if (0x6000..=0x7FFF).contains(&address) {
                         self.outer = value;
                     }
                 }
@@ -35462,14 +35465,22 @@ mod tests {
     }
 
     #[test]
-    fn mmc3_47_outer_bit() {
+    fn mmc3_47_outer_bank() {
         // 512 KiB PRG, 32 KiB CHR.
         let rom = synth_banked(47, 512, 32);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.mapper(), 47);
-        cart.cpu_write(0xA001, 0x80); // enable the overlaying WRAM window
-        cart.cpu_write(0x6000, 1);
-        assert_eq!(cart.cpu_read(0x8000), 16);
+        // The $6000 register's high nibble is added to every MMC3 slot:
+        // value 2 selects 8 KiB bank 0x20 and keeps the fixed 0x2E/0x2F.
+        cart.cpu_write(0x6000, 0x02);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x20 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x20 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x2E * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x2F * 0x2000]);
+        // R6=3 lands at 0x23 inside the selected outer block.
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x23 * 0x2000]);
     }
 
     #[test]
