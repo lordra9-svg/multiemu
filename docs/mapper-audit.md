@@ -26,17 +26,17 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 7,056 | 99.4% |
-| Rendering | 3,830 | 53.9% |
+| Loaded (mapper implemented) | 7,058 | 99.4% |
+| Rendering | 3,832 | 54.0% |
 | Blank | 3,226 | 45.4% |
-| Unsupported mapper | 17 | 0.2% |
+| Unsupported mapper | 15 | 0.2% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 182 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 7,056 (93.3% → 99.4%) and unsupported fell 446 → 17 (6.3% → 0.2%);
-7 mapper IDs remain (the ranking prints the top 80), led by 355/547/594
-(4 images each).
+audit, 184 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 7,058 (93.3% → 99.4%) and unsupported fell 446 → 15 (6.3% → 0.2%);
+5 mapper IDs remain (the ranking prints the top 80): 355/547/594 (4 images
+each), 169 (2) and 405 (1).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
 is deliberately short; several families need hundreds of frames to leave their
@@ -160,7 +160,7 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   396, 399, 400, 413, 415, 417, 418, 422, 446, 470, 487, 493, 512,
   513, 515, 516, 517, 518, 519, 521, 522, 523, 525, 526, 529, 530,
   533, 534, 535, 538, 539, 540, 544, 548, 549, 551, 552, 553, 554,
-  555, 557, 564, 576, 585)** — 182 boards
+  555, 557, 559, 563, 564, 576, 585)** — 184 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
@@ -189,7 +189,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   cores, the 334 32 KiB-bank multicart and the 394 HSK007 256 KiB-slice
   multicart, plus the 272 J-2012-II, 418 NINA-118, 127 Double Dragon pirate,
   186 Study Box, 326 Gryzor, 557 NTDEC, 330 Sangokushi II, 555 NES-EVENT2 and the
-  564/576/585 latch boards. The 256 OneBus
+  564/576/585 latch boards, and the 559/563 VRC boards with the shared A12
+  counter and per-quadrant CHR-ROM nametables. The 256 OneBus
   core is partial: all five images load and boot, two reach video by 120
   frames. At 120 frames, 16 of the MesenCE group's 18 local images render
   (the two blanks are MesenCE-blank boot screens too); the 20-frame audit
@@ -421,9 +422,8 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 
 ## Unsupported mappers
 
-17 images (0.2%) name a mapper with no implementation across 7 IDs. The
-largest groups are 355/547/594 (4 images each), then 169 (2) and one each
-for 405, 559 and 563. The sections below record the reference material
+15 images (0.2%) name a mapper with no implementation across 5 IDs:
+355/547/594 (4 images each), 169 (2) and 405 (1). The sections below record the reference material
 for each ID and what still blocks it.
 
 ### NESdev references
@@ -454,8 +454,8 @@ board loads and boots but does not render, or renders only some images.
 | 554 | Kaiser KS-7010 | implemented | [NES 2.0 Mapper 554](https://www.nesdev.org/wiki/NES_2.0_Mapper_554) |
 | 555 | Campus Challenge 1991 (NES-EVENT2) | implemented | [NES 2.0 Mapper 555](https://www.nesdev.org/wiki/NES_2.0_Mapper_555) |
 | 557 | NTDEC 2718 | implemented | [NES 2.0 Mapper 557](https://www.nesdev.org/wiki/NES_2.0_Mapper_557) |
-| 559 | Subor Sango II (VRC2/4) | unimplemented | [NES 2.0 Mapper 559](https://www.nesdev.org/wiki/NES_2.0_Mapper_559) |
-| 563 | J-2020 (VRC2/4) | unimplemented | [NES 2.0 Mapper 563](https://www.nesdev.org/wiki/NES_2.0_Mapper_563) |
+| 559 | Subor Sango II (VRC2/4) | implemented | [NES 2.0 Mapper 559](https://www.nesdev.org/wiki/NES_2.0_Mapper_559) |
+| 563 | J-2020 (VRC2/4) | implemented | [NES 2.0 Mapper 563](https://www.nesdev.org/wiki/NES_2.0_Mapper_563) |
 | 564 | bd23 data-latch | implemented | [NES 2.0 Mapper 564](https://www.nesdev.org/wiki/NES_2.0_Mapper_564) |
 | 576 | J-2096 address-latch | implemented | [NES 2.0 Mapper 576](https://www.nesdev.org/wiki/NES_2.0_Mapper_576) |
 | 585 | FE-01-1 address-latch | implemented | [NES 2.0 Mapper 585](https://www.nesdev.org/wiki/NES_2.0_Mapper_585) |
