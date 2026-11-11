@@ -34097,18 +34097,15 @@ pub struct Benshieng286 {
 }
 
 impl Benshieng286 {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
         Self {
             prg,
             chr,
-            prg_banks: [0, 1, 2, 3],
+            // NRS resets the four 8 KiB PRG registers to 0xC..0xF.
+            prg_banks: [0x0C, 0x0D, 0x0E, 0x0F],
             chr_banks: [0; 4],
-            mirroring: header.mirroring,
+            mirroring: Mirroring::Vertical,
         }
-    }
-
-    fn latch_bank(address: u16) -> u8 {
-        ((((address >> 8) & 0x03) << 4) | (address & 0x0F)) as u8
     }
 }
 
@@ -34125,14 +34122,27 @@ impl Mapper for Benshieng286 {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         let _ = value;
+        // The board latches the write *address*: $8000-$9FFF selects a
+        // 2 KiB CHR register (5-bit value), $A000-$BFFF a 8 KiB PRG register
+        // (4-bit value, only when address bit 4 matches the DIP), and
+        // $C000-$CFFF the mirroring.
         match address & 0xE000 {
             0x8000 => {
                 let window = usize::from((address >> 10) & 0x03);
-                self.chr_banks[window] = Self::latch_bank(address);
+                self.chr_banks[window] = (address & 0x1F) as u8;
             }
             0xA000 => {
-                let window = usize::from((address >> 10) & 0x03);
-                self.prg_banks[window] = Self::latch_bank(address);
+                if address & 0x010 != 0 {
+                    let window = usize::from((address >> 10) & 0x03);
+                    self.prg_banks[window] = (address & 0x0F) as u8;
+                }
+            }
+            0xC000 => {
+                self.mirroring = if address & 0x01 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
             }
             _ => {}
         }
@@ -35558,6 +35568,35 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
         cart.cpu_write(0x6000, 0x04);
         assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
+    }
+
+    #[test]
+    fn benshieng_286_address_latches() {
+        // 128 KiB PRG (16 x 8 KiB), 128 KiB CHR.
+        let rom = synth_banked(286, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 286);
+        // Reset PRG registers are 0xC..0xF; mirroring starts vertical.
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x0C * 0x2000]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x0D * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x0E * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x0F * 0x2000]);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        // $A000 writes latch only with address bit 4 set (DIP value).
+        cart.cpu_write(0xA408, 0); // bit 4 clear: ignored
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x0D * 0x2000]);
+        cart.cpu_write(0xA410, 0); // window 1, bank 0
+        assert_eq!(cart.cpu_read(0xA000), rom[16]);
+        // $8000-$9FFF selects a 5-bit 2 KiB CHR page from the address.
+        cart.cpu_write(0x8405, 0); // slot 1, value 5 -> 1K banks 10/11
+        let chr_base = 16 + 128 * 1024;
+        assert_eq!(cart.ppu_read(0x0800), rom[chr_base + 10 * 0x400]);
+        assert_eq!(cart.ppu_read(0x0C00), rom[chr_base + 11 * 0x400]);
+        // $C000-$CFFF selects mirroring from address bit 0.
+        cart.cpu_write(0xC001, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0xC000, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
     }
 
     #[test]
@@ -38238,10 +38277,10 @@ mod tests {
     fn benshieng286_latches_windows() {
         let rom = synth_banked(286, 512, 32);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
-        // PRG window 0 ($8000): bank 2 -> 8 KiB bank 2.
-        cart.cpu_write(0xA002, 0);
+        // PRG window 0: address bit 4 set, latch value 2.
+        cart.cpu_write(0xA012, 0);
         assert_eq!(cart.cpu_read(0x8000), 2);
-        // CHR window 0: 2 KiB bank 1 -> 1 KiB bank 2.
+        // CHR window 0: latch value 1 -> 2 KiB bank 1 -> 1 KiB bank 2.
         cart.cpu_write(0x8001, 0);
         assert_eq!(cart.ppu_read(0x0000), 0x82);
     }
