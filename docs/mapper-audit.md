@@ -26,16 +26,16 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 7,003 | 98.6% |
+| Loaded (mapper implemented) | 7,007 | 98.7% |
 | Rendering | 3,800 | 53.5% |
-| Blank | 3,203 | 45.1% |
-| Unsupported mapper | 70 | 1.0% |
+| Blank | 3,207 | 45.2% |
+| Unsupported mapper | 66 | 0.9% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 149 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 7,003 (93.3% → 98.6%) and unsupported fell 446 → 70 (6.3% → 1.0%);
-40 mapper IDs remain (the ranking prints the top 80), led by 256/515
+audit, 153 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 7,007 (93.3% → 98.7%) and unsupported fell 446 → 66 (6.3% → 0.9%);
+36 mapper IDs remain (the ranking prints the top 80), led by 256/515
 (5 images each) and 355/446/547/594 (4 each).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
@@ -156,8 +156,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254, 258, 262,
   263, 264, 266, 284, 285, 289, 290, 292, 298, 299, 301, 302, 303,
   304, 305, 306, 307, 309, 312, 313, 314, 332, 346, 347, 389, 396,
-  399, 422, 487, 493, 512, 513, 516, 517, 518, 519, 521, 522, 523,
-  526, 529, 530, 533, 534, 535, 548, 551, 552, 553)** — 149 boards
+  399, 415, 417, 422, 487, 493, 512, 513, 516, 517, 518, 519, 521,
+  522, 523, 526, 529, 530, 533, 534, 535, 538, 539, 548, 551, 552, 553)** — 153 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
@@ -173,7 +173,9 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   with its `$6000` PRG window, while 487 and 530 add the Maxivision and
   Ax5705 latches. The next batch adds the Maxivision 493, karaoke 517,
   UNL-BJ-56 526 and Sachen 3013 553 boards. The Caltron 389 and the
-  Jncota 523 FS005 variant complete the last batch. At 120 frames
+  Jncota 523 FS005 variant complete the last batch. The latest additions
+  cover Lucky Rabbit 415, Fine Studio 417, Super Soccer 538 and Kid Icarus
+  539. At 120 frames
   16 of the 18 local images render (the two blanks are MesenCE-blank boot
   screens too); the 20-frame audit only catches 208/258 because the rest are
   still in their boot code; the Sachen
