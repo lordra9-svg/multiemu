@@ -650,6 +650,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Shared 16 KiB CHR-RAM for CPROM (mapper 13).
+    fn cprom_chr(&self) -> Option<Rc<RefCell<CpromChr>>> {
+        None
+    }
+
     /// Whether the board is a UM6578 enhanced famiclone.
     fn um6578(&self) -> bool {
         false
@@ -1400,6 +1405,11 @@ impl Cartridge {
     /// Shared CHR-RAM state, if the board provides it (mapper 169).
     pub fn chr169(&self) -> Option<Rc<RefCell<Chr169>>> {
         self.mapper.chr169()
+    }
+
+    /// Shared 16 KiB CHR-RAM state, if the board provides it (mapper 13).
+    pub fn cprom_chr(&self) -> Option<Rc<RefCell<CpromChr>>> {
+        self.mapper.cprom_chr()
     }
 
     /// Whether the cartridge is a UM6578 enhanced famiclone.
@@ -11258,6 +11268,47 @@ impl Mapper for Mapper594 {
 
     fn acknowledge_irq(&mut self) {
         self.inner.acknowledge_irq();
+    }
+}
+
+/// Shared 16 KiB CHR-RAM for CPROM (mapper 13): PPU $0000-$0FFF is fixed
+/// to the first 4 KiB, $1000-$1FFF selects one of four 4 KiB banks.
+#[derive(Debug)]
+pub struct CpromChr {
+    ram: Vec<u8>,
+    bank: u8,
+}
+
+impl CpromChr {
+    fn new() -> Self {
+        Self {
+            ram: vec![0; 0x4000],
+            bank: 0,
+        }
+    }
+
+    fn set_bank(&mut self, bank: u8) {
+        self.bank = bank & 0x03;
+    }
+
+    fn offset(&self, address: u16) -> usize {
+        let index = usize::from(address & 0x1FFF);
+        if index < 0x1000 {
+            index
+        } else {
+            usize::from(self.bank) * 0x1000 + (index - 0x1000)
+        }
+    }
+
+    pub(crate) fn read(&self, address: u16) -> u8 {
+        self.ram.get(self.offset(address)).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn write(&mut self, address: u16, value: u8) {
+        let offset = self.offset(address);
+        if let Some(byte) = self.ram.get_mut(offset) {
+            *byte = value;
+        }
     }
 }
 
@@ -22928,17 +22979,15 @@ impl Mapper for ColorDreams {
 #[derive(Debug)]
 pub struct Cprom {
     prg: Vec<u8>,
-    chr: Vec<u8>,
-    chr_bank: usize,
+    ram: Rc<RefCell<CpromChr>>,
     mirroring: Mirroring,
 }
 
 impl Cprom {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+    fn new(prg: Vec<u8>, _chr: Vec<u8>, header: Header) -> Self {
         Self {
             prg,
-            chr,
-            chr_bank: 0,
+            ram: Rc::new(RefCell::new(CpromChr::new())),
             mirroring: header.mirroring,
         }
     }
@@ -22957,19 +23006,16 @@ impl Mapper for Cprom {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         if address >= 0x8000 {
-            self.chr_bank = usize::from((value >> 4) & 3);
+            self.ram.borrow_mut().set_bank((value >> 4) & 3);
         }
     }
 
     fn chr_read(&self, address: u16) -> u8 {
-        self.chr.get(self.chr_offset(address)).copied().unwrap_or(0)
+        self.ram.borrow().read(address)
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
-        let offset = self.chr_offset(address);
-        if let Some(byte) = self.chr.get_mut(offset) {
-            *byte = value;
-        }
+        self.ram.borrow_mut().write(address, value);
     }
 
     fn mirroring(&self) -> Mirroring {
@@ -22979,16 +23025,13 @@ impl Mapper for Cprom {
     fn number(&self) -> u16 {
         13
     }
-}
 
-impl Cprom {
-    fn chr_offset(&self, address: u16) -> usize {
-        let index = usize::from(address) & 0x1FFF;
-        if index < 0x1000 {
-            index
-        } else {
-            (self.chr_bank % 4) * 0x1000 + (index - 0x1000)
-        }
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
+    }
+
+    fn cprom_chr(&self) -> Option<Rc<RefCell<CpromChr>>> {
+        Some(self.ram.clone())
     }
 }
 
@@ -34547,6 +34590,31 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 4);
         cart.cpu_write(0x4200, 2);
         assert_eq!(cart.ppu_read(0x0000), 0x90);
+    }
+
+    #[test]
+    fn cprom_13_banked_chr_ram() {
+        // 32 KiB PRG, 16 KiB CHR-RAM.
+        let rom = synth_banked(13, 32, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 13);
+        assert!(cart.chr_is_ram());
+        assert!(cart.cprom_chr().is_some());
+        // Low 4 KiB is fixed to bank 0; the high window starts at bank 0,
+        // which aliases it.
+        cart.ppu_write(0x0000, 0x11);
+        assert_eq!(cart.ppu_read(0x1000), 0x11);
+        // $8000 bits 4-5 of the written value select the high bank.
+        cart.cpu_write(0x8000, 0x10);
+        cart.ppu_write(0x1000, 0x22);
+        cart.cpu_write(0x8000, 0x20);
+        cart.ppu_write(0x1000, 0x33);
+        assert_eq!(cart.ppu_read(0x1000), 0x33);
+        cart.cpu_write(0x8000, 0x10);
+        assert_eq!(cart.ppu_read(0x1000), 0x22);
+        assert_eq!(cart.ppu_read(0x0000), 0x11);
+        cart.cpu_write(0x8000, 0x00);
+        assert_eq!(cart.ppu_read(0x1000), 0x11);
     }
 
     #[test]

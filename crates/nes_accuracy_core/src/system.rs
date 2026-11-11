@@ -201,6 +201,9 @@ impl System {
         if let Some(aux) = cart.chr169() {
             ppu.set_chr169(aux);
         }
+        if let Some(aux) = cart.cprom_chr() {
+            ppu.set_cprom_chr(aux);
+        }
         let um6578 = cart.um6578();
         ppu.set_um6578(um6578);
         if cart.has_rom_nametables() {

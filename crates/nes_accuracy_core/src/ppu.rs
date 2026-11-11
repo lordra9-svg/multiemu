@@ -7,7 +7,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::cart::{
-    A12Irq, Aux77, Chr169, Chr512, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr,
+    A12Irq, Aux77, Chr169, Chr512, CpromChr, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr,
+    Vrc7Chr,
 };
 use crate::clock::Timing;
 
@@ -165,6 +166,8 @@ pub struct Ppu {
     um_palette: [u8; 64],
     /// Shared CHR-RAM state for mapper 169's computer modes.
     chr169: Option<Rc<RefCell<Chr169>>>,
+    /// Shared 16 KiB CHR-RAM for CPROM (mapper 13).
+    cprom_chr: Option<Rc<RefCell<CpromChr>>>,
     /// NMI output line.
     pub nmi_line: bool,
     /// Latched NMI edge waiting for the CPU.
@@ -328,6 +331,7 @@ impl Ppu {
             um_ctrl: 0,
             um_palette: [0; 64],
             chr169: None,
+            cprom_chr: None,
             mmc2: None,
             hybrid: None,
             mmc5_aux: None,
@@ -578,6 +582,11 @@ impl Ppu {
         self.chr169 = Some(aux);
     }
 
+    /// Installs CPROM's shared 16 KiB CHR-RAM state.
+    pub fn set_cprom_chr(&mut self, aux: Rc<RefCell<CpromChr>>) {
+        self.cprom_chr = Some(aux);
+    }
+
     /// Writes one byte from a cartridge DMA transfer to the PPU bus.
     pub fn dma_write(&mut self, address: u16, value: u8) {
         self.write_vram(address, value);
@@ -585,6 +594,9 @@ impl Ppu {
 
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.cprom_chr {
+            return aux.borrow().read(address);
+        }
         if let Some(aux) = &self.chr169 {
             return aux.borrow_mut().read(address);
         }
@@ -1258,6 +1270,12 @@ impl Ppu {
                 if aux.borrow_mut().nametable_write(address, value) {
                     return;
                 }
+            }
+        }
+        if let Some(aux) = &self.cprom_chr {
+            if address < 0x2000 {
+                aux.borrow_mut().write(address, value);
+                return;
             }
         }
         if let Some(aux) = &self.chr169 {
