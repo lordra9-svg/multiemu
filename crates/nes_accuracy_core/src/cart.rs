@@ -14900,10 +14900,9 @@ pub struct Mmc3_12 {
 
 impl Mmc3_12 {
     fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
-        Self {
-            inner: Mmc3::new_as(prg, chr, header, 12),
-            chr_sel: 0,
-        }
+        let mut inner = Mmc3::new_as(prg, chr, header, 12);
+        inner.set_irq_alternate();
+        Self { inner, chr_sel: 0 }
     }
 
     fn bank(&self, slot: usize) -> usize {
@@ -14917,6 +14916,19 @@ impl Mmc3_12 {
 }
 
 impl Mapper for Mmc3_12 {
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x4100, 0x41FF))
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0x4100..=0x41FF).contains(&address) {
+            // The hard-wired solder-pad/language bit reads as 0.
+            0
+        } else {
+            self.prg_read(address)
+        }
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         self.inner.prg_read(address)
     }
@@ -19901,6 +19913,8 @@ pub struct Mmc3 {
     irq_reload: bool,
     irq_enabled: bool,
     irq_pending: bool,
+    /// Sharp MMC3A/NEC revision: only a transition to zero raises an IRQ.
+    irq_alternate: bool,
     hybrid: Option<Rc<RefCell<HybridChr>>>,
 }
 
@@ -19957,12 +19971,18 @@ impl Mmc3 {
             irq_reload: false,
             irq_enabled: false,
             irq_pending: false,
+            irq_alternate: false,
             hybrid: None,
         }
     }
 
     fn prg_banks(&self) -> usize {
         (self.prg.len() / 0x2000).max(1)
+    }
+
+    /// Selects the Sharp MMC3A/NEC IRQ revision.
+    pub(crate) fn set_irq_alternate(&mut self) {
+        self.irq_alternate = true;
     }
 
     fn prg_slot(&self, index: usize) -> usize {
@@ -20106,7 +20126,10 @@ impl Mapper for Mmc3 {
             0xA001 => self.ram_enabled = value & 0x80 != 0,
             0xC000 => self.irq_latch = value,
             0xC001 => {
-                self.irq_counter = 0;
+                // $C001 raises the counter above 127 immediately; on the
+                // alternate revision the subsequent reload to zero is the
+                // single IRQ it produces.
+                self.irq_counter = if self.irq_alternate { 0xF0 } else { 0 };
                 self.irq_reload = true;
             }
             0xE000 => {
@@ -20169,13 +20192,20 @@ impl Mapper for Mmc3 {
     }
 
     fn clock_scanline(&mut self) {
+        let old = self.irq_counter;
         if self.irq_counter == 0 || self.irq_reload {
             self.irq_counter = self.irq_latch;
             self.irq_reload = false;
+            if self.irq_alternate && old != 0 && self.irq_counter == 0 && self.irq_enabled {
+                self.irq_pending = true;
+            }
         } else {
             self.irq_counter -= 1;
+            if self.irq_alternate && self.irq_counter == 0 && self.irq_enabled {
+                self.irq_pending = true;
+            }
         }
-        if self.irq_counter == 0 && self.irq_enabled {
+        if !self.irq_alternate && self.irq_counter == 0 && self.irq_enabled {
             self.irq_pending = true;
         }
     }
@@ -34590,6 +34620,47 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 4);
         cart.cpu_write(0x4200, 2);
         assert_eq!(cart.ppu_read(0x0000), 0x90);
+    }
+
+    #[test]
+    fn mmc3_12_alternate_irq_and_outer_chr() {
+        // 256 KiB PRG, 512 KiB CHR.
+        let rom = synth_banked(12, 256, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 12);
+        // $4132 bit 0 is CHR A18 for PPU $0000-$0FFF.
+        cart.cpu_write(0x8000, 0);
+        cart.cpu_write(0x8001, 2);
+        cart.cpu_write(0x4132, 0x00);
+        cart.ppu_write(0x0000, 0xAA);
+        cart.cpu_write(0x4132, 0x01);
+        cart.ppu_write(0x0000, 0xBB);
+        assert_eq!(cart.ppu_read(0x0000), 0xBB);
+        cart.cpu_write(0x4132, 0x00);
+        assert_eq!(cart.ppu_read(0x0000), 0xAA);
+        // The language bit reads as 0.
+        assert_eq!(cart.cpu_read_io(0x4132), 0);
+        // NEC IRQ revision: $C000 = 0 gives one IRQ, not one per clock.
+        cart.cpu_write(0xC000, 0);
+        cart.cpu_write(0xC001, 0);
+        cart.cpu_write(0xE001, 0);
+        cart.clock_scanline();
+        assert!(cart.irq_line());
+        cart.cpu_write(0xE000, 0);
+        assert!(!cart.irq_line());
+        cart.cpu_write(0xE001, 0);
+        for _ in 0..16 {
+            cart.clock_scanline();
+        }
+        assert!(!cart.irq_line());
+        // A non-zero latch still fires after N+1 clocks.
+        cart.cpu_write(0xC000, 3);
+        cart.cpu_write(0xC001, 0);
+        cart.cpu_write(0xE001, 0);
+        for _ in 0..4 {
+            cart.clock_scanline();
+        }
+        assert!(cart.irq_line());
     }
 
     #[test]
