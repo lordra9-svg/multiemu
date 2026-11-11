@@ -25188,10 +25188,11 @@ impl Namco163 {
             prg_ram,
             chip_ram: [0; 128],
             chip_addr: 0,
-            chr_banks: [0; 8],
-            // Power-on PRG mapping is linear: $8000/$A000/$C000 = banks 0/1/2,
-            // with the last bank fixed at $E000.
-            prg_banks: [0, 1, 2],
+            // NRS resets the 8 pattern registers to 0..7.
+            chr_banks: [0, 1, 2, 3, 4, 5, 6, 7],
+            // NRS resets the three switchable PRG registers to $FC/$FD/$FE
+            // (the last four 8 KiB banks); $E000 stays the fixed last bank.
+            prg_banks: [0xFC, 0xFD, 0xFE],
             nt,
             // Power-on state is write-enabled until the game programs $F800.
             write_protect: 0x40,
@@ -25884,7 +25885,13 @@ impl Mapper for J87 {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         if (0x6000..=0x7FFF).contains(&address) {
-            self.chr_bank = value & 0x03;
+            // NRS: mapper 87 swaps register bits 0/1 (`reg << 1 & 2 |
+            // reg >> 1 & 1`); mapper 101 uses the raw value.
+            self.chr_bank = if self.reversed {
+                value
+            } else {
+                ((value << 1) & 0x02) | ((value >> 1) & 0x01)
+            };
         }
     }
 
@@ -34395,11 +34402,20 @@ mod tests {
         let rom = synth_banked(87, 32, 32);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.ppu_read(0x0000), 0x80);
+        // Mapper 87 swaps register bits 0/1: value 2 selects CHR bank 1,
+        // value 1 selects bank 2.
         cart.cpu_write(0x6000, 2);
+        assert_eq!(cart.ppu_read(0x0000), 0x88);
+        cart.cpu_write(0x6000, 1);
         assert_eq!(cart.ppu_read(0x0000), 0x90);
+        // Mapper 101 uses the raw value and reverses each CHR byte.
         let reversed = synth_banked(101, 32, 32);
-        let cart = Cartridge::from_ines(&reversed).expect("cart");
+        let mut cart = Cartridge::from_ines(&reversed).expect("cart");
+        assert_eq!(cart.mapper(), 101);
         assert_eq!(cart.ppu_read(0x0000), 0x01);
+        cart.cpu_write(0x6000, 2);
+        // 8 KiB bank 2 starts at 1 KiB bank 16 (0x90), bit-reversed.
+        assert_eq!(cart.ppu_read(0x0000), 0x09);
     }
 
     #[test]
