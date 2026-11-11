@@ -1082,6 +1082,7 @@ impl Cartridge {
             127 => Box::new(DdPirate127::new(prg_rom, chr, header)),
             272 => Box::new(J2012::new(prg_rom, chr, header)),
             326 => Box::new(Gryzor326::new(prg_rom, chr, header)),
+            330 => Box::new(Sangokushi330::new(prg_rom, chr, prg_ram, header)),
             285 => Box::new(A65AS::new(prg_rom, chr, header)),
             286 => Box::new(Benshieng286::new(prg_rom, chr, header)),
             58 | 213 => Box::new(Multicart58::new(prg_rom, chr, header)),
@@ -10324,6 +10325,189 @@ impl Mapper for J2012 {
         if self.irq_counter >= 11 {
             self.irq_counter = 0;
             self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// Sangokushi II bootleg (mapper 330): three 8 KiB PRG windows with the last
+/// bank fixed, eight 1 KiB CHR registers, four nametable registers, the
+/// Namco 163 chip RAM at `$4800` and its 15-bit CPU-cycle IRQ.
+#[derive(Debug)]
+pub struct Sangokushi330 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_banks: [u8; 3],
+    chr_banks: [u8; 8],
+    nt: [u8; 4],
+    chip_ram: [u8; 128],
+    chip_addr: u8,
+    chip_inc: bool,
+    irq_counter: u16,
+    irq_pending: bool,
+}
+
+impl Sangokushi330 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, _header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
+        let mut chr_banks = [0u8; 8];
+        for (i, bank) in chr_banks.iter_mut().enumerate() {
+            *bank = i as u8;
+        }
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            prg_banks: [0, 1, 2],
+            chr_banks,
+            nt: [0, 1, 0, 1],
+            chip_ram: [0; 128],
+            chip_addr: 0,
+            chip_inc: false,
+            irq_counter: 0,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Sangokushi330 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x4800..=0x4FFF => self.chip_ram[usize::from(self.chip_addr) & 0x7F],
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
+            0x8000..=0x9FFF => self.prg_8k(usize::from(self.prg_banks[0]), address),
+            0xA000..=0xBFFF => self.prg_8k(usize::from(self.prg_banks[1]), address),
+            0xC000..=0xDFFF => self.prg_8k(usize::from(self.prg_banks[2]), address),
+            0xE000..=0xFFFF => self.prg_8k(0xFF, address),
+            _ => 0,
+        }
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0x4800..=0x4FFF).contains(&address) {
+            return self.chip_ram[usize::from(self.chip_addr) & 0x7F];
+        }
+        self.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x4800..=0x4FFF => {
+                let index = usize::from(self.chip_addr) & 0x7F;
+                self.chip_ram[index] = value;
+                if self.chip_inc && index < 0x7F {
+                    self.chip_addr = (index + 1) as u8;
+                }
+            }
+            0x6000..=0x7FFF => {
+                let index = usize::from(address - 0x6000) % self.prg_ram.len();
+                self.prg_ram[index] = value;
+            }
+            0x8000..=0xBFFF => {
+                let bank = (address >> 12) & 0x0F;
+                if address & 0x0400 != 0 {
+                    if bank & 0x02 != 0 {
+                        self.irq_counter = (self.irq_counter & 0x00FF) | (u16::from(value) << 8);
+                        self.irq_pending = false;
+                    } else {
+                        self.irq_counter = (self.irq_counter & 0xFF00) | u16::from(value);
+                    }
+                } else {
+                    let index = usize::from(((bank & 0x03) << 1) | ((address >> 11) & 1)) & 0x07;
+                    self.chr_banks[index] = value;
+                }
+            }
+            0xC000..=0xDFFF => {
+                if address & 0x0400 == 0 {
+                    let index =
+                        usize::from((((address >> 12) & 1) << 1) | ((address >> 11) & 1)) & 0x03;
+                    self.nt[index] = value & 0x01;
+                }
+            }
+            0xE000..=0xFFFF => {
+                let bank = (address >> 12) & 0x0F;
+                if bank == 0x0F && address & 0x0800 != 0 {
+                    self.chip_addr = value & 0x7F;
+                    self.chip_inc = value & 0x80 != 0;
+                } else if address & 0x0400 == 0 {
+                    let index = usize::from(((bank & 1) << 1) | ((address >> 11) & 1)) & 0x03;
+                    if index < 3 {
+                        self.prg_banks[index] = value;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x4800, 0x4FFF))
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        Mirroring::FourScreen
+    }
+
+    fn nametable_map(&self) -> Option<[u8; 4]> {
+        Some(self.nt)
+    }
+
+    fn number(&self) -> u16 {
+        330
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0xBFFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if self.irq_counter & 0x8000 != 0 {
+            self.irq_counter = self.irq_counter.wrapping_add(1);
+            if self.irq_counter == 0 {
+                self.irq_pending = true;
+            }
         }
     }
 
@@ -32371,6 +32555,41 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
         cart.ppu_write(0x0123, 0x5A);
         assert_eq!(cart.ppu_read(0x0123), 0x5A);
+    }
+
+    #[test]
+    fn sangokushi_330_banks_nt_and_irq() {
+        // 256 KiB PRG and CHR.
+        let rom = synth_banked(330, 256, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 330);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 2 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 31 * 0x2000]);
+        // PRG registers live in the low half of each $E000/$F000 2 KiB page.
+        cart.cpu_write(0xE000, 5);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x2000]);
+        // CHR registers sit at $8000-$BFFF with A10 clear.
+        cart.cpu_write(0x8000, 7);
+        let chr = 16 + 256 * 1024;
+        assert_eq!(cart.ppu_read(0x0000), rom[chr + 7 * 0x400]);
+        // Nametable registers at $C000-$DFFF select per quadrant.
+        assert_eq!(cart.nametable_map(), Some([0, 1, 0, 1]));
+        cart.cpu_write(0xC000, 1);
+        assert_eq!(cart.nametable_map(), Some([1, 1, 0, 1]));
+        // N163 chip RAM through the $F800 address port.
+        cart.cpu_write(0xF800, 0x02);
+        cart.cpu_write(0x4800, 0x5A);
+        assert_eq!(cart.cpu_read_io(0x4800), 0x5A);
+        // 15-bit up-counter: enable by setting bit 15, then wrap to zero.
+        cart.cpu_write(0x8400, 0x00);
+        cart.cpu_write(0xA400, 0x80);
+        assert!(!cart.irq_line());
+        for _ in 0..32768 {
+            cart.clock_cpu();
+        }
+        assert!(cart.irq_line());
     }
 
     #[test]
