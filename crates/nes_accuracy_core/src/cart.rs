@@ -1001,6 +1001,7 @@ impl Cartridge {
             292 => Box::new(DragonFighter292::new(prg_rom, chr, header)),
             517 => Box::new(Unrom517::new(prg_rom, chr, header)),
             518 => Box::new(Dance2000::new(prg_rom, chr, prg_ram, header)),
+            446 => Box::new(Supervisor446::new(prg_rom, chr, prg_ram, header)),
             470 => Box::new(Inx470::new(prg_rom, chr, header)),
             487 => Box::new(Mapper487::new(prg_rom, chr, header)),
             493 => Box::new(Gnrom493::new(prg_rom, chr, header)),
@@ -1529,6 +1530,28 @@ pub struct Mmc1 {
 }
 
 impl Mmc1 {
+    /// The 16 KiB PRG page MMC1 resolves for `address` (mapper 446 needs the
+    /// page number so the supervisor can apply its outer-bank mask).
+    fn prg_page(&self, address: u16) -> usize {
+        // SUROM/SXROM: with <= 8 KiB of CHR, the CHR register's bit 4 becomes
+        // PRG A18 and selects which 256 KiB half the window uses.
+        let outer_bytes = if self.chr.len() <= 0x2000 && self.prg.len() > 0x40000 {
+            usize::from((self.chr0 >> 4) & 0x01) * 0x40000
+        } else {
+            0
+        };
+        let half_banks = (self.prg.len().saturating_sub(outer_bytes) / 0x4000).clamp(1, 16);
+        let mode = (self.control >> 2) & 3;
+        let bank = usize::from(self.prg_bank & 0x0F);
+        let (first, second) = match mode {
+            0 | 1 => (bank & !1, (bank & !1) + 1),
+            2 => (0, bank),
+            _ => (bank, half_banks - 1),
+        };
+        let slot = if address < 0xC000 { first } else { second };
+        outer_bytes / 0x4000 + (slot % half_banks)
+    }
+
     fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
         Self {
             prg,
@@ -7264,6 +7287,143 @@ impl Mapper for OneBus256 {
 /// Byte size of one game slot on the reset-based MMC1 multicart (374).
 const MC374_WINDOW: usize = 0x2_0000;
 
+/// Mindkids SMD172B FPGA supervisor (mapper 446). The supervisor's `$5000`
+/// selects an emulated board; the local images all run the SKROM/MMC1 core,
+/// so the supervisor delegates to `Mmc1` and applies the `$5001-$5006`
+/// outer-bank, mask, flag and CHR-RAM registers around it.
+#[derive(Debug)]
+pub struct Supervisor446 {
+    prg: Vec<u8>,
+    inner: Mmc1,
+    aux: Rc<RefCell<Chr512>>,
+    submapper: u8,
+    select: u8,
+    outer_lo: u8,
+    outer_hi: u8,
+    mask: u8,
+    flags: u8,
+    protect: bool,
+    outer_chr: u8,
+}
+
+impl Supervisor446 {
+    fn new(prg: Vec<u8>, _chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+        let inner = Mmc1::new(prg.clone(), Vec::new(), prg_ram, header);
+        let mut aux = Chr512::new(Vec::new());
+        aux.ram = vec![0; 0x4_0000];
+        aux.ram_mode = true;
+        aux.ram_banked = true;
+        aux.set_banks([0, 1, 2, 3, 4, 5, 6, 7]);
+        Self {
+            prg,
+            inner,
+            aux: Rc::new(RefCell::new(aux)),
+            submapper: header.submapper,
+            select: 0,
+            outer_lo: 0,
+            outer_hi: 0,
+            mask: 0,
+            flags: 0,
+            protect: false,
+            outer_chr: 0,
+        }
+    }
+
+    fn sync_chr(&self) {
+        let base = usize::from(self.outer_chr & 0x1F) * 8;
+        let mut banks = [0u16; 8];
+        for (slot, bank) in banks.iter_mut().enumerate() {
+            *bank = (base + slot) as u16;
+        }
+        let mut aux = self.aux.borrow_mut();
+        aux.set_banks(banks);
+        aux.write_protect = self.protect;
+    }
+
+    /// Combine the inner 8 KiB bank with the outer bank using `$5003`.
+    ///
+    /// Submappers 0-1 use "set bit = outer bank bit"; submapper 2 inverts
+    /// that (set bit = inner bank bit).
+    fn merge(&self, bank8: usize) -> usize {
+        let m = usize::from(self.mask);
+        let outer = usize::from(self.outer_lo) | (usize::from(self.outer_hi) << 8);
+        if self.submapper >= 2 {
+            (bank8 & m) | (outer & (0xFF & !m))
+        } else {
+            (bank8 & !m) | (outer & m)
+        }
+    }
+}
+
+impl Mapper for Supervisor446 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        let page = self.inner.prg_page(address);
+        let bank8 = page * 2 + usize::from((address >> 13) & 1);
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let bank = self.merge(bank8) % banks;
+        self.prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x5000 => self.select = value,
+            0x5001 => self.outer_lo = value,
+            0x5002 => self.outer_hi = value,
+            0x5003 => self.mask = value,
+            0x5004 => self.flags = value,
+            0x5005 => {
+                self.protect = value & 0x10 != 0;
+                self.aux.borrow_mut().write_protect = self.protect;
+            }
+            0x5006 => {
+                self.outer_chr = value & 0x1F;
+                self.sync_chr();
+            }
+            _ if address >= 0x8000 => self.inner.prg_write(address, value),
+            _ => self.inner.prg_write(address, value),
+        }
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5006))
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.aux.borrow().read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.aux.borrow_mut().write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        // SKROM/MMC1 has software-selectable mirroring.
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        446
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        self.inner.prg_ram()
+    }
+
+    fn chr512(&self) -> Option<Rc<RefCell<Chr512>>> {
+        Some(self.aux.clone())
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x5004..=0x5006).contains(&address) || address >= 0x8000
+    }
+}
+
 /// Reset-based MMC1 multicart (mapper 374): each console reset increments
 /// the outer PRG/CHR window while MMC1 handles the inner banks.
 #[derive(Debug)]
@@ -12413,6 +12573,10 @@ pub struct Chr512 {
     rom: Vec<u8>,
     ram: Vec<u8>,
     ram_mode: bool,
+    /// `true` to index `ram` through `banks` instead of the flat 8 KiB.
+    ram_banked: bool,
+    /// `true` to ignore CHR-RAM writes (mapper 446 `$5005`).
+    write_protect: bool,
     vram_mode: bool,
     vram: [u8; 0x1000],
     banks: [u16; 8],
@@ -12424,6 +12588,8 @@ impl Chr512 {
             rom,
             ram: vec![0; 0x2000],
             ram_mode: false,
+            ram_banked: false,
+            write_protect: false,
             vram_mode: false,
             vram: [0; 0x1000],
             banks: [0; 8],
@@ -12436,6 +12602,11 @@ impl Chr512 {
 
     pub(crate) fn read(&self, address: u16) -> u8 {
         if self.ram_mode {
+            if self.ram_banked {
+                let slot = usize::from(address) / 0x400;
+                let offset = usize::from(self.banks[slot]) * 0x400 + usize::from(address & 0x3FF);
+                return self.ram.get(offset).copied().unwrap_or(0);
+            }
             return self
                 .ram
                 .get(usize::from(address & 0x1FFF))
@@ -12452,10 +12623,16 @@ impl Chr512 {
     }
 
     pub(crate) fn write(&mut self, address: u16, value: u8) {
-        if !self.ram_mode {
+        if !self.ram_mode || self.write_protect {
             return;
         }
-        if let Some(byte) = self.ram.get_mut(usize::from(address & 0x1FFF)) {
+        let index = if self.ram_banked {
+            let slot = usize::from(address) / 0x400;
+            usize::from(self.banks[slot]) * 0x400 + usize::from(address & 0x3FF)
+        } else {
+            usize::from(address & 0x1FFF)
+        };
+        if let Some(byte) = self.ram.get_mut(index) {
             *byte = value;
         }
     }
@@ -31043,6 +31220,51 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), c(6));
         cart.cpu_write(0x4106, 1);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn supervisor_446_skrom_and_chr_ram() {
+        // 512 KiB PRG, CHR-RAM, submapper 0 (SKROM / MMC1).
+        let rom = synth_banked(446, 512, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 446);
+        // MMC1 power-on mode 3: bank 0 at $8000, last 16 KiB at $C000.
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        // SUROM half 0: the fixed tail is the last bank of the first 256 KiB.
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 15 * 0x4000]);
+        // $5003 = 0 keeps the inner bank (outer bits unused for submapper 0).
+        cart.cpu_write(0x5003, 0);
+        cart.cpu_write(0x5001, 3);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        // CHR-RAM is banked by $5006 in 8 KiB pages.
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+        cart.cpu_write(0x5006, 1);
+        assert_eq!(cart.ppu_read(0x0000), 0);
+        cart.cpu_write(0x5006, 0);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+        // $5005 bit 4 protects CHR-RAM.
+        cart.cpu_write(0x5005, 0x10);
+        cart.ppu_write(0x0001, 0x77);
+        assert_eq!(cart.ppu_read(0x0001), 0);
+        cart.cpu_write(0x5005, 0x00);
+        cart.ppu_write(0x0001, 0x77);
+        assert_eq!(cart.ppu_read(0x0001), 0x77);
+    }
+
+    #[test]
+    fn supervisor_446_submapper2_outer_bank() {
+        // Submapper 2 inverts $5003: a clear bit selects the outer bank.
+        let mut rom = synth_banked(446, 512, 0);
+        rom[8] = (rom[8] & 0x0F) | (2 << 4);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 446);
+        cart.cpu_write(0x5003, 0);
+        cart.cpu_write(0x5001, 1);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x2000]);
+        // $5003 = $FF selects the inner bank again.
+        cart.cpu_write(0x5003, 0xFF);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
     }
 
     #[test]
