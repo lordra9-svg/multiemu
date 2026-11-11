@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::cart::{
-    A12Irq, Aux77, Chr169, Chr512, CpromChr, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr,
-    Vrc7Chr,
+    A12Irq, Aux77, Bandai153, Chr169, Chr512, CpromChr, HybridChr, Mirroring, Mmc5Aux, N163Nt,
+    OekaChr, Vrc7Chr,
 };
 use crate::clock::Timing;
 
@@ -168,6 +168,8 @@ pub struct Ppu {
     chr169: Option<Rc<RefCell<Chr169>>>,
     /// Shared 16 KiB CHR-RAM for CPROM (mapper 13).
     cprom_chr: Option<Rc<RefCell<CpromChr>>>,
+    /// Mapper 153's PPU-driven outer PRG bank state.
+    bandai153: Option<Rc<RefCell<Bandai153>>>,
     /// NMI output line.
     pub nmi_line: bool,
     /// Latched NMI edge waiting for the CPU.
@@ -332,6 +334,7 @@ impl Ppu {
             um_palette: [0; 64],
             chr169: None,
             cprom_chr: None,
+            bandai153: None,
             mmc2: None,
             hybrid: None,
             mmc5_aux: None,
@@ -587,6 +590,11 @@ impl Ppu {
         self.cprom_chr = Some(aux);
     }
 
+    /// Installs mapper 153's shared outer-bank state.
+    pub fn set_bandai153(&mut self, aux: Rc<RefCell<Bandai153>>) {
+        self.bandai153 = Some(aux);
+    }
+
     /// Writes one byte from a cartridge DMA transfer to the PPU bus.
     pub fn dma_write(&mut self, address: u16, value: u8) {
         self.write_vram(address, value);
@@ -594,6 +602,9 @@ impl Ppu {
 
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.bandai153 {
+            aux.borrow_mut().note_address(address);
+        }
         if let Some(aux) = &self.cprom_chr {
             return aux.borrow().read(address);
         }
@@ -1146,6 +1157,9 @@ impl Ppu {
     }
 
     fn read_nametable(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.bandai153 {
+            aux.borrow_mut().note_address(address);
+        }
         if let Some(aux) = &self.chr169 {
             let mut aux = aux.borrow_mut();
             aux.note_address(0x2000 | (address & 0x0FFF));

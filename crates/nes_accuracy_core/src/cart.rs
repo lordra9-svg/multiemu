@@ -655,6 +655,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Shared PPU-driven outer-bank state for mapper 153.
+    fn bandai153(&self) -> Option<Rc<RefCell<Bandai153>>> {
+        None
+    }
+
     /// Whether the board is a UM6578 enhanced famiclone.
     fn um6578(&self) -> bool {
         false
@@ -1410,6 +1415,11 @@ impl Cartridge {
     /// Shared 16 KiB CHR-RAM state, if the board provides it (mapper 13).
     pub fn cprom_chr(&self) -> Option<Rc<RefCell<CpromChr>>> {
         self.mapper.cprom_chr()
+    }
+
+    /// Shared PPU-driven outer-bank state, if any (mapper 153).
+    pub fn bandai153(&self) -> Option<Rc<RefCell<Bandai153>>> {
+        self.mapper.bandai153()
     }
 
     /// Whether the cartridge is a UM6578 enhanced famiclone.
@@ -25995,6 +26005,38 @@ impl Mapper for JyClone {
     }
 }
 
+/// Shared PPU-side state for mapper 153: the eight 1 KiB CHR bank registers
+/// double as the outer PRG bank. The board samples `banks[addr >> 10 & 3]`
+/// on PPU fetches, so the outer block follows the CHR register the PPU is
+/// currently reading.
+#[derive(Debug)]
+pub struct Bandai153 {
+    banks: [u8; 8],
+    outer: u8,
+}
+
+impl Bandai153 {
+    fn new() -> Self {
+        Self {
+            banks: [0; 8],
+            outer: 0,
+        }
+    }
+
+    pub(crate) fn set_bank(&mut self, slot: usize, value: u8) {
+        self.banks[slot & 0x07] = value;
+    }
+
+    pub(crate) fn note_address(&mut self, address: u16) {
+        let slot = (usize::from(address) >> 10) & 0x03;
+        self.outer = self.banks[slot] & 0x0F;
+    }
+
+    fn outer_bits(&self) -> usize {
+        usize::from(self.outer) << 4
+    }
+}
+
 /// Bandai FCG / LZ93D50 (mapper 16): 16 KiB PRG banks, eight 1 KiB CHR
 /// banks, mirroring control and a 16-bit CPU-cycle down-counter IRQ.
 #[derive(Debug)]
@@ -26010,8 +26052,8 @@ pub struct BandaiFcg {
     irq_enabled: bool,
     irq_pending: bool,
     mirroring: Mirroring,
-    /// Mapper 153 outer 256 KiB PRG bank (bit 0 of `$8000-$8003`).
-    outer: u8,
+    /// Mapper 153's PPU-driven outer PRG bank, shared with the PPU.
+    shared153: Option<Rc<RefCell<Bandai153>>>,
     /// Mapper 153 battery-backed 8 KiB WRAM and its `$800D` enable bit.
     wram: Vec<u8>,
     wram_enabled: bool,
@@ -26031,7 +26073,11 @@ impl BandaiFcg {
             irq_enabled: false,
             irq_pending: false,
             mirroring: header.mirroring,
-            outer: 0,
+            shared153: if number == 153 {
+                Some(Rc::new(RefCell::new(Bandai153::new())))
+            } else {
+                None
+            },
             wram: if number == 153 {
                 vec![0; 0x2000]
             } else {
@@ -26054,7 +26100,10 @@ impl Mapper for BandaiFcg {
     fn prg_read(&self, address: u16) -> u8 {
         if self.number == 153 {
             let banks = self.prg_bank_count();
-            let outer = usize::from(self.outer & 0x01) << 4;
+            let outer = self
+                .shared153
+                .as_ref()
+                .map_or(0, |shared| shared.borrow().outer_bits());
             return match address {
                 0x6000..=0x7FFF => {
                     if self.wram_enabled {
@@ -26102,8 +26151,14 @@ impl Mapper for BandaiFcg {
                 return;
             }
             match address & 0x0F {
-                0x00..=0x03 => self.outer = value & 0x01,
-                0x04..=0x07 => {}
+                0x00..=0x07 => {
+                    self.chr_banks[usize::from(address & 0x07)] = value;
+                    if let Some(shared) = &self.shared153 {
+                        shared
+                            .borrow_mut()
+                            .set_bank(usize::from(address & 0x07), value);
+                    }
+                }
                 0x08 => self.prg_bank = value & 0x0F,
                 0x09 => {
                     self.mirroring = match value & 0x03 {
@@ -26255,6 +26310,10 @@ impl Mapper for BandaiFcg {
         } else {
             &self.prg_ram
         }
+    }
+
+    fn bandai153(&self) -> Option<Rc<RefCell<Bandai153>>> {
+        self.shared153.clone()
     }
 
     fn irq_line(&self) -> bool {
@@ -35482,6 +35541,33 @@ mod tests {
     }
 
     #[test]
+    fn bandai_153_ppu_driven_outer_bank() {
+        // 1 MiB PRG (64 x 16 KiB), 8 KiB CHR-RAM.
+        let rom = synth_banked(153, 1024, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 153);
+        // $8000-$8007 are the CHR bank registers; the PPU samples
+        // banks[addr >> 10 & 3] into the outer PRG bank.
+        cart.cpu_write(0x8000, 0x01);
+        cart.cpu_write(0x8001, 0x02);
+        let shared = cart.bandai153().expect("shared state");
+        shared.borrow_mut().note_address(0x0000); // slot 0 -> outer 1
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x10 * 0x4000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x1F * 0x4000]);
+        shared.borrow_mut().note_address(0x0400); // slot 1 -> outer 2
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x20 * 0x4000]);
+        // $8008 is the inner 16 KiB bank.
+        cart.cpu_write(0x8008, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x23 * 0x4000]);
+        // $800D bit 5 enables the $6000 work RAM.
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0);
+        cart.cpu_write(0x800D, 0x20);
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+    }
+
+    #[test]
     fn mmc3_47_outer_bank() {
         // 512 KiB PRG, 32 KiB CHR.
         let rom = synth_banked(47, 512, 32);
@@ -37581,19 +37667,17 @@ mod tests {
     }
 
     #[test]
-    fn bandai_153_outer_bank_and_wram() {
+    fn bandai_153_wram_and_chr_ram() {
         // 512 KiB PRG (32 x 16 KiB), CHR-RAM.
         let rom = synth_banked(153, 512, 0);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.mapper(), 153);
-        assert_eq!(cart.cpu_read(0x8000), 0);
-        assert_eq!(cart.cpu_read(0xC000), 30);
-        // $8000-$8003 bit 0 selects the outer 256 KiB bank.
-        cart.cpu_write(0x8000, 0x01);
-        assert_eq!(cart.cpu_read(0x8000), 32);
-        assert_eq!(cart.cpu_read(0xC000), 62);
+        // Power-on: inner bank 0, fixed 0x0F, outer 0.
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x0F * 0x4000]);
+        // $8008 selects the inner 16 KiB bank.
         cart.cpu_write(0x8008, 0x03);
-        assert_eq!(cart.cpu_read(0x8000), 38);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x4000]);
         // $800D bit 5 enables the 8 KiB WRAM.
         cart.cpu_write(0x800D, 0x20);
         cart.cpu_write(0x6000, 0x42);
