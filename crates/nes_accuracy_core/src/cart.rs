@@ -7287,14 +7287,127 @@ impl Mapper for OneBus256 {
 /// Byte size of one game slot on the reset-based MMC1 multicart (374).
 const MC374_WINDOW: usize = 0x2_0000;
 
-/// Mindkids SMD172B FPGA supervisor (mapper 446). The supervisor's `$5000`
-/// selects an emulated board; the local images all run the SKROM/MMC1 core,
-/// so the supervisor delegates to `Mmc1` and applies the `$5001-$5006`
-/// outer-bank, mask, flag and CHR-RAM registers around it.
+/// Inner board an SMD172B supervisor can emulate.
+#[derive(Debug)]
+enum Inner446 {
+    /// SKROM/SNROM/SUROM (MMC1 family).
+    Skrom(Mmc1),
+    /// Any other emulated board, delegated as-is.
+    Board(Box<dyn Mapper>),
+}
+
+impl Mapper for Inner446 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match self {
+            Self::Skrom(m) => m.prg_read(address),
+            Self::Board(b) => b.prg_read(address),
+        }
+    }
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match self {
+            Self::Skrom(m) => m.prg_write(address, value),
+            Self::Board(b) => b.prg_write(address, value),
+        }
+    }
+    fn chr_read(&self, address: u16) -> u8 {
+        match self {
+            Self::Skrom(m) => m.chr_read(address),
+            Self::Board(b) => b.chr_read(address),
+        }
+    }
+    fn chr_write(&mut self, address: u16, value: u8) {
+        match self {
+            Self::Skrom(m) => m.chr_write(address, value),
+            Self::Board(b) => b.chr_write(address, value),
+        }
+    }
+    fn mirroring(&self) -> Mirroring {
+        match self {
+            Self::Skrom(m) => m.mirroring(),
+            Self::Board(b) => b.mirroring(),
+        }
+    }
+    fn number(&self) -> u16 {
+        match self {
+            Self::Skrom(m) => m.number(),
+            Self::Board(b) => b.number(),
+        }
+    }
+    fn prg_ram(&self) -> &[u8] {
+        match self {
+            Self::Skrom(m) => m.prg_ram(),
+            Self::Board(b) => b.prg_ram(),
+        }
+    }
+    fn low_window(&self) -> Option<(u16, u16)> {
+        match self {
+            Self::Skrom(m) => m.low_window(),
+            Self::Board(b) => b.low_window(),
+        }
+    }
+    fn chr512(&self) -> Option<Rc<RefCell<Chr512>>> {
+        match self {
+            Self::Skrom(m) => m.chr512(),
+            Self::Board(b) => b.chr512(),
+        }
+    }
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        match self {
+            Self::Skrom(m) => m.chr_mapping_write(address),
+            Self::Board(b) => b.chr_mapping_write(address),
+        }
+    }
+    fn irq_line(&self) -> bool {
+        match self {
+            Self::Skrom(m) => m.irq_line(),
+            Self::Board(b) => b.irq_line(),
+        }
+    }
+    fn clock_scanline(&mut self) {
+        match self {
+            Self::Skrom(m) => m.clock_scanline(),
+            Self::Board(b) => b.clock_scanline(),
+        }
+    }
+    fn clock_cpu(&mut self) {
+        match self {
+            Self::Skrom(m) => m.clock_cpu(),
+            Self::Board(b) => b.clock_cpu(),
+        }
+    }
+    fn acknowledge_irq(&mut self) {
+        match self {
+            Self::Skrom(m) => m.acknowledge_irq(),
+            Self::Board(b) => b.acknowledge_irq(),
+        }
+    }
+    fn soft_reset(&mut self) {
+        match self {
+            Self::Skrom(m) => m.soft_reset(),
+            Self::Board(b) => b.soft_reset(),
+        }
+    }
+    fn set_cpu_cycle(&mut self, cycle: u64) {
+        match self {
+            Self::Skrom(m) => m.set_cpu_cycle(cycle),
+            Self::Board(b) => b.set_cpu_cycle(cycle),
+        }
+    }
+}
+
+/// Mindkids SMD172B FPGA supervisor (mapper 446). `$5000` selects the
+/// emulated board; the local images keep the power-on board for their
+/// submapper (SKROM for 0, H3001 for 3), so the supervisor delegates to that
+/// core and layers `$5001-$5006` outer-bank, mask, flag and CHR-RAM
+/// registers around it.
 #[derive(Debug)]
 pub struct Supervisor446 {
     prg: Vec<u8>,
-    inner: Mmc1,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    ram: Vec<u8>,
+    header: Header,
+    inner: Inner446,
     aux: Rc<RefCell<Chr512>>,
     submapper: u8,
     select: u8,
@@ -7307,15 +7420,27 @@ pub struct Supervisor446 {
 }
 
 impl Supervisor446 {
-    fn new(prg: Vec<u8>, _chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
-        let inner = Mmc1::new(prg.clone(), Vec::new(), prg_ram, header);
+    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
         let mut aux = Chr512::new(Vec::new());
         aux.ram = vec![0; 0x4_0000];
         aux.ram_mode = true;
         aux.ram_banked = true;
         aux.set_banks([0, 1, 2, 3, 4, 5, 6, 7]);
+        let inner = if header.submapper >= 3 {
+            // H3001 is a 512 KiB board; the reset code sits in the last half
+            // of the 1 MiB image.
+            Inner446::Board(Box::new(Irem65::new(prg.clone(), chr.clone(), header)))
+        } else {
+            Inner446::Skrom(Mmc1::new(prg.clone(), Vec::new(), prg_ram.clone(), header))
+        };
+        let mut ram = prg_ram.clone();
+        ram.resize(0x2000, 0);
         Self {
             prg,
+            chr,
+            prg_ram,
+            ram,
+            header,
             inner,
             aux: Rc::new(RefCell::new(aux)),
             submapper: header.submapper,
@@ -7327,6 +7452,77 @@ impl Supervisor446 {
             protect: false,
             outer_chr: 0,
         }
+    }
+
+    fn is_skrom(&self) -> bool {
+        matches!(self.inner, Inner446::Skrom(_))
+    }
+
+    /// Build an emulated board for a `$5000` selection, if we have its core.
+    fn make_board(&self, mapper: u16) -> Option<Box<dyn Mapper>> {
+        let mut header = self.header;
+        header.mapper = mapper;
+        let prg = self.prg.clone();
+        let chr = self.chr.clone();
+        let ram = self.prg_ram.clone();
+        Some(match mapper {
+            2 => Box::new(UxRom::new(prg, chr, header)),
+            3 => Box::new(CnRom::new(prg, chr, header)),
+            4 => Box::new(Mmc3::new(prg, chr, header)),
+            7 => Box::new(AxRom::new(prg, chr, header)),
+            22 | 23 | 25 => Box::new(Vrc::new(prg, chr, ram, header)),
+            26 => Box::new(Vrc6::new(prg, chr, ram, header, 26)),
+            34 => Box::new(Nina::new(prg, chr, header)),
+            65 => Box::new(Irem65::new(prg, chr, header)),
+            66 => Box::new(GxRom::new(prg, chr, header)),
+            75 => Box::new(Vrc1::new(prg, chr, header)),
+            152 => Box::new(Bus152::new(prg, chr, header)),
+            189 => Box::new(Mmc3_32k::new(prg, chr, header)),
+            _ => return None,
+        })
+    }
+
+    /// Decode the `$5000` selection table for the cartridge's submapper.
+    fn select_inner(&mut self, value: u8) {
+        let id = value & 0x1F;
+        let mapper = match self.submapper {
+            0 => match id {
+                0x01 => None,
+                _ => None,
+            },
+            3 => match id {
+                0x01 => Some(65),
+                _ => None,
+            },
+            _ => match id {
+                0x00 => Some(2),
+                0x01 | 0x09 | 0x0A | 0x0D | 0x0E => Some(4),
+                0x02 => Some(34),
+                0x03 => Some(3),
+                0x04 => Some(7),
+                0x05..=0x07 => None,
+                0x08 => Some(66),
+                0x0B => Some(152),
+                0x0F => Some(189),
+                0x10 => Some(26),
+                0x12 => Some(22),
+                0x15 => Some(25),
+                0x18 => Some(23),
+                0x1A => Some(75),
+                _ => None,
+            },
+        };
+        self.inner = match mapper {
+            Some(id) if self.make_board(id).is_some() => {
+                Inner446::Board(self.make_board(id).expect("checked"))
+            }
+            _ => Inner446::Skrom(Mmc1::new(
+                self.prg.clone(),
+                Vec::new(),
+                self.prg_ram.clone(),
+                self.header,
+            )),
+        };
     }
 
     fn sync_chr(&self) {
@@ -7357,10 +7553,16 @@ impl Supervisor446 {
 
 impl Mapper for Supervisor446 {
     fn prg_read(&self, address: u16) -> u8 {
-        if address < 0x8000 {
+        let Inner446::Skrom(mmc1) = &self.inner else {
+            if (0x6000..=0x7FFF).contains(&address) {
+                return self.ram[usize::from(address - 0x6000)];
+            }
             return self.inner.prg_read(address);
+        };
+        if address < 0x8000 {
+            return mmc1.prg_read(address);
         }
-        let page = self.inner.prg_page(address);
+        let page = mmc1.prg_page(address);
         let bank8 = page * 2 + usize::from((address >> 13) & 1);
         let banks = (self.prg.len() / 0x2000).max(1);
         let bank = self.merge(bank8) % banks;
@@ -7372,7 +7574,10 @@ impl Mapper for Supervisor446 {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         match address {
-            0x5000 => self.select = value,
+            0x5000 => {
+                self.select = value;
+                self.select_inner(value);
+            }
             0x5001 => self.outer_lo = value,
             0x5002 => self.outer_hi = value,
             0x5003 => self.mask = value,
@@ -7385,7 +7590,9 @@ impl Mapper for Supervisor446 {
                 self.outer_chr = value & 0x1F;
                 self.sync_chr();
             }
-            _ if address >= 0x8000 => self.inner.prg_write(address, value),
+            _ if !self.is_skrom() && (0x6000..=0x7FFF).contains(&address) => {
+                self.ram[usize::from(address - 0x6000)] = value;
+            }
             _ => self.inner.prg_write(address, value),
         }
     }
@@ -7395,15 +7602,22 @@ impl Mapper for Supervisor446 {
     }
 
     fn chr_read(&self, address: u16) -> u8 {
-        self.aux.borrow().read(address)
+        if self.is_skrom() {
+            self.aux.borrow().read(address)
+        } else {
+            self.inner.chr_read(address)
+        }
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
-        self.aux.borrow_mut().write(address, value);
+        if self.is_skrom() {
+            self.aux.borrow_mut().write(address, value);
+        } else {
+            self.inner.chr_write(address, value);
+        }
     }
 
     fn mirroring(&self) -> Mirroring {
-        // SKROM/MMC1 has software-selectable mirroring.
         self.inner.mirroring()
     }
 
@@ -7412,15 +7626,43 @@ impl Mapper for Supervisor446 {
     }
 
     fn prg_ram(&self) -> &[u8] {
-        self.inner.prg_ram()
+        if self.is_skrom() {
+            self.inner.prg_ram()
+        } else {
+            &self.ram
+        }
     }
 
     fn chr512(&self) -> Option<Rc<RefCell<Chr512>>> {
-        Some(self.aux.clone())
+        if self.is_skrom() {
+            Some(self.aux.clone())
+        } else {
+            self.inner.chr512()
+        }
     }
 
     fn chr_mapping_write(&self, address: u16) -> bool {
-        (0x5004..=0x5006).contains(&address) || address >= 0x8000
+        (0x5004..=0x5006).contains(&address) || self.inner.chr_mapping_write(address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn clock_cpu(&mut self) {
+        self.inner.clock_cpu();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+
+    fn set_cpu_cycle(&mut self, cycle: u64) {
+        self.inner.set_cpu_cycle(cycle);
     }
 }
 
@@ -13844,8 +14086,11 @@ impl Irem65 {
 
     fn prg_offset(&self, address: u16) -> usize {
         let total = (self.prg.len() / 0x2000).max(1);
-        let fixed_last = 0x3F % total;
-        let fixed_second = 0x3E % total;
+        // H3001 fixes the last two 8 KiB banks. For the <=512 KiB boards this
+        // is 0x3F/0x3E; larger images (the 446 supervisor passes 1 MiB) need
+        // the true end of the image.
+        let fixed_last = total - 1;
+        let fixed_second = total.saturating_sub(2);
         let bank = match (address & 0xE000, self.prg_layout) {
             (0x8000, false) => usize::from(self.prg_reg0),
             (0x8000, true) => fixed_second,
@@ -31220,6 +31465,20 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), c(6));
         cart.cpu_write(0x4106, 1);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn supervisor_446_submapper3_h3001_tail() {
+        // 1 MiB image: submapper 3 boots H3001 over the whole image, whose
+        // fixed tail is the true last 8 KiB bank.
+        let mut rom = synth_banked(446, 1024, 0);
+        rom[8] = (rom[8] & 0x0F) | (3 << 4);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 446);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 127 * 0x2000]);
+        // $5000 = 01 keeps H3001 selected.
+        cart.cpu_write(0x5000, 0x01);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 127 * 0x2000]);
     }
 
     #[test]
