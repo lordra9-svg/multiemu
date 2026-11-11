@@ -26,16 +26,16 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 7,038 | 99.1% |
-| Rendering | 3,816 | 53.7% |
+| Loaded (mapper implemented) | 7,039 | 99.1% |
+| Rendering | 3,817 | 53.8% |
 | Blank | 3,222 | 45.4% |
-| Unsupported mapper | 35 | 0.5% |
+| Unsupported mapper | 34 | 0.5% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 169 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 7,038 (93.3% → 99.1%) and unsupported fell 446 → 35 (6.3% → 0.5%);
-20 mapper IDs remain (the ranking prints the top 80), led by 355/547/594
+audit, 170 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 7,039 (93.3% → 99.1%) and unsupported fell 446 → 34 (6.3% → 0.5%);
+19 mapper IDs remain (the ranking prints the top 80), led by 355/547/594
 (4 images each) and 394 (3).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
@@ -155,11 +155,11 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   183, 187, 188, 190, 191, 192, 194, 198, 205, 208, 218, 219, 221,
   225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254, 256, 258,
   262, 263, 264, 266, 284, 285, 289, 290, 292, 298, 299, 301, 302,
-  303, 304, 305, 306, 307, 308, 309, 312, 313, 314, 332, 346, 347,
-  351, 359, 368, 374, 380, 389, 396, 399, 400, 413, 415, 417, 422,
-  446, 470, 487, 493, 512, 513, 515, 516, 517, 518, 519, 521, 522,
-  523, 525, 526, 529, 530, 533, 534, 535, 538, 539, 540, 544, 548,
-  549, 551, 552, 553, 554)** — 169 boards
+  303, 304, 305, 306, 307, 308, 309, 312, 313, 314, 332, 334, 346,
+  347, 351, 359, 368, 374, 380, 389, 396, 399, 400, 413, 415, 417,
+  422, 446, 470, 487, 493, 512, 513, 515, 516, 517, 518, 519, 521,
+  522, 523, 525, 526, 529, 530, 533, 534, 535, 538, 539, 540, 544,
+  548, 549, 551, 552, 553, 554)** — 170 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
@@ -183,9 +183,9 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   351 MMC3 mode, plus the 380 address-latched multicart, the 413
   BATMAP-SRR-X, the 525 KS7021A VRC4 conversion, the 549 KS7016B latch, the
   515 Noraebang board, the 554 read-triggered conversion, the 374 reset-based
-  MMC1 multicart and the 446 SMD172B supervisor, whose `$5000` table maps
-  onto the UNROM/CNROM/MMC3/AxROM/GNROM/NINA/VRC1/VRC2-4/VRC6/152/189/H3001
-  cores. The 256 OneBus
+  MMC1 multicart, the 446 SMD172B supervisor, whose `$5000` table maps onto
+  the UNROM/CNROM/MMC3/AxROM/GNROM/NINA/VRC1/VRC2-4/VRC6/152/189/H3001
+  cores, and the 334 32 KiB-bank multicart. The 256 OneBus
   core is partial: all five images load and boot, two reach video by 120
   frames. At 120 frames, 16 of the MesenCE group's 18 local images render
   (the two blanks are MesenCE-blank boot screens too); the 20-frame audit
@@ -417,7 +417,7 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 
 ## Unsupported mappers
 
-35 images (0.5%) name a mapper with no implementation across 20 IDs. The
+34 images (0.5%) name a mapper with no implementation across 19 IDs. The
 largest groups are 355/547/594 (4 images each) and 394 (3); the rest are
 one- and two-image boards. The sections below record the reference material
 for each ID and what still blocks it.
@@ -436,7 +436,7 @@ board loads and boots but does not render, or renders only some images.
 | 272 | bootleg Boku Dracula-kun | unimplemented | [NES 2.0 Mapper 272](https://www.nesdev.org/wiki/NES_2.0_Mapper_272) |
 | 326 | Contra pirate | unimplemented | [NES 2.0 Mapper 326](https://www.nesdev.org/wiki/NES_2.0_Mapper_326) |
 | 330 | Sangokushi III pirate | unimplemented | [NES 2.0 Mapper 330](https://www.nesdev.org/wiki/NES_2.0_Mapper_330) |
-| 334 | 5-in-1 multicart | unimplemented | [NES 2.0 Mapper 334](https://www.nesdev.org/wiki/NES_2.0_Mapper_334) |
+| 334 | 5/20-in-1 1993 multicart | implemented | [NES 2.0 Mapper 334](https://www.nesdev.org/wiki/NES_2.0_Mapper_334) |
 | 355 | 3D-BLOCK (PIC16C54) | unimplemented | [NES 2.0 Mapper 355](https://www.nesdev.org/wiki/NES_2.0_Mapper_355) |
 | 374 | reset-based MMC1 multicart | implemented | [NES 2.0 Mapper 374](https://www.nesdev.org/wiki/NES_2.0_Mapper_374) |
 | 394 | Realtec HSK007 | unimplemented | [NES 2.0 Mapper 394](https://www.nesdev.org/wiki/NES_2.0_Mapper_394) |
