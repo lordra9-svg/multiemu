@@ -4673,6 +4673,7 @@ pub struct Ntdec63 {
     chr: Vec<u8>,
     prg_bank: u8,
     prg32: bool,
+    chr_protect: bool,
     mirroring: Mirroring,
 }
 
@@ -4682,7 +4683,9 @@ impl Ntdec63 {
             prg,
             chr,
             prg_bank: 0,
-            prg32: true,
+            // Reset latches address 0: 16 KiB mode, bitmap mapping.
+            prg32: false,
+            chr_protect: false,
             mirroring: header.mirroring,
         }
     }
@@ -4699,6 +4702,15 @@ impl Ntdec63 {
 impl Mapper for Ntdec63 {
     fn prg_read(&self, address: u16) -> u8 {
         let base = usize::from(self.prg_bank);
+        // NRS exposes open bus when the latched bank is past the ROM.
+        let bank_bytes = if self.prg32 {
+            (base >> 1) * 0x8000
+        } else {
+            base * 0x4000
+        };
+        if bank_bytes >= self.prg.len() {
+            return 0xFF;
+        }
         match address {
             0x8000..=0xBFFF => {
                 let bank = base & if self.prg32 { !1 } else { usize::MAX };
@@ -4714,8 +4726,11 @@ impl Mapper for Ntdec63 {
 
     fn prg_write(&mut self, address: u16, _value: u8) {
         if address >= 0x8000 {
-            self.prg_bank = ((address >> 2) & 0x3F) as u8;
-            self.prg32 = address & 0x02 == 0;
+            // NRS: prg = addr >> 2 & 0xFF; bit 1 selects 32 KiB mode;
+            // bit 10 (submapper 0) write-protects CHR-RAM.
+            self.prg_bank = ((address >> 2) & 0xFF) as u8;
+            self.prg32 = address & 0x02 != 0;
+            self.chr_protect = address & 0x0400 != 0;
             self.mirroring = if address & 0x01 != 0 {
                 Mirroring::Horizontal
             } else {
@@ -4732,6 +4747,9 @@ impl Mapper for Ntdec63 {
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
+        if self.chr_protect {
+            return;
+        }
         if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
             *byte = value;
         }
@@ -35538,6 +35556,38 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
         cart.cpu_write(0x6000, 0x04);
         assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
+    }
+
+    #[test]
+    fn ntdec_63_latch_width_and_modes() {
+        // 3 MiB PRG (192 x 16 KiB), CHR-RAM.
+        let rom = synth_banked(63, 3072, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 63);
+        // Reset: 16 KiB bank 0 mirrored at both windows.
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16]);
+        // Latch address $8100 -> 8-bit bank 64 (the old 6-bit mask lost it).
+        cart.cpu_write(0x8100, 0);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 64 * 0x4000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 64 * 0x4000]);
+        // Address bit 1 selects 32 KiB mode (banks 64/65).
+        cart.cpu_write(0x8102, 0);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 64 * 0x4000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 65 * 0x4000]);
+        // Address bit 0 selects horizontal mirroring.
+        cart.cpu_write(0x8001, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        // Banks past the ROM read as open bus.
+        cart.cpu_write(0x83C0, 0);
+        assert_eq!(cart.cpu_read(0x8000), 0xFF);
+        // Address bit 10 write-protects CHR-RAM.
+        cart.cpu_write(0x8400, 0);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x00);
+        cart.cpu_write(0x8000, 0);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
     }
 
     #[test]
