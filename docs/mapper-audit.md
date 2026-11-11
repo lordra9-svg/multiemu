@@ -26,16 +26,16 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 7,046 | 99.2% |
-| Rendering | 3,824 | 53.9% |
-| Blank | 3,222 | 45.4% |
-| Unsupported mapper | 27 | 0.4% |
+| Loaded (mapper implemented) | 7,051 | 99.3% |
+| Rendering | 3,826 | 53.9% |
+| Blank | 3,225 | 45.4% |
+| Unsupported mapper | 22 | 0.3% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 173 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 7,046 (93.3% → 99.2%) and unsupported fell 446 → 27 (6.3% → 0.4%);
-16 mapper IDs remain (the ranking prints the top 80), led by 355/547/594
+audit, 177 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 7,051 (93.3% → 99.3%) and unsupported fell 446 → 22 (6.3% → 0.3%);
+12 mapper IDs remain (the ranking prints the top 80), led by 355/547/594
 (4 images each).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
@@ -150,16 +150,16 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   600 frames.
 - **Mapper completion sweep (12, 14, 15, 27, 28, 29, 31, 37, 38, 40, 41, 43, 45, 46, 47, 50, 52,
   57, 62, 63, 65, 67, 70, 72, 73, 74, 78, 81, 89, 90, 92, 93, 94, 96,
-  97, 103, 104, 105, 106, 107, 117, 119, 120, 122, 123, 125, 133, 134,
-  137, 140, 144, 145, 147, 149, 153, 155, 157, 167, 168, 170, 180,
-  183, 187, 188, 190, 191, 192, 194, 198, 205, 208, 218, 219, 221,
-  225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254, 256, 258,
-  262, 263, 264, 266, 272, 284, 285, 289, 290, 292, 298, 299, 301,
-  302, 303, 304, 305, 306, 307, 308, 309, 312, 313, 314, 332, 334,
-  346, 347, 351, 359, 368, 374, 380, 389, 394, 396, 399, 400, 413,
-  415, 417, 418, 422, 446, 470, 487, 493, 512, 513, 515, 516, 517,
-  518, 519, 521, 522, 523, 525, 526, 529, 530, 533, 534, 535, 538,
-  539, 540, 544, 548, 549, 551, 552, 553, 554)** — 173 boards
+  97, 103, 104, 105, 106, 107, 117, 119, 120, 122, 123, 125, 127, 133,
+  134, 137, 140, 144, 145, 147, 149, 153, 155, 157, 167, 168, 170,
+  180, 183, 186, 187, 188, 190, 191, 192, 194, 198, 205, 208, 218,
+  219, 221, 225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254,
+  256, 258, 262, 263, 264, 266, 272, 284, 285, 289, 290, 292, 298,
+  299, 301, 302, 303, 304, 305, 306, 307, 308, 309, 312, 313, 314,
+  326, 332, 334, 346, 347, 351, 359, 368, 374, 380, 389, 394, 396,
+  399, 400, 413, 415, 417, 418, 422, 446, 470, 487, 493, 512, 513,
+  515, 516, 517, 518, 519, 521, 522, 523, 525, 526, 529, 530, 533,
+  534, 535, 538, 539, 540, 544, 548, 549, 551, 552, 553, 554, 557)** — 177 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
@@ -186,7 +186,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   MMC1 multicart, the 446 SMD172B supervisor, whose `$5000` table maps onto
   the UNROM/CNROM/MMC3/AxROM/GNROM/NINA/VRC1/VRC2-4/VRC6/152/189/H3001
   cores, the 334 32 KiB-bank multicart and the 394 HSK007 256 KiB-slice
-  multicart, plus the 272 J-2012-II and 418 NINA-118 boards. The 256 OneBus
+  multicart, plus the 272 J-2012-II, 418 NINA-118, 127 Double Dragon pirate,
+  186 Study Box, 326 Gryzor and 557 NTDEC boards. The 256 OneBus
   core is partial: all five images load and boot, two reach video by 120
   frames. At 120 frames, 16 of the MesenCE group's 18 local images render
   (the two blanks are MesenCE-blank boot screens too); the 20-frame audit
@@ -418,7 +419,7 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 
 ## Unsupported mappers
 
-27 images (0.4%) name a mapper with no implementation across 16 IDs. The
+22 images (0.3%) name a mapper with no implementation across 12 IDs. The
 largest groups are 355/547/594 (4 images each); the rest are one- and
 two-image boards. The sections below record the reference material
 for each ID and what still blocks it.
@@ -430,12 +431,12 @@ board loads and boots but does not render, or renders only some images.
 
 | Mapper | Notes | Status | NESdev reference |
 |---:|---|---|---|
-| 127 | pirate Double Dragon II | unimplemented | [INES Mapper 127](https://www.nesdev.org/wiki/INES_Mapper_127) |
+| 127 | pirate Double Dragon II | implemented | [INES Mapper 127](https://www.nesdev.org/wiki/INES_Mapper_127) |
 | 169 | Yuxing 1 MiB PRG | unimplemented | [INES Mapper 169](https://www.nesdev.org/wiki/INES_Mapper_169) |
-| 186 | Study Box (BIOS device) | unimplemented | [INES Mapper 186](https://www.nesdev.org/wiki/INES_Mapper_186) |
+| 186 | Fukutake Study Box | implemented | [INES Mapper 186](https://www.nesdev.org/wiki/INES_Mapper_186) |
 | 256 | VT02+/VT03 OneBus | partial (2/5 render) | [NES 2.0 Mapper 256](https://www.nesdev.org/wiki/NES_2.0_Mapper_256) |
 | 272 | J-2012-II bootleg | implemented | [NES 2.0 Mapper 272](https://www.nesdev.org/wiki/NES_2.0_Mapper_272) |
-| 326 | Contra pirate | unimplemented | [NES 2.0 Mapper 326](https://www.nesdev.org/wiki/NES_2.0_Mapper_326) |
+| 326 | Gryzor/Contra bootleg | implemented | [NES 2.0 Mapper 326](https://www.nesdev.org/wiki/NES_2.0_Mapper_326) |
 | 330 | Sangokushi III pirate | unimplemented | [NES 2.0 Mapper 330](https://www.nesdev.org/wiki/NES_2.0_Mapper_330) |
 | 334 | 5/20-in-1 1993 multicart | implemented | [NES 2.0 Mapper 334](https://www.nesdev.org/wiki/NES_2.0_Mapper_334) |
 | 355 | 3D-BLOCK (PIC16C54) | unimplemented | [NES 2.0 Mapper 355](https://www.nesdev.org/wiki/NES_2.0_Mapper_355) |
@@ -450,7 +451,7 @@ board loads and boots but does not render, or renders only some images.
 | 549 | Kaiser KS7016B | partial (blank) | [NES 2.0 Mapper 549](https://www.nesdev.org/wiki/NES_2.0_Mapper_549) |
 | 554 | Kaiser KS-7010 | implemented | [NES 2.0 Mapper 554](https://www.nesdev.org/wiki/NES_2.0_Mapper_554) |
 | 555 | Campus Challenge 1991 | unimplemented | [NES 2.0 Mapper 555](https://www.nesdev.org/wiki/NES_2.0_Mapper_555) |
-| 557 | NTDEC 2718 | unimplemented | [NES 2.0 Mapper 557](https://www.nesdev.org/wiki/NES_2.0_Mapper_557) |
+| 557 | NTDEC 2718 | implemented | [NES 2.0 Mapper 557](https://www.nesdev.org/wiki/NES_2.0_Mapper_557) |
 | 594 | Rinco Talkman (OKI ADPCM) | unimplemented | [NES 2.0 Mapper 594](https://www.nesdev.org/wiki/NES_2.0_Mapper_594) |
 
 ### Tail triage (IDs at 6-7 images)
