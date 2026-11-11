@@ -1031,7 +1031,7 @@ impl Cartridge {
             298 => Box::new(Tf1201::new(prg_rom, chr, header)),
             301 => Box::new(DiscreteBmc::new(prg_rom, chr, header, 301)),
             302 => Box::new(Ks7057::new(prg_rom, chr, header)),
-            303 => Box::new(Kaiser303::new(prg_rom, chr, header)),
+            303 => Box::new(Kaiser303::new(prg_rom, chr, prg_ram, header)),
             304 => Box::new(Smb2j304::new(prg_rom, chr, header)),
             305 => Box::new(KaiserMisc::new(prg_rom, chr, header, 305)),
             308 => Box::new(Th2131::new(prg_rom, chr, prg_ram, header)),
@@ -2746,6 +2746,9 @@ impl Mapper for Whirlwind40 {
 pub struct Kaiser303 {
     prg: Vec<u8>,
     chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    /// Latched PRG bank, committed by a write to $5100.
+    latch: u8,
     prg16: u8,
     mirroring: Mirroring,
     irq_counter: u16,
@@ -2754,10 +2757,13 @@ pub struct Kaiser303 {
 }
 
 impl Kaiser303 {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, _header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
         Self {
             prg,
             chr,
+            prg_ram,
+            latch: 0,
             prg16: 0,
             // KS-7017 powers on with vertical mirroring (Mesen InitMapper).
             mirroring: Mirroring::Vertical,
@@ -2774,9 +2780,11 @@ impl Kaiser303 {
 
 impl Mapper for Kaiser303 {
     fn prg_read(&self, address: u16) -> u8 {
+        if (0x6000..=0x7FFF).contains(&address) {
+            return self.prg_ram[usize::from(address - 0x6000)];
+        }
         let banks = self.prg_bank_count();
         let bank = match address {
-            0x4020..=0x5FFF => return 0,
             0x8000..=0xBFFF => usize::from(self.prg16) % banks,
             0xC000..=0xFFFF => 2 % banks,
             _ => return 0,
@@ -2797,8 +2805,13 @@ impl Mapper for Kaiser303 {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        if address & 0xFF00 == 0x4A00 {
-            self.prg16 = ((((address >> 2) & 0x03) | ((address >> 4) & 0x04)) & 0x07) as u8;
+        if (0x6000..=0x7FFF).contains(&address) {
+            self.prg_ram[usize::from(address - 0x6000)] = value;
+        } else if address & 0xFF00 == 0x4A00 {
+            // Latch only; the bank takes effect on the next $5100 write.
+            self.latch = ((((address >> 2) & 0x03) | ((address >> 4) & 0x04)) & 0x07) as u8;
+        } else if address & 0xFF00 == 0x5100 {
+            self.prg16 = self.latch;
         } else {
             match address {
                 0x4020 => {
@@ -2845,6 +2858,10 @@ impl Mapper for Kaiser303 {
 
     fn low_window(&self) -> Option<(u16, u16)> {
         Some((0x4030, 0x4030))
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
     }
 
     fn irq_line(&self) -> bool {
@@ -34533,6 +34550,39 @@ mod tests {
     }
 
     #[test]
+    fn kaiser303_latch_wram_and_irq() {
+        // 128 KiB PRG, CHR-RAM.
+        let rom = synth_banked(303, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 303);
+        // $6000-$7FFF is 8 KiB unbanked WRAM.
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+        // $4A00 latches the bank, but it is not applied until $5100.
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        cart.cpu_write(0x4A04, 0);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        cart.cpu_write(0x5100, 0);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x4000]);
+        // $C000-$FFFF is fixed to 16 KiB bank 2.
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 2 * 0x4000]);
+        // $4025 bit 3 selects mirroring.
+        cart.cpu_write(0x4025, 0x08);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x4025, 0x00);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        // 16-bit CPU-cycle IRQ.
+        cart.cpu_write(0x4020, 0x10);
+        cart.cpu_write(0x4021, 0x00);
+        for _ in 0..0x10 {
+            cart.clock_cpu();
+        }
+        assert!(cart.irq_line());
+        assert_eq!(cart.cpu_read_io(0x4030), 1);
+        assert!(!cart.irq_line());
+    }
+
+    #[test]
     fn fds42_banks_and_irq() {
         // Mario Baby (CHR-RAM): $E000 registers, mirroring and 15-bit IRQ.
         let rom = synth_banked(42, 128, 0);
@@ -38068,8 +38118,10 @@ mod tests {
             "fixed 16 KiB bank 2 starts at 8 KiB bank 4"
         );
 
-        // $4A00-$4AFF address lines select the 16 KiB bank.
+        // $4A00-$4AFF latches the 16 KiB bank; $5100 commits it.
         cart.cpu_write(0x4A04, 0);
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        cart.cpu_write(0x5100, 0);
         assert_eq!(cart.cpu_read(0x8000), 2);
 
         // $4020/$4021 load a 16-bit down-counter; $4030 acknowledges.
