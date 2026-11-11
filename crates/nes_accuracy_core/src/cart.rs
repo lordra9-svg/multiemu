@@ -1005,6 +1005,7 @@ impl Cartridge {
             332 => Box::new(Multicart332::new(prg_rom, chr)),
             346 => Box::new(Ks7012::new(prg_rom, chr, prg_ram, header)),
             347 => Box::new(Ks7030::new(prg_rom, chr, prg_ram, header)),
+            380 => Box::new(Multicart380::new(prg_rom, chr, header)),
             389 => Box::new(Caltron389::new(prg_rom, chr, header)),
             396 => Box::new(Realtec396::new(prg_rom, chr, header)),
             399 => Box::new(Batmap399::new(prg_rom, chr, header)),
@@ -6684,6 +6685,115 @@ impl Mapper for LuckyRabbit415 {
 
     fn prg_rom_at_6000(&self) -> bool {
         true
+    }
+}
+
+/// 970630C / KN-35A multicart (mapper 380): an address-latched UNROM /
+/// NROM board with 16/32 KiB inner banks and CHR-RAM.
+#[derive(Debug)]
+pub struct Multicart380 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    latch: u16,
+    mirroring: Mirroring,
+}
+
+impl Multicart380 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            latch: 0,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn bank18_14(&self) -> usize {
+        usize::from((self.latch >> 3) & 0x1F)
+    }
+
+    fn inner16(&self) -> usize {
+        if self.latch & 0x01 != 0 {
+            ((self.bank18_14() & 0x1E) | usize::from((self.latch >> 2) & 0x01)) & 0x0F
+        } else {
+            (self.bank18_14() >> 1) & 0x0F
+        }
+    }
+
+    fn prg_16k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        self.prg
+            .get((bank % banks) * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_32k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x8000).max(1);
+        self.prg
+            .get((bank % banks) * 0x8000 + usize::from(address - 0x8000))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Multicart380 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let nrom = self.latch & 0x0200 != 0;
+        if nrom {
+            if self.latch & 0x0001 != 0 {
+                let bank = self.inner16();
+                self.prg_16k(bank, address)
+            } else {
+                let bank = (self.bank18_14() >> 1) & 0x0F;
+                self.prg_32k(bank, address)
+            }
+        } else {
+            match address {
+                0x8000..=0xBFFF => self.prg_16k(self.inner16(), address),
+                _ => self.prg_16k(7, address),
+            }
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            self.latch = address & 0x03FF;
+            self.mirroring = if self.latch & 0x02 != 0 {
+                Mirroring::Horizontal
+            } else {
+                Mirroring::Vertical
+            };
+            let _ = value;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        380
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
     }
 }
 
@@ -29991,6 +30101,24 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0x82);
         cart.cpu_write(0x6000, 0x42);
         assert_eq!(cart.cpu_read(0x6000), 0x42);
+    }
+
+    #[test]
+    fn multicart_380_latch() {
+        // 512 KiB PRG, CHR-RAM.
+        let rom = synth_banked(380, 512, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 380);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 7 * 0x4000]);
+        cart.cpu_write(0x8010, 0);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x4000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 7 * 0x4000]);
+        cart.cpu_write(0x8012, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x8210, 0);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x8000]);
+        assert_eq!(cart.cpu_read(0xFFFF), rom[16 + 2 * 0x8000 - 1]);
     }
 
     #[test]
