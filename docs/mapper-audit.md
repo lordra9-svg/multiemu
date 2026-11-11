@@ -27,7 +27,7 @@ unko corpus <library-dir> --mapper 136 --frames 600
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
 | Loaded (mapper implemented) | 7,073 | 99.6% |
-| Rendering | 3,842 | 54.1% |
+| Rendering | 3,845 | 54.1% |
 | Blank | 3,229 | 45.5% |
 | Unsupported mapper | 0 | 0.0% |
 | Load/run failure | 28 | 0.39% |
@@ -427,9 +427,9 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 **None.** All 7,073 images with a valid iNES/NES 2.0 header name a mapper that
 now has an implementation. The 28 remaining non-loading images are truncated
 dumps, not unsupported boards; the partial ports below still need hardware
-work (256, and the 446 supervisor's remaining inner-board and flash cases;
-446 renders 3/4 by 240 frames but is still blank at the 20-frame smoke point
-because its multicart loader runs for ~1-2 s).
+work (the 446 supervisor's remaining inner-board and flash cases; 446 renders
+3/4 by 240 frames but is still blank at the 20-frame smoke point because its
+multicart loader runs for ~1-2 s).
 
 ### NESdev references
 
@@ -441,7 +441,7 @@ board loads and boots but does not render, or renders only some images.
 | 127 | pirate Double Dragon II | implemented | [INES Mapper 127](https://www.nesdev.org/wiki/INES_Mapper_127) |
 | 169 | Yuxing educational computer | implemented | [INES Mapper 169](https://www.nesdev.org/wiki/INES_Mapper_169) |
 | 186 | Fukutake Study Box | implemented | [INES Mapper 186](https://www.nesdev.org/wiki/INES_Mapper_186) |
-| 256 | VT02+/VT03 OneBus | partial (2/5 render) | [NES 2.0 Mapper 256](https://www.nesdev.org/wiki/NES_2.0_Mapper_256) |
+| 256 | VT02+/VT03 OneBus | implemented (5/5 by 120 frames) | [NES 2.0 Mapper 256](https://www.nesdev.org/wiki/NES_2.0_Mapper_256) |
 | 272 | J-2012-II bootleg | implemented | [NES 2.0 Mapper 272](https://www.nesdev.org/wiki/NES_2.0_Mapper_272) |
 | 326 | Gryzor/Contra bootleg | implemented | [NES 2.0 Mapper 326](https://www.nesdev.org/wiki/NES_2.0_Mapper_326) |
 | 330 | Sangokushi II bootleg (N163) | implemented | [NES 2.0 Mapper 330](https://www.nesdev.org/wiki/NES_2.0_Mapper_330) |

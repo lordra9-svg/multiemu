@@ -301,7 +301,7 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-7,073 loaded (99.6%), 3,842 rendering (54.1%), 3,231 blank (45.5%), 0
+7,073 loaded (99.6%), 3,845 rendering (54.1%), 3,228 blank (45.5%), 0
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
 The sweep added the MesenCE-only 208/219/258/284/298/302/307/346 group,
@@ -312,7 +312,10 @@ the 43/106/170/
 400/544 pair, the 308/368/470 group, the Techline 351 MMC3 mode and mapper
 380, mapper 413, the 525 KS7021A VRC4 conversion, the 549 KS7016B latch
 (now rendering; it boots with the PPU off for ~0.5 s),
-the 515/554 pair, the 256 OneBus core, the 374 reset-based MMC1 multicart and
+the 515/554 pair, the 256 OneBus core (its middle-bank merge no longer
+shifts, COMR6 swaps only the even slots, the submapper-1 CHR register order
+is applied, and CHR-less images read CHR from the PRG space: all five local
+images render by 120 frames, three at 20), the 374 reset-based MMC1 multicart and
 the 446 SMD172B supervisor are now implemented. The supervisor decodes the
 full `$5000` board table onto the UNROM/CNROM/MMC3/AxROM/GNROM/NINA/VRC1/
 VRC2-4/VRC6/152/189/H3001 cores. It now uses NRS's fixed unlocked mapping
@@ -1063,7 +1066,7 @@ contract as the RustyNES oracle.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **7,073 loaded, 3,842 rendering, 3,231 blank, 0 unsupported
+  audit is **7,073 loaded, 3,845 rendering, 3,228 blank, 0 unsupported
   (0 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.
