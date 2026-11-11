@@ -32744,14 +32744,15 @@ pub struct Fds42 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     chr_ram: bool,
-    /// Kaiser KS-7050 variant (CHR-ROM present).
-    kaiser: bool,
     prg_bank: u8,
     chr_bank: u8,
     mirroring: Mirroring,
     irq_counter: u16,
     irq_enabled: bool,
     irq_pending: bool,
+    /// Set by a `$4030` read; suppresses the level IRQ until the counter
+    /// leaves the asserted half of its 15-bit period.
+    irq_ack: bool,
 }
 
 impl Fds42 {
@@ -32760,19 +32761,33 @@ impl Fds42 {
             prg,
             chr,
             chr_ram: header.chr_size == 0,
-            kaiser: header.chr_size != 0,
-            // KS-7050 powers on with the last 8 KiB PRG bank in $6000.
-            prg_bank: if header.chr_size != 0 { 0xFF } else { 0 },
+            prg_bank: 0,
             chr_bank: 0,
             mirroring: header.mirroring,
             irq_counter: 0,
             irq_enabled: false,
             irq_pending: false,
+            irq_ack: false,
         }
     }
 }
 
 impl Mapper for Fds42 {
+    fn low_window(&self) -> Option<(u16, u16)> {
+        // The patched BIOS acknowledges its timer through the FDS `$4030`
+        // status register.
+        Some((0x4030, 0x4030))
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if address == 0x4030 {
+            let value = u8::from(self.irq_pending && !self.irq_ack);
+            self.irq_ack = true;
+            return value;
+        }
+        self.prg_read(address)
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => {
@@ -32790,16 +32805,6 @@ impl Mapper for Fds42 {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        if self.kaiser {
-            // KS-7050: $8000-$8FFF selects CHR, $E000-$FFFF selects PRG;
-            // mirroring and IRQ are fixed/absent.
-            if (0x8000..=0x8FFF).contains(&address) {
-                self.chr_bank = value;
-            } else if address >= 0xE000 {
-                self.prg_bank = value;
-            }
-            return;
-        }
         match address & 0xE003 {
             0x8000 => self.chr_bank = value & 0x0F,
             0xE000 => self.prg_bank = value & 0x0F,
@@ -32811,10 +32816,12 @@ impl Mapper for Fds42 {
                 };
             }
             0xE002 => {
-                self.irq_enabled = value & 0x01 != 0;
+                // Mesen: the timer IRQ is enabled only by $E002 = $02.
+                self.irq_enabled = value == 0x02;
                 if !self.irq_enabled {
                     self.irq_counter = 0;
                     self.irq_pending = false;
+                    self.irq_ack = false;
                 }
             }
             _ => {}
@@ -32858,20 +32865,27 @@ impl Mapper for Fds42 {
         42
     }
 
+    fn prg_rom_at_6000(&self) -> bool {
+        true
+    }
+
     fn irq_line(&self) -> bool {
-        self.irq_pending
+        self.irq_pending && !self.irq_ack
     }
 
     fn clock_cpu(&mut self) {
-        if self.kaiser || !self.irq_enabled {
+        if !self.irq_enabled {
             return;
         }
         self.irq_counter = self.irq_counter.wrapping_add(1) & 0x7FFF;
-        self.irq_pending = self.irq_counter & 0x6000 == 0x6000;
+        self.irq_pending = self.irq_counter >= 0x6000;
+        if !self.irq_pending {
+            self.irq_ack = false;
+        }
     }
 
     fn acknowledge_irq(&mut self) {
-        self.irq_pending = false;
+        self.irq_ack = true;
     }
 }
 
@@ -35160,35 +35174,43 @@ mod tests {
 
     #[test]
     fn fds42_banks_and_irq() {
-        // Mario Baby (CHR-RAM): $E000 registers, mirroring and 15-bit IRQ.
-        let rom = synth_banked(42, 128, 0);
+        // 128 KiB PRG, 32 KiB CHR.
+        let rom = synth_banked(42, 128, 32);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
-        assert_eq!(cart.cpu_read(0x6000), 0);
+        // $6000 is a switchable PRG-ROM bank (not open bus), and the last
+        // 32 KiB sits at $8000-$FFFF.
+        assert!(cart.prg_rom_at_6000());
+        assert_eq!(cart.cpu_read(0x6000), rom[16]);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x18000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x1E000]);
         cart.cpu_write(0xE000, 2);
-        assert_eq!(cart.cpu_read(0x6000), 2);
-        assert_eq!(cart.cpu_read(0x8000), 12);
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 2 * 0x2000]);
+        // $8000 selects the 8 KiB CHR bank.
+        cart.cpu_write(0x8000, 2);
+        assert_eq!(cart.ppu_read(0x0000), rom[16 + 128 * 1024 + 2 * 0x2000]);
+        // $E001 bit 3 selects horizontal mirroring.
         cart.cpu_write(0xE001, 0x08);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
-        cart.cpu_write(0xE002, 1);
+        // $E002 = $02 enables the free-running 15-bit CPU-cycle timer; it
+        // asserts while the counter is in $6000-$7FFF.
+        cart.cpu_write(0xE002, 0x02);
         for _ in 0..0x6000 {
             cart.clock_cpu();
         }
         assert!(cart.irq_line());
-
-        // Kaiser KS-7050 (CHR-ROM): $6000 powers on at bank $FF, $8000
-        // selects CHR, $E000-$FFFF selects PRG and there is no mapper IRQ.
-        let rom = synth_banked(42, 128, 32);
-        let mut cart = Cartridge::from_ines(&rom).expect("cart");
-        assert_eq!(cart.cpu_read(0x6000), 15);
-        cart.cpu_write(0x8000, 2);
-        assert_eq!(cart.ppu_read(0x0000), 0x90);
-        cart.cpu_write(0xE123, 4);
-        assert_eq!(cart.cpu_read(0x6000), 4);
-        cart.cpu_write(0xF000, 1);
-        assert_eq!(cart.cpu_read(0x6000), 1);
+        // The patched BIOS acknowledges through $4030.
+        assert_eq!(cart.cpu_read_io(0x4030), 1);
+        assert!(!cart.irq_line());
+        for _ in 0..0x2000 {
+            cart.clock_cpu();
+        }
+        assert!(!cart.irq_line());
         for _ in 0..0x6000 {
             cart.clock_cpu();
         }
+        assert!(cart.irq_line());
+        // $E002 = 0 disables, acknowledges and clears the counter.
+        cart.cpu_write(0xE002, 0x00);
         assert!(!cart.irq_line());
     }
 
