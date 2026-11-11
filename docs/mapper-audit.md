@@ -27,8 +27,8 @@ unko corpus <library-dir> --mapper 136 --frames 600
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
 | Loaded (mapper implemented) | 7,073 | 99.6% |
-| Rendering | 3,861 | 54.3% |
-| Blank | 3,212 | 45.3% |
+| Rendering | 3,866 | 54.3% |
+| Blank | 3,207 | 45.3% |
 | Unsupported mapper | 0 | 0.0% |
 | Load/run failure | 28 | 0.39% |
 
@@ -388,7 +388,7 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
 | 558 | 6 | 4 | 10 | 60% |
 | 24 | 8 | 1 | 9 | 89% |
 | 36 | 6 | 3 | 9 | 67% |
-| 42 | 0 | 9 | 9 | 0% |
+| 42 | 5 | 4 | 9 | 56% |
 | 86 | 9 | 0 | 9 | 100% |
 | 162 | 0 | 9 | 9 | 0% |
 | 226 | 6 | 3 | 9 | 67% |
