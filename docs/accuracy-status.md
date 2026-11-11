@@ -142,6 +142,8 @@ writes, and MMC1 bank switching.
 | J87 (87/101) | 32 KiB fixed PRG, 8 KiB CHR latch at `$6000-$7FFF`; mapper 101 reverses CHR bit order |
 | J.Y. clone (91) | two 8 KiB PRG banks + fixed last, four 2 KiB CHR banks, outer 128 KiB PRG/512 KiB CHR, 64-rise A12 IRQ |
 | Bandai FCG (16) | 16 KiB PRG, eight 1 KiB CHR, mirroring, 16-bit CPU-cycle IRQ latch/counter |
+| Bandai FCG 153 | `$8000-$8007` CHR registers double as the outer PRG bank, sampled as `chr[PPU addr>>10 & 3]` on PPU fetches; 8 KiB WRAM |
+| NTDEC 2291 (63) | address latch: 8-bit `addr>>2` PRG bank, `addr&2` 32 KiB mode, `addr&1` mirroring, `addr&0x400` CHR-RAM write protect, open bus past the ROM |
 | TXC 112 | scrambled MMC3-like 8 KiB PRG + 2/1 KiB CHR banking, mirroring |
 | BxROM+WRAM (241) | 32 KiB PRG banking without bus conflicts plus battery PRG-RAM |
 | NROM/CNROM multicart (58/213) | PRG/CHR bank, NROM-128/256 and mirroring latch at `$8000-$FFFF` |
@@ -324,10 +326,13 @@ traced: 121, 303, 13, 12, 14, 50, 301, 305, 308, 309 and 513 render by
 120 frames (308 after Start), and 42 now renders 9/9 at 120 after fixing
 its `$6000` PRG window and `$4030` timer acknowledge. All but three of
 the single-image entries in that set have now been traced: 47 renders by
-120 frames after its outer-bank fix, and 52 renders at 20 frames; 252
-uploads CHR and palette and waits for input (it draws by 240 frames when
-Start is pressed). The two genuinely unresolved single-image IDs are 63
-(Powerful 255-in-1) and 153 (Famicom Jump II).
+120 frames after its outer-bank fix, and 52 renders at 20 frames. The
+last two were then fixed as well: 63 (Powerful 255-in-1) needed its
+8-bit latch and CHR protection, and 153 (Famicom Jump II) takes its
+outer PRG bank from the CHR registers sampled by PPU fetches; both
+render by 120 frames. Every ID in that set is now addressed. The only
+images that still need input are 252 (draws by 240 with Start) and 308
+(renders by 120 with Start).
 Mapper 303 (6 images) was
 fixed next: the KS-7017 model was missing its `$6000` work RAM and the
 `$5100` commit for the `$4A00` bank latch; all sampled Armana no Kiseki
