@@ -427,9 +427,9 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 **None.** All 7,073 images with a valid iNES/NES 2.0 header name a mapper that
 now has an implementation. The 28 remaining non-loading images are truncated
 dumps, not unsupported boards; the partial ports below still need hardware
-work (the 446 supervisor's locked MMC3/VRC outer-mask paths; all four of its
-local images now render by 240 frames, but they are blank at the 20-frame
-smoke point because the multicart loader runs for ~1-2 s).
+work (the 446 supervisor's loader still takes 1-2 s, so its four local
+images are blank at the 20-frame smoke point even though they all render by
+240 frames).
 
 ### NESdev references
 
