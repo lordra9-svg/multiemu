@@ -7540,6 +7540,8 @@ pub struct Supervisor446 {
     flags: u8,
     protect: bool,
     outer_chr: u8,
+    /// Fused 189 maps its 32 KiB bank latch at `$6000`.
+    latch6000: bool,
 }
 
 impl Supervisor446 {
@@ -7574,6 +7576,7 @@ impl Supervisor446 {
             flags: 0,
             protect: false,
             outer_chr: 0,
+            latch6000: false,
         }
     }
 
@@ -7592,14 +7595,26 @@ impl Supervisor446 {
         let mask = usize::from(self.mask);
         Some(match mapper {
             1 => Box::new(Mmc1::new(prg, chr, ram, header)),
-            2 => Box::new(UxRom::new(prg, chr, header)),
-            3 => Box::new(CnRom::new(prg, chr, header)),
+            2 => {
+                let mut core = UxRom::new(prg, chr, header);
+                core.set_prg_outer(outer >> 1, mask >> 1);
+                Box::new(core)
+            }
+            3 => {
+                let mut core = CnRom::new(prg, chr, header);
+                core.set_prg_outer(outer, mask);
+                Box::new(core)
+            }
             4 => {
                 let mut core = Mmc3::new(prg, chr, header);
                 core.set_prg_outer(outer, mask);
                 Box::new(core)
             }
-            7 => Box::new(AxRom::new(prg, chr, header)),
+            7 => {
+                let mut core = AxRom::new(prg, chr, header);
+                core.set_prg_outer(outer >> 2, mask >> 2);
+                Box::new(core)
+            }
             22 | 23 | 25 | 21 => {
                 let mut core = Vrc::new(prg, chr, ram, header);
                 core.set_prg_outer(outer, mask);
@@ -7622,7 +7637,11 @@ impl Supervisor446 {
                 core.set_prg_outer(outer >> 1, mask >> 1);
                 Box::new(core)
             }
-            34 => Box::new(Nina::new(prg, chr, header)),
+            34 => {
+                let mut core = Nina::new(prg, chr, header);
+                core.set_prg_outer(outer >> 2, mask >> 2);
+                Box::new(core)
+            }
             65 => Box::new(Irem65::new_windowed(
                 prg,
                 chr,
@@ -7630,10 +7649,24 @@ impl Supervisor446 {
                 usize::from(self.outer_lo) | (usize::from(self.outer_hi) << 8),
                 usize::from(self.mask),
             )),
-            66 => Box::new(GxRom::new(prg, chr, header)),
+            66 => {
+                let mut core = GxRom::new(prg, chr, header);
+                core.set_prg_outer(outer >> 2, mask >> 2);
+                Box::new(core)
+            }
             75 => Box::new(Vrc1::new(prg, chr, header)),
-            152 => Box::new(Bus152::new(prg, chr, header)),
-            189 => Box::new(Mmc3_32k::new(prg, chr, header)),
+            152 => {
+                let mut core = Bus152::new(prg, chr, header);
+                core.set_prg_outer(outer >> 1, mask >> 1);
+                Box::new(core)
+            }
+            189 => {
+                let mut core = Mmc3_32k::new(prg, chr, header);
+                // 189's supervisor latch is only two bits wide.
+                core.set_prg_outer(outer >> 2, 0x03);
+                core.set_fused_latch();
+                Box::new(core)
+            }
             _ => return None,
         })
     }
@@ -7645,6 +7678,30 @@ impl Supervisor446 {
     /// directly.
     fn select_inner(&mut self, value: u8) {
         let id = value & 0x1F;
+        // ASIC-number to internal-mapper table. Fuse numbers that are not
+        // translated below already are ASIC numbers.
+        let direct = |id: u8| match id {
+            0 => Some(2),     // UNROM
+            1 => Some(4),     // MMC3
+            2 => Some(34),    // BNROM
+            3 => Some(3),     // CNROM
+            4 => Some(7),     // ANROM
+            5..=7 => Some(1), // SLROM/SNROM/SUROM
+            8 => Some(66),    // GNROM
+            11 => Some(152),
+            14 => Some(4), // TLSROM (MMC3 approximation)
+            15 => Some(189),
+            16 => Some(24),
+            17 => Some(26),
+            18 => Some(22),
+            19 => Some(73),
+            21 => Some(25),
+            24 => Some(23),
+            25 => Some(21),
+            26 => Some(75),
+            31 => Some(65),
+            _ => None,
+        };
         let mapper = match self.submapper {
             0 => match id {
                 1 => Some(1),   // SNROM
@@ -7656,38 +7713,19 @@ impl Supervisor446 {
                 10 => Some(25), // VRC4_25
                 11 => Some(26), // VRC6_26
                 12 => Some(73), // VRC3
-                _ => None,
+                _ => direct(id),
             },
             2 => match id {
                 9 | 13 => Some(4), // MMC3
-                _ => None,
+                _ => direct(id),
             },
             3 => match id {
                 1 => Some(65), // H3001
-                _ => None,
+                _ => direct(id),
             },
-            _ => match id {
-                0 => Some(2),
-                1 => Some(4),
-                2 => Some(34),
-                3 => Some(3),
-                4 => Some(7),
-                5..=7 => Some(1),
-                8 => Some(66),
-                11 => Some(152),
-                15 => Some(189),
-                16 => Some(24),
-                17 => Some(26),
-                18 => Some(22),
-                19 => Some(73),
-                21 => Some(25),
-                24 => Some(23),
-                25 => Some(21),
-                26 => Some(75),
-                31 => Some(65),
-                _ => None,
-            },
+            _ => direct(id),
         };
+        self.latch6000 = mapper == Some(189);
         self.inner = match mapper {
             // MMC1-family selections need the supervisor's outer/mask
             // applied to the MMC1 page, which the Skrom path does.
@@ -7814,6 +7852,9 @@ impl Mapper for Supervisor446 {
                 if (0x6000..=0x7FFF).contains(&address) {
                     self.ram[usize::from(address - 0x6000)] = value;
                 }
+            }
+            _ if self.latch6000 && (0x6000..=0x7FFF).contains(&address) => {
+                self.inner.prg_write(address, value);
             }
             _ if !self.is_skrom() && (0x6000..=0x7FFF).contains(&address) => {
                 self.ram[usize::from(address - 0x6000)] = value;
@@ -19528,6 +19569,9 @@ impl Mapper for Sachen145 {
 pub struct UxRom {
     prg: Vec<u8>,
     chr: Vec<u8>,
+    /// Outer PRG base and inner mask in 16 KiB units (446 supervisor).
+    prg_outer: usize,
+    prg_mask: usize,
     bank: usize,
     mirroring: Mirroring,
 }
@@ -19537,9 +19581,17 @@ impl UxRom {
         Self {
             prg,
             chr,
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             bank: 0,
             mirroring: header.mirroring,
         }
+    }
+
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
     }
 
     fn banks(&self) -> usize {
@@ -19553,11 +19605,12 @@ impl Mapper for UxRom {
             return 0;
         }
         let banks = self.banks();
-        let bank = if address < 0xC000 {
-            self.bank % banks
+        let raw = if address < 0xC000 {
+            self.bank
         } else {
             banks - 1
         };
+        let bank = ((raw & self.prg_mask) | self.prg_outer) % banks;
         let offset = usize::from(address & 0x3FFF);
         self.prg[bank * 0x4000 + offset]
     }
@@ -19595,6 +19648,9 @@ impl Mapper for UxRom {
 pub struct CnRom {
     prg: Vec<u8>,
     chr: Vec<u8>,
+    /// Outer PRG base and inner mask in 8 KiB units (446 supervisor).
+    prg_outer: usize,
+    prg_mask: usize,
     bank: usize,
     mirroring: Mirroring,
 }
@@ -19604,9 +19660,17 @@ impl CnRom {
         Self {
             prg,
             chr,
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             bank: 0,
             mirroring: header.mirroring,
         }
+    }
+
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
     }
 
     fn chr_banks(&self) -> usize {
@@ -19619,8 +19683,11 @@ impl Mapper for CnRom {
         if address < 0x8000 {
             return 0;
         }
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = ((slot & self.prg_mask) | self.prg_outer) % banks;
         self.prg
-            .get(usize::from(address - 0x8000) % self.prg.len())
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
             .copied()
             .unwrap_or(0)
     }
@@ -19657,6 +19724,9 @@ impl Mapper for CnRom {
 pub struct AxRom {
     prg: Vec<u8>,
     chr: Vec<u8>,
+    /// Outer PRG base and inner mask in 32 KiB units (446 supervisor).
+    prg_outer: usize,
+    prg_mask: usize,
     bank: usize,
     mirroring: Mirroring,
 }
@@ -19666,6 +19736,8 @@ impl AxRom {
         Self {
             prg,
             chr,
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             bank: 0,
             mirroring: if header.four_screen {
                 Mirroring::FourScreen
@@ -19673,6 +19745,12 @@ impl AxRom {
                 Mirroring::SingleLower
             },
         }
+    }
+
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
     }
 
     fn banks(&self) -> usize {
@@ -19685,7 +19763,9 @@ impl Mapper for AxRom {
         if address < 0x8000 {
             return 0;
         }
-        let offset = self.bank * 0x8000 + usize::from(address - 0x8000);
+        let banks = self.banks();
+        let bank = ((self.bank & self.prg_mask) | self.prg_outer) % banks;
+        let offset = bank * 0x8000 + usize::from(address - 0x8000);
         self.prg.get(offset).copied().unwrap_or(0)
     }
 
@@ -22900,6 +22980,9 @@ impl Cprom {
 pub struct GxRom {
     prg: Vec<u8>,
     chr: Vec<u8>,
+    /// Outer PRG base and inner mask in 32 KiB units (446 supervisor).
+    prg_outer: usize,
+    prg_mask: usize,
     prg_bank: usize,
     chr_bank: usize,
     mirroring: Mirroring,
@@ -22910,10 +22993,18 @@ impl GxRom {
         Self {
             prg,
             chr,
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             prg_bank: 0,
             chr_bank: 0,
             mirroring: header.mirroring,
         }
+    }
+
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
     }
 }
 
@@ -22923,7 +23014,8 @@ impl Mapper for GxRom {
             return 0;
         }
         let banks = (self.prg.len() / 0x8000).max(1);
-        let offset = (self.prg_bank % banks) * 0x8000 + usize::from(address - 0x8000);
+        let bank = ((self.prg_bank & self.prg_mask) | self.prg_outer) % banks;
+        let offset = bank * 0x8000 + usize::from(address - 0x8000);
         self.prg.get(offset).copied().unwrap_or(0)
     }
 
@@ -23037,6 +23129,9 @@ pub struct Nina {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
+    /// Outer PRG base and inner mask in 32 KiB units (446 supervisor).
+    prg_outer: usize,
+    prg_mask: usize,
     nina001: bool,
     prg_bank: usize,
     chr_banks: [usize; 2],
@@ -23050,6 +23145,8 @@ impl Nina {
             prg,
             chr,
             prg_ram: vec![0; header.prg_ram_size.max(0x2000)],
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             nina001,
             prg_bank: 0,
             chr_banks: [0, 0],
@@ -23060,6 +23157,12 @@ impl Nina {
     fn prg_banks(&self) -> usize {
         (self.prg.len() / 0x8000).max(1)
     }
+
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
+    }
 }
 
 impl Mapper for Nina {
@@ -23067,8 +23170,9 @@ impl Mapper for Nina {
         match address {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
             0x8000..=0xFFFF => {
-                let offset =
-                    (self.prg_bank % self.prg_banks()) * 0x8000 + usize::from(address - 0x8000);
+                let banks = self.prg_banks();
+                let bank = ((self.prg_bank & self.prg_mask) | self.prg_outer) % banks;
+                let offset = bank * 0x8000 + usize::from(address - 0x8000);
                 self.prg.get(offset).copied().unwrap_or(0)
             }
             _ => 0,
@@ -26545,6 +26649,11 @@ pub struct Mmc3_32k {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
+    /// Outer PRG base and inner mask in 32 KiB units (446 supervisor).
+    prg_outer: usize,
+    prg_mask: usize,
+    /// The 446 supervisor maps this board's latch to $6000.
+    fused_latch: bool,
     select: u8,
     bank_data: [u8; 8],
     bank32: u8,
@@ -26557,11 +26666,25 @@ pub struct Mmc3_32k {
 }
 
 impl Mmc3_32k {
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
+    }
+
+    /// Enables the fused 189 variant whose 32 KiB latch lives at `$6000`.
+    pub(crate) fn set_fused_latch(&mut self) {
+        self.fused_latch = true;
+    }
+
     fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
         Self {
             prg,
             chr,
             prg_ram: vec![0; header.prg_ram_size.max(0x2000)],
+            prg_outer: 0,
+            prg_mask: usize::MAX,
+            fused_latch: false,
             select: 0,
             bank_data: [0; 8],
             bank32: 0,
@@ -26606,7 +26729,8 @@ impl Mapper for Mmc3_32k {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
             0x8000..=0xFFFF => {
                 let banks = (self.prg.len() / 0x8000).max(1);
-                let bank = usize::from(self.bank32 & 0x07) % banks;
+                let raw = usize::from(self.bank32 & 0x07);
+                let bank = ((raw & self.prg_mask) | self.prg_outer) % banks;
                 self.prg[(bank * 0x8000 + usize::from(address & 0x7FFF)) % self.prg.len()]
             }
             _ => 0,
@@ -26621,6 +26745,10 @@ impl Mapper for Mmc3_32k {
             return;
         }
         if address < 0x8000 {
+            if self.fused_latch && address >= 0x6000 {
+                self.bank32 = value & 0x03;
+                return;
+            }
             let index = usize::from(address - 0x6000) % self.prg_ram.len();
             self.prg_ram[index] = value;
             return;
@@ -32826,6 +32954,9 @@ impl Mapper for Mmc3_114 {
 pub struct Bus152 {
     prg: Vec<u8>,
     chr: Vec<u8>,
+    /// Outer PRG base and inner mask in 16 KiB units (446 supervisor).
+    prg_outer: usize,
+    prg_mask: usize,
     prg_bank: u8,
     chr_bank: u8,
     mirroring: Mirroring,
@@ -32836,22 +32967,31 @@ impl Bus152 {
         Self {
             prg,
             chr,
+            prg_outer: 0,
+            prg_mask: usize::MAX,
             prg_bank: 0,
             chr_bank: 0,
             mirroring: header.mirroring,
         }
+    }
+
+    /// Applies the mapper-446 supervisor's outer PRG base and inner mask.
+    pub(crate) fn set_prg_outer(&mut self, outer: usize, mask: usize) {
+        self.prg_outer = outer;
+        self.prg_mask = mask;
     }
 }
 
 impl Mapper for Bus152 {
     fn prg_read(&self, address: u16) -> u8 {
         let banks = (self.prg.len() / 0x4000).max(1);
-        let bank = match address {
+        let raw = match address {
             0x8000..=0xBFFF => usize::from(self.prg_bank),
             0xC000..=0xFFFF => banks - 1,
             _ => return 0,
         };
-        self.prg[(bank % banks) * 0x4000 + usize::from(address & 0x3FFF)]
+        let bank = ((raw & self.prg_mask) | self.prg_outer) % banks;
+        self.prg[bank * 0x4000 + usize::from(address & 0x3FFF)]
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
@@ -35633,6 +35773,39 @@ mod tests {
         cart.cpu_write(0x5005, 0x00);
         cart.ppu_write(0x0001, 0x77);
         assert_eq!(cart.ppu_read(0x0001), 0x77);
+    }
+
+    #[test]
+    fn supervisor_446_locked_latch_boards() {
+        // 512 KiB PRG, 256 KiB CHR, submapper 0.
+        let rom = synth_banked(446, 512, 256);
+        // Fuse 0 -> UNROM. $0F/8K becomes a 16 KiB mask of 7; outer $20
+        // becomes a 16 KiB base of $10.
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x5003, 0xF0);
+        cart.cpu_write(0x5001, 0x20);
+        cart.cpu_write(0x5000, 0x80);
+        cart.cpu_write(0x8000, 3);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x13 * 0x4000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x17 * 0x4000]);
+        // Fuse 3 -> CNROM: four fixed 8 KiB slots in the $20 window.
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x5003, 0xF0);
+        cart.cpu_write(0x5001, 0x20);
+        cart.cpu_write(0x5000, 0x83);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x20 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x21 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x22 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x23 * 0x2000]);
+        // Fuse 15 -> 189. The fused $6000 latch selects 32 KiB banks in the
+        // $20 window.
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x5003, 0xF0);
+        cart.cpu_write(0x5001, 0x20);
+        cart.cpu_write(0x5000, 0x8F);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 8 * 0x8000]);
+        cart.cpu_write(0x6000, 0x01);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 9 * 0x8000]);
     }
 
     #[test]
