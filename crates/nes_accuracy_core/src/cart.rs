@@ -1057,6 +1057,7 @@ impl Cartridge {
             564 => Box::new(LatchData564::new(prg_rom, chr, header)),
             576 => Box::new(LatchAddr576::new(prg_rom, chr, header)),
             585 => Box::new(LatchAddr585::new(prg_rom, chr, header)),
+            594 => Box::new(Mapper594::new(prg_rom, chr, prg_ram, header)),
             557 => Box::new(N118::new(prg_rom, chr, prg_ram, header, 0x20, 557)),
             559 => Box::new(SuborSango559::new(prg_rom, chr, prg_ram, header)),
             538 => Box::new(Soccer538::new(prg_rom, chr, header)),
@@ -10663,6 +10664,165 @@ impl Mapper for LatchAddr585 {
     }
 }
 
+/// Rinco FSG2 / Talkman (mapper 594): an MMC3 core with an outer 256 KiB
+/// PRG/CHR bank (`$B000`/`$B001`), 8 KiB PRG-ROM at `$6000` and the MSM6585
+/// ADPCM FIFO at `$5000`. The FIFO status read reports "not half full" so the
+/// CPU can keep feeding samples; audio generation itself is not modelled.
+#[derive(Debug)]
+pub struct Mapper594 {
+    inner: Mmc3,
+    reg: [u8; 4],
+    fifo: Vec<u8>,
+    prg_ram: Vec<u8>,
+}
+
+impl Mapper594 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 594),
+            reg: [0; 4],
+            fifo: Vec::with_capacity(1024),
+            prg_ram,
+        }
+    }
+
+    fn prg_or(&self) -> usize {
+        (if self.reg[2] & 0x40 != 0 { 0xC0 } else { 0 })
+            | (if self.reg[2] & 0x80 != 0 { 0x100 } else { 0 })
+    }
+
+    fn chr_and(&self) -> usize {
+        if self.reg[2] & 0xC0 != 0 {
+            0xFF
+        } else {
+            0x1FF
+        }
+    }
+
+    fn chr_or(&self) -> usize {
+        (if self.reg[2] & 0x40 != 0 { 0x200 } else { 0 })
+            | (if self.reg[2] & 0x80 != 0 { 0x300 } else { 0 })
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let inner = self.inner.chr_slot_bank(slot);
+        let outer = inner | ((slot << 6) & 0x100);
+        (outer & self.chr_and()) | self.chr_or()
+    }
+}
+
+impl Mapper for Mapper594 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x5000..=0x5FFF => 0x40,
+            0x6000..=0x7FFF => {
+                let banks = (self.inner.prg.len() / 0x2000).max(1);
+                let bank = (usize::from(self.reg[0]) | self.prg_or()) % banks;
+                self.inner
+                    .prg
+                    .get(bank * 0x2000 + usize::from(address - 0x6000))
+                    .copied()
+                    .unwrap_or(0)
+            }
+            0x8000..=0xFFFF => {
+                let slot = usize::from((address - 0x8000) / 0x2000);
+                let banks = (self.inner.prg.len() / 0x2000).max(1);
+                let bank = (self.inner.prg_slot_in(slot, 64) & 0x3F) | self.prg_or();
+                self.inner
+                    .prg
+                    .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+                    .copied()
+                    .unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x5000..=0x5FFF => {
+                if address & 1 != 0 {
+                    self.fifo.clear();
+                } else {
+                    if self.fifo.len() >= 1024 {
+                        self.fifo.remove(0);
+                    }
+                    self.fifo.push(value);
+                }
+            }
+            0x9000..=0x9FFF => self.reg[usize::from(address & 1)] = value,
+            0xB000..=0xBFFF => self.reg[2 + usize::from(address & 1)] = value,
+            0x8000..=0xFFFF => self.inner.prg_write(address, value),
+            _ => {}
+        }
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        self.prg_read(address)
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        true
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let bank = self.chr_bank(slot) % banks;
+        self.inner
+            .chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let bank = self.chr_bank(slot) % banks;
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        594
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0xB000..=0xBFFF).contains(&address) || self.inner.chr_mapping_write(address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
 /// Shared CHR-RAM state for mapper 169's Yuxing computer modes: an 8 KiB
 /// page selected by `$5501`, plus the 1-bpp all-points-addressable mode and
 /// the nametable-in-CHR split mode selected by `$4800`/`$5500`.
@@ -19261,6 +19421,30 @@ impl Mmc3 {
     }
 
     /// MMC3 CHR slot resolution inside a window of `banks` 1 KiB pages.
+    /// Raw MMC3 CHR bank for a 1 KiB slot, before any size modulo.
+    fn chr_slot_bank(&self, slot: usize) -> usize {
+        let mode = self.select & 0x80;
+        if mode == 0 {
+            match slot {
+                0 | 1 => usize::from(self.bank_data[0] & 0xFE) + (slot & 1),
+                2 | 3 => usize::from(self.bank_data[1] & 0xFE) + (slot & 1),
+                4 => usize::from(self.bank_data[2]),
+                5 => usize::from(self.bank_data[3]),
+                6 => usize::from(self.bank_data[4]),
+                _ => usize::from(self.bank_data[5]),
+            }
+        } else {
+            match slot {
+                0 => usize::from(self.bank_data[2]),
+                1 => usize::from(self.bank_data[3]),
+                2 => usize::from(self.bank_data[4]),
+                3 => usize::from(self.bank_data[5]),
+                4 | 5 => usize::from(self.bank_data[0] & 0xFE) + (slot & 1),
+                _ => usize::from(self.bank_data[1] & 0xFE) + (slot & 1),
+            }
+        }
+    }
+
     fn chr_bank_in(&self, slot: usize, banks: usize) -> usize {
         let banks = banks.max(1);
         let mode = self.select & 0x80;
@@ -34378,6 +34562,40 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
         cart.ppu_write(0x0123, 0x5A);
         assert_eq!(cart.ppu_read(0x0123), 0x5A);
+    }
+
+    #[test]
+    fn mapper594_outer_banks_prg_rom_and_fifo() {
+        // 1 MiB PRG (128 x 8 KiB), 256 KiB CHR.
+        let rom = synth_banked(594, 1024, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 594);
+        // $6000 exposes an 8 KiB PRG-ROM bank from $9000.
+        assert_eq!(cart.cpu_read(0x6000), rom[16]);
+        cart.cpu_write(0x9000, 5);
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 5 * 0x2000]);
+        // MMC3 power-on mapping: zeroed R6/R7 and the last two fixed banks.
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 62 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 63 * 0x2000]);
+        // $B000 bit 6 adds PRG A19 (0xC0) to every MMC3 slot.
+        cart.cpu_write(0xB000, 0x40);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 64 * 0x2000]);
+        // 0xFF is masked by the 128-bank image.
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x7F * 0x2000]);
+        // MMC3 register writes still select banks.
+        cart.cpu_write(0xB000, 0);
+        cart.cpu_write(0x8000, 6);
+        cart.cpu_write(0x8001, 7);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 7 * 0x2000]);
+        // The FIFO status reads as "not half full".
+        assert_eq!(cart.cpu_read_io(0x5000), 0x40);
+        cart.cpu_write(0x5000, 0x12);
+        assert_eq!(cart.cpu_read_io(0x5000), 0x40);
+        // Mirroring from the MMC3 register.
+        cart.cpu_write(0xA000, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
     #[test]
