@@ -991,8 +991,10 @@ impl Cartridge {
             519 => Box::new(Eh8813A::new(prg_rom, chr, header)),
             512 => Box::new(Si512::new(prg_rom, chr, header)),
             513 => Box::new(Sachen9602::new(prg_rom, chr, header)),
+            515 => Box::new(Family515::new(prg_rom, chr, header)),
             530 => Box::new(Ax5705::new(prg_rom, chr, header)),
             549 => Box::new(Ks7016B::new(prg_rom, chr, header)),
+            554 => Box::new(Ks7010::new(prg_rom, chr, header)),
             538 => Box::new(Soccer538::new(prg_rom, chr, header)),
             359 => Box::new(BmcSb5013::new(prg_rom, chr, header, false)),
             540 => Box::new(BmcSb5013::new(prg_rom, chr, header, true)),
@@ -6684,6 +6686,192 @@ impl Mapper for LuckyRabbit415 {
 
     fn number(&self) -> u16 {
         415
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        true
+    }
+}
+
+/// Family Noraebang (mapper 515): UNROM-style 16 KiB banking into the
+/// internal last 1 MiB of PRG-ROM with the last bank fixed, plus the
+/// microphone ADC ports. The YM2413 expansion audio is not modelled.
+#[derive(Debug)]
+pub struct Family515 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    bank: u8,
+    internal: bool,
+    mirroring: Mirroring,
+}
+
+impl Family515 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            bank: 0,
+            internal: true,
+            mirroring: header.mirroring,
+        }
+    }
+
+    fn internal_base(&self) -> usize {
+        self.prg.len().saturating_sub(0x10_0000)
+    }
+
+    fn prg_16k(&self, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x4000).max(1);
+        let base = if self.internal {
+            self.internal_base() / 0x4000
+        } else {
+            0
+        };
+        let bank = (base + usize::from(self.bank & 0x7F)) % banks;
+        self.prg
+            .get(bank * 0x4000 + usize::from(address & 0x3FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for Family515 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x8000..=0xBFFF => self.prg_16k(address),
+            0xC000..=0xFFFF => {
+                let banks = (self.prg.len() / 0x4000).max(1);
+                self.prg
+                    .get((banks - 1) * 0x4000 + usize::from(address & 0x3FFF))
+                    .copied()
+                    .unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address & 0xE00F == 0x8000 {
+            self.bank = value & 0x7F;
+            self.internal = value & 0x80 != 0;
+        }
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if (0x6000..=0x6003).contains(&address) {
+            // YM2413 index/data ports and the microphone ADC bit.
+            return 0;
+        }
+        self.prg_read(address)
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x6000, 0x6003))
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        515
+    }
+}
+
+/// Kaiser KS-7010 FDS conversion (mapper 554): read-triggered banking with
+/// the four fixed PRG windows at banks 10/11/6/7.
+#[derive(Debug)]
+pub struct Ks7010 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    window: u8,
+    chr_bank: u8,
+}
+
+impl Ks7010 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            window: 0,
+            chr_bank: 0,
+        }
+    }
+
+    fn read_8k(&self, bank: usize, address: u16) -> u8 {
+        let count = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % count) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Verified trigger addresses: CAB6-CAD6, EBE2, EE32 and FFFC.
+    fn triggers(address: u16) -> bool {
+        (0xCAB6..=0xCAD6).contains(&address)
+            || address == 0xEBE2
+            || address == 0xEE32
+            || address == 0xFFFC
+    }
+}
+
+impl Mapper for Ks7010 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.read_8k(usize::from(self.window), address),
+            0x8000..=0x9FFF => self.read_8k(10, address),
+            0xA000..=0xBFFF => self.read_8k(11, address),
+            0xC000..=0xDFFF => self.read_8k(6, address),
+            0xE000..=0xFFFF => self.read_8k(7, address),
+            _ => 0,
+        }
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        if Self::triggers(address) {
+            let bank = ((address >> 1) & 0x0F) as u8;
+            self.window = bank;
+            self.chr_bank = bank;
+        }
+        self.prg_read(address)
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x6000, 0x7FFF))
+    }
+
+    fn prg_write(&mut self, _address: u16, _value: u8) {}
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let count = (self.chr.len() / 0x2000).max(1);
+        let bank = usize::from(self.chr_bank) % count;
+        self.chr
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, _address: u16, _value: u8) {}
+
+    fn mirroring(&self) -> Mirroring {
+        Mirroring::Vertical
+    }
+
+    fn number(&self) -> u16 {
+        554
     }
 
     fn prg_rom_at_6000(&self) -> bool {
@@ -30347,6 +30535,43 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0x82);
         cart.cpu_write(0x6000, 0x42);
         assert_eq!(cart.cpu_read(0x6000), 0x42);
+    }
+
+    #[test]
+    fn family_515_internal_and_external_banks() {
+        // 1.5 MiB PRG: the last 1 MiB is the internal cartridge.
+        let rom = synth_banked(515, 1536, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 515);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x8_0000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 190 * 0x2000]);
+        cart.cpu_write(0x8000, 0x85);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x8_0000 + 5 * 0x4000]);
+        cart.cpu_write(0x8000, 0x05);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x4000]);
+    }
+
+    #[test]
+    fn ks7010_554_fixed_banks_and_triggers() {
+        // 128 KiB PRG and CHR.
+        let rom = synth_banked(554, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 554);
+        assert_eq!(cart.cpu_read(0x6000), rom[16]);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 10 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 11 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 6 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 7 * 0x2000]);
+        // FFFC switches the $6000/CHR bank to (FFFC >> 1) & 0x0F = 14.
+        let _ = cart.cpu_read_io(0xFFFC);
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 14 * 0x2000]);
+        let chr = 16 + 128 * 1024;
+        assert_eq!(cart.ppu_read(0x0000), rom[chr + 14 * 0x2000]);
+        // CAB6 switches both to bank 11.
+        let _ = cart.cpu_read_io(0xCAB6);
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 11 * 0x2000]);
+        assert_eq!(cart.ppu_read(0x0000), rom[chr + 11 * 0x2000]);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
     }
 
     #[test]
