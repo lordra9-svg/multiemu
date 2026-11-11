@@ -17347,9 +17347,6 @@ impl Mmc3Outer {
     fn prg_bank(&self, slot: usize) -> usize {
         let banks = (self.inner.prg.len() / 0x2000).max(1);
         let base = self.inner.prg_slot(slot);
-        if self.board == 52 && slot >= 2 {
-            return base % banks;
-        }
         let bank = match self.board {
             134 => (base & 0x1F) | (usize::from(self.outer & 0x02) << 4),
             205 => {
@@ -17360,15 +17357,11 @@ impl Mmc3Outer {
             // supplies the outer PRG bits for every slot.
             47 => (base & 0x0F) | (usize::from(self.outer) << 4),
             52 => {
-                if self.outer & 0x40 != 0 {
-                    (base & 0x7F)
-                        | ((usize::from(self.outer & 0x04) | (usize::from(self.outer >> 4) & 0x03))
-                            << 7)
-                } else {
-                    (base & 0xFF)
-                        | ((usize::from(self.outer & 0x04) | (usize::from(self.outer >> 4) & 0x02))
-                            << 7)
-                }
+                // NRS syncPRG(reg & 8 ? 0x0F : 0x1F, (reg << 4) & 0x70),
+                // applied to every slot including the fixed banks.
+                let or = (usize::from(self.outer) << 4) & 0x70;
+                let and = if self.outer & 0x08 != 0 { 0x0F } else { 0x1F };
+                (base & and) | (or & !and)
             }
             516 => (base & 0x0F) | (usize::from(self.outer & 0x03) << 4),
             _ => base,
@@ -17383,11 +17376,12 @@ impl Mmc3Outer {
             134 => (base & 0xFF) | (usize::from(self.outer & 0x20) << 3),
             47 => (base & 0x7F) | (usize::from(self.outer) << 7),
             52 => {
-                if self.outer & 0x08 != 0 {
-                    (base & 0x0F) | (usize::from(self.outer & 0x07) << 4)
-                } else {
-                    (base & 0x1F) | (usize::from(self.outer & 0x06) << 4)
-                }
+                // NRS: chrOR = (reg << 3) & 0x180 | (reg << 7) & 0x200;
+                // chrAND = reg & 0x40 ? 0x7F : 0xFF.
+                let or = ((usize::from(self.outer) << 3) & 0x180)
+                    | ((usize::from(self.outer) << 7) & 0x200);
+                let and = if self.outer & 0x40 != 0 { 0x7F } else { 0xFF };
+                (base & and) | (or & !and)
             }
             516 => (base & 0x7F) | ((usize::from(self.outer >> 2) & 0x03) << 7),
             205 => {
@@ -17447,7 +17441,9 @@ impl Mapper for Mmc3Outer {
                         self.outer = value;
                     }
                 }
-                52 if (0x6000..=0x7FFF).contains(&address) => self.outer = value,
+                52 if (0x6000..=0x7FFF).contains(&address) && self.outer & 0x80 == 0 => {
+                    self.outer = value;
+                }
                 _ => {}
             }
             return;
@@ -35462,6 +35458,27 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 12);
         assert_eq!(cart.ppu_read(0x0000), 0x88);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn mmc3_52_outer_and_locked_register() {
+        // 1 MiB PRG, 512 KiB CHR.
+        let rom = synth_banked(52, 1024, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 52);
+        // reg $0C: prgAND = $0F, prgOR = $40, applied to every slot.
+        cart.cpu_write(0x6000, 0x0C);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x40 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x4E * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x4F * 0x2000]);
+        cart.cpu_write(0x8000, 0x06);
+        cart.cpu_write(0x8001, 0x03);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x43 * 0x2000]);
+        // reg bit 7 locks further writes.
+        cart.cpu_write(0x6000, 0x80);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
+        cart.cpu_write(0x6000, 0x04);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
     }
 
     #[test]
