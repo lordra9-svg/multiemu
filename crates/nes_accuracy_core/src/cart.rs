@@ -1039,6 +1039,7 @@ impl Cartridge {
             413 => Box::new(Srrx413::new(prg_rom, chr, header)),
             415 => Box::new(LuckyRabbit415::new(prg_rom, chr, header)),
             417 => Box::new(FineStudio417::new(prg_rom, chr, header)),
+            418 => Box::new(N118_418::new(prg_rom, chr, header)),
             552 => Box::new(Taito552::new(prg_rom, chr, header)),
             553 => Box::new(Sachen3013::new(prg_rom, chr, header)),
             5 => Box::new(Mmc5::new(prg_rom, chr, header)),
@@ -1070,6 +1071,7 @@ impl Cartridge {
             235 => Box::new(Multicart235::new(prg_rom, chr, header)),
             241 => Box::new(BxRomWram::new(prg_rom, chr, prg_ram, header)),
             284 => Box::new(Drip284::new(prg_rom, chr, header)),
+            272 => Box::new(J2012::new(prg_rom, chr, header)),
             285 => Box::new(A65AS::new(prg_rom, chr, header)),
             286 => Box::new(Benshieng286::new(prg_rom, chr, header)),
             58 | 213 => Box::new(Multicart58::new(prg_rom, chr, header)),
@@ -10153,6 +10155,242 @@ impl Mapper for Drip284 {
 
     fn acknowledge_irq(&mut self) {
         self.irq_pending = false;
+    }
+}
+
+/// J-2012-II bootleg board (mapper 272): two switchable 8 KiB PRG banks,
+/// eight 1 KiB CHR nibble registers, mirroring control and an A13-driven IRQ.
+#[derive(Debug)]
+pub struct J2012 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg0: u8,
+    prg1: u8,
+    chr_banks: [u8; 8],
+    mirr_s: u8,
+    mirr_hv: u8,
+    irq_enabled: bool,
+    irq_counter: u8,
+    irq_pending: bool,
+}
+
+impl J2012 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            prg0: 0,
+            prg1: 0,
+            chr_banks: [0; 8],
+            mirr_s: 0,
+            mirr_hv: 0,
+            irq_enabled: false,
+            irq_counter: 0,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for J2012 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x8000..=0x9FFF => self.prg_8k(usize::from(self.prg0), address),
+            0xA000..=0xBFFF => self.prg_8k(usize::from(self.prg1), address),
+            0xC000..=0xFFFF => {
+                let banks = (self.prg.len() / 0x2000).max(1);
+                let half = usize::from(address - 0xC000) / 0x2000;
+                self.prg_8k(banks - 2 + half, address)
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        let bank = (address >> 12) & 0x0F;
+        match bank {
+            0x8 => {
+                self.prg0 = value;
+                match address & 0x000C {
+                    0x4 => self.mirr_s = value & 0x03,
+                    0xC => self.irq_pending = false,
+                    _ => {}
+                }
+            }
+            0x9 => self.mirr_hv = value & 0x01,
+            0xA => self.prg1 = value,
+            0xF => {}
+            _ => {
+                let reg = usize::from((((bank - 0x0B) << 1) | ((address >> 1) & 0x01)) & 0x07);
+                if address & 0x01 == 0 {
+                    self.chr_banks[reg] = (self.chr_banks[reg] & 0xF0) | (value & 0x0F);
+                } else {
+                    self.chr_banks[reg] = (self.chr_banks[reg] & 0x0F) | ((value << 4) & 0xF0);
+                }
+            }
+        }
+        // The IRQ control lives in the $C000-$DFFF mirror range.
+        if bank & 0x0C == 0x0C {
+            match address & 0x000C {
+                0x4 => self.irq_pending = false,
+                0x8 => self.irq_enabled = true,
+                0xC => {
+                    self.irq_enabled = false;
+                    self.irq_counter = 0;
+                    self.irq_pending = false;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_banks[slot]) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        match self.mirr_s {
+            2 => Mirroring::SingleLower,
+            3 => Mirroring::SingleUpper,
+            _ => {
+                if self.mirr_hv & 0x01 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                }
+            }
+        }
+    }
+
+    fn number(&self) -> u16 {
+        272
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0xB000..=0xEFFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_scanline(&mut self) {
+        // Approximation of the board's 84 A13 falling-edge counter.
+        if !self.irq_enabled {
+            return;
+        }
+        self.irq_counter = self.irq_counter.wrapping_add(1);
+        if self.irq_counter >= 11 {
+            self.irq_counter = 0;
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// AVE 820106-C/821007C (mapper 418): NINA-118 register pair at
+/// `$8000-$9FFF`, four 8 KiB PRG windows, 8 KiB CHR-RAM and mirroring from
+/// register 5.
+#[derive(Debug)]
+pub struct N118_418 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    pointer: u8,
+    reg: [u8; 8],
+}
+
+impl N118_418 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            pointer: 0,
+            reg: [0x00, 0x02, 0x04, 0x05, 0x06, 0x07, 0x00, 0x01],
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank & 0x0F) % banks * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for N118_418 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x8000..=0x9FFF => self.prg_8k(usize::from(self.reg[6]), address),
+            0xA000..=0xBFFF => self.prg_8k(usize::from(self.reg[7]), address),
+            0xC000..=0xDFFF => self.prg_8k(0x0E, address),
+            0xE000..=0xFFFF => self.prg_8k(0x0F, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if !(0x8000..=0x9FFF).contains(&address) {
+            return;
+        }
+        if address & 0x01 == 0 {
+            self.pointer = value;
+        } else {
+            self.reg[usize::from(self.pointer & 0x07)] = value;
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        if self.reg[5] & 0x01 != 0 {
+            Mirroring::Horizontal
+        } else {
+            Mirroring::Vertical
+        }
+    }
+
+    fn number(&self) -> u16 {
+        418
     }
 }
 
@@ -31715,6 +31953,55 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), c(6));
         cart.cpu_write(0x4106, 1);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn j2012_272_banks_and_mirroring() {
+        // 128 KiB PRG and CHR.
+        let rom = synth_banked(272, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 272);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 14 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 15 * 0x2000]);
+        cart.cpu_write(0x8000, 3);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
+        cart.cpu_write(0xA000, 5);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 5 * 0x2000]);
+        cart.cpu_write(0x9000, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x9000, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0x8004, 2);
+        assert_eq!(cart.mirroring(), Mirroring::SingleLower);
+        // CHR register 0 is written as a low/high nibble pair.
+        cart.cpu_write(0xB000, 0x02);
+        cart.cpu_write(0xB001, 0x01);
+        let chr = 16 + 128 * 1024;
+        assert_eq!(cart.ppu_read(0x0000), rom[chr + 0x12 * 0x400]);
+    }
+
+    #[test]
+    fn n118_418_registers_and_chr_ram() {
+        // 128 KiB PRG, CHR-RAM.
+        let rom = synth_banked(418, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 418);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x0E * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 0x0F * 0x2000]);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        // Pointer/data pair: $8000 selects register 6, $8001 writes it.
+        cart.cpu_write(0x8000, 6);
+        cart.cpu_write(0x8001, 3);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
+        cart.cpu_write(0x8000, 5);
+        cart.cpu_write(0x8001, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.ppu_write(0x0123, 0x5A);
+        assert_eq!(cart.ppu_read(0x0123), 0x5A);
     }
 
     #[test]
