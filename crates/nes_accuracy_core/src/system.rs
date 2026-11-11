@@ -457,6 +457,7 @@ impl System {
         }
         self.ppu
             .set_rom_nametable_banks(self.cart.rom_nametable_banks());
+        self.ppu.set_nametable_map(self.cart.nametable_map());
     }
 
     /// Reads a byte from the CPU address space without side effects.

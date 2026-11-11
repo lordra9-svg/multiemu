@@ -147,6 +147,8 @@ pub struct Ppu {
     pub chr_ram: bool,
     /// Nametable mirroring.
     pub mirroring: Mirroring,
+    /// Per-quadrant CIRAM page selection from the mapper, if any.
+    nt_map: Option<[u8; 4]>,
     /// NMI output line.
     pub nmi_line: bool,
     /// Latched NMI edge waiting for the CPU.
@@ -303,6 +305,7 @@ impl Ppu {
             oam: [0; 256],
             chr,
             chr_ram_map: None,
+            nt_map: None,
             mmc2: None,
             hybrid: None,
             mmc5_aux: None,
@@ -525,6 +528,11 @@ impl Ppu {
     /// Installs the mapper's CHR-RAM slot map (`None` = identity).
     pub fn set_chr_ram_map(&mut self, map: Option<[u8; 8]>) {
         self.chr_ram_map = map;
+    }
+
+    /// Installs the mapper's per-quadrant CIRAM selection.
+    pub fn set_nametable_map(&mut self, map: Option<[u8; 4]>) {
+        self.nt_map = map;
     }
 
     /// Reads one byte of the active CHR window.
@@ -1033,12 +1041,16 @@ impl Ppu {
         let index = usize::from(address & 0x0FFF);
         let table = index / 0x0400;
         let offset = index % 0x0400;
-        let mapped = match self.mirroring {
-            Mirroring::Vertical => table % 2,
-            Mirroring::Horizontal => table / 2,
-            Mirroring::SingleLower => 0,
-            Mirroring::SingleUpper => 1,
-            Mirroring::FourScreen => table,
+        let mapped = if let Some(map) = self.nt_map {
+            usize::from(map[table] & 0x01)
+        } else {
+            match self.mirroring {
+                Mirroring::Vertical => table % 2,
+                Mirroring::Horizontal => table / 2,
+                Mirroring::SingleLower => 0,
+                Mirroring::SingleUpper => 1,
+                Mirroring::FourScreen => table,
+            }
         };
         mapped * 0x0400 + offset
     }
