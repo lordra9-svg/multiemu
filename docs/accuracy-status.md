@@ -312,7 +312,10 @@ Only 60 images across 18 IDs render at neither 120 nor 240; after the 121
 fix the largest is mapper 42 (9 images). Those nine are Kaiser KS-7050
 Ai Senshi Nicol conversions: the board model now matches the variant, but
 they boot the FDS BIOS and stall at its disk interface (`$4025`/`$4030`),
-which the cartridge model does not provide.
+which the cartridge model does not provide. Mapper 303 (6 images) was
+fixed next: the KS-7017 model was missing its `$6000` work RAM and the
+`$5100` commit for the `$4A00` bank latch; all sampled Armana no Kiseki
+images now render by 120 frames.
 The sweep added the MesenCE-only 208/219/258/284/298/302/307/346 group,
 the 43/106/170/
 262/285/304/521 batch, the TEC9719/167/190/266/314 batch and the
