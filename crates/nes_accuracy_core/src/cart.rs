@@ -594,6 +594,12 @@ pub trait Mapper: fmt::Debug {
         false
     }
 
+    /// Handles a CPU write in the PPU mirror range `$2008-$3FFF` (OneBus
+    /// boards place their bank registers there). Returns true if claimed.
+    fn native_ppu_write(&mut self, _address: u16, _value: u8) -> bool {
+        false
+    }
+
     /// CPU-RAM address window sampled before a cart read (protection boards).
     fn ram_read_window(&self) -> Option<(u16, u16)> {
         None
@@ -860,6 +866,7 @@ impl Cartridge {
             250 => Box::new(Nitra250::new(prg_rom, chr, header)),
             252 => Box::new(Waixing252::new(prg_rom, chr, prg_ram, header)),
             254 => Box::new(Mmc3_254::new(prg_rom, chr, header)),
+            256 => Box::new(OneBus256::new(prg_rom, chr, header)),
             258 => Box::new(Unl158B::new(prg_rom, chr, header)),
             262 => Box::new(Mmc3_262::new(prg_rom, chr, header)),
             263 => Box::new(Mmc3_263::new(prg_rom, chr, header)),
@@ -1300,6 +1307,11 @@ impl Cartridge {
     #[must_use]
     pub fn prg_rom_at_6000(&self) -> bool {
         self.mapper.prg_rom_at_6000()
+    }
+
+    /// Routes a CPU write in `$2008-$3FFF` to the cartridge, if it claims it.
+    pub fn native_ppu_write(&mut self, address: u16, value: u8) -> bool {
+        self.mapper.native_ppu_write(address, value)
     }
 
     /// CPU-RAM window sampled by the mapper, if any.
@@ -6876,6 +6888,314 @@ impl Mapper for Ks7010 {
 
     fn prg_rom_at_6000(&self) -> bool {
         true
+    }
+}
+
+/// VT02+/VT03 OneBus boards (mapper 256): the VTxx-native PRG/CHR bank
+/// registers with MMC3-compatible forwarding from `$8000-$FFFF`.
+#[derive(Debug)]
+pub struct OneBus256 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    pq_outer: u8,
+    va_outer: u8,
+    comr6: bool,
+    comr7: bool,
+    pq: [u8; 4],
+    pq3: u8,
+    ps: u8,
+    pq2en: bool,
+    chr_regs: [u8; 6],
+    va18: u8,
+    vb0s: u8,
+    mirroring: Mirroring,
+    select: u8,
+    irq_latch: u8,
+    irq_counter: u8,
+    irq_reload: bool,
+    irq_enabled: bool,
+    irq_pending: bool,
+}
+
+impl OneBus256 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            pq_outer: 0,
+            va_outer: 0,
+            comr6: false,
+            comr7: false,
+            pq: [0; 4],
+            pq3: 0,
+            ps: 0,
+            pq2en: false,
+            chr_regs: [0; 6],
+            va18: 0,
+            vb0s: 0,
+            mirroring: header.mirroring,
+            select: 0,
+            irq_latch: 0,
+            irq_counter: 0,
+            irq_reload: false,
+            irq_enabled: false,
+            irq_pending: false,
+        }
+    }
+
+    const INNER_MASKS: [u8; 8] = [0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01, 0x00, 0xFF];
+
+    fn merge(inner: u8, middle: u8, mask: u8) -> u8 {
+        let bits = mask.count_ones();
+        if bits >= 8 {
+            return inner;
+        }
+        (inner & mask) | ((middle.wrapping_shl(bits)) & !mask)
+    }
+
+    fn prg_slot_inner(&self, slot: usize) -> u8 {
+        if self.comr6 {
+            match slot {
+                0 => 0xFE,
+                1 => 0xFF,
+                2 => self.pq[0],
+                _ => self.pq[1],
+            }
+        } else {
+            match slot {
+                0 => self.pq[0],
+                1 => self.pq[1],
+                2 => {
+                    if self.pq2en {
+                        self.pq[2]
+                    } else {
+                        0xFE
+                    }
+                }
+                _ => 0xFF,
+            }
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        let mask = Self::INNER_MASKS[usize::from(self.ps & 0x07)];
+        let inner = Self::merge(self.prg_slot_inner(slot), self.pq3, mask);
+        ((usize::from(self.pq_outer) << 8) | usize::from(inner)) % banks
+    }
+
+    fn chr_slot_reg(&self, slot: usize) -> (u8, bool) {
+        // (register value, is_odd_slot)
+        let (group, odd) = if self.comr7 {
+            match slot {
+                0 => (2, false),
+                1 => (3, false),
+                2 => (4, false),
+                3 => (5, false),
+                4 => (0, false),
+                5 => (0, true),
+                6 => (1, false),
+                _ => (1, true),
+            }
+        } else {
+            match slot {
+                0 => (0, false),
+                1 => (0, true),
+                2 => (1, false),
+                3 => (1, true),
+                4 => (2, false),
+                5 => (3, false),
+                6 => (4, false),
+                _ => (5, false),
+            }
+        };
+        (self.chr_regs[group], odd)
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let banks = (self.chr.len() / 0x400).max(1);
+        let (value, odd) = self.chr_slot_reg(slot);
+        let inner = if odd { value | 0x01 } else { value & 0xFE };
+        let mask = match self.vb0s & 0x07 {
+            0 => 0xFF,
+            1 => 0x7F,
+            2 => 0x3F,
+            4 => 0x1F,
+            5 => 0x0F,
+            6 => 0x07,
+            _ => 0xFF,
+        };
+        let middle = self.vb0s >> 3;
+        let merged = Self::merge(inner, middle, mask);
+        let intermediate = usize::from((self.va18 >> 4) & 0x07);
+        let bank = (usize::from(merged) | (intermediate << 8)) | (usize::from(self.va_outer) << 11);
+        bank % banks
+    }
+
+    fn sync_native(&mut self, address: u16, value: u8) {
+        match address & 0xFF0F {
+            0x4100 => {
+                self.va_outer = value & 0x0F;
+                self.pq_outer = (value >> 4) & 0x0F;
+            }
+            0x4101 => self.irq_latch = value,
+            0x4102 => {
+                self.irq_counter = 0;
+                self.irq_reload = true;
+            }
+            0x4103 => {
+                self.irq_enabled = false;
+                self.irq_pending = false;
+            }
+            0x4104 => self.irq_enabled = true,
+            0x4105 => {
+                self.comr6 = value & 0x40 != 0;
+                self.comr7 = value & 0x80 != 0;
+                self.select = value & 0x07;
+            }
+            0x4106 => {
+                self.mirroring = if value & 0x01 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+            0x4107 => self.pq[0] = value,
+            0x4108 => self.pq[1] = value,
+            0x4109 => self.pq[2] = value,
+            0x410A => self.pq3 = value,
+            0x410B => {
+                self.ps = value & 0x07;
+                self.pq2en = value & 0x40 != 0;
+            }
+            _ => {}
+        }
+    }
+
+    fn sync_mmc3(&mut self, address: u16, value: u8) {
+        match address & 0xE001 {
+            0x8000 => {
+                self.select = value & 0x07;
+                self.comr6 = value & 0x40 != 0;
+                self.comr7 = value & 0x80 != 0;
+            }
+            0x8001 => match self.select {
+                0 => self.chr_regs[0] = value,
+                1 => self.chr_regs[1] = value,
+                2 => self.chr_regs[2] = value,
+                3 => self.chr_regs[3] = value,
+                4 => self.chr_regs[4] = value,
+                5 => self.chr_regs[5] = value,
+                6 => self.pq[0] = value,
+                _ => self.pq[1] = value,
+            },
+            0xA000 => {
+                self.mirroring = if value & 0x01 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                };
+            }
+            0xC000 => self.irq_latch = value,
+            0xC001 => {
+                self.irq_counter = 0;
+                self.irq_reload = true;
+            }
+            0xE000 => {
+                self.irq_enabled = false;
+                self.irq_pending = false;
+            }
+            _ => self.irq_enabled = true,
+        }
+    }
+}
+
+impl Mapper for OneBus256 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let slot = usize::from((address - 0x8000) / 0x2000);
+        let bank = self.prg_bank(slot);
+        self.prg
+            .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x4100..=0x410F => self.sync_native(address, value),
+            0x8000..=0xFFFF => self.sync_mmc3(address, value),
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        256
+    }
+
+    fn native_ppu_write(&mut self, address: u16, value: u8) -> bool {
+        match address {
+            0x2012 => self.chr_regs[2] = value,
+            0x2013 => self.chr_regs[3] = value,
+            0x2014 => self.chr_regs[4] = value,
+            0x2015 => self.chr_regs[5] = value,
+            0x2016 => self.chr_regs[0] = value,
+            0x2017 => self.chr_regs[1] = value,
+            0x2018 => self.va18 = value,
+            0x201A => self.vb0s = value,
+            _ => return false,
+        }
+        true
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x8000..=0x9FFF).contains(&address) || (0x4100..=0x410F).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_scanline(&mut self) {
+        if self.irq_counter == 0 || self.irq_reload {
+            self.irq_counter = self.irq_latch;
+            self.irq_reload = false;
+        } else {
+            self.irq_counter -= 1;
+        }
+        if self.irq_counter == 0 && self.irq_enabled {
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
     }
 }
 
@@ -30535,6 +30855,43 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0x82);
         cart.cpu_write(0x6000, 0x42);
         assert_eq!(cart.cpu_read(0x6000), 0x42);
+    }
+
+    #[test]
+    fn onebus_256_native_and_forwarding() {
+        // 512 KiB PRG, 256 KiB CHR.
+        let rom = synth_banked(256, 512, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 256);
+        let p = |n: usize| rom[16 + n * 0x2000];
+        assert_eq!(cart.cpu_read(0x8000), p(0));
+        assert_eq!(cart.cpu_read(0xA000), p(0));
+        assert_eq!(cart.cpu_read(0xC000), p(62));
+        assert_eq!(cart.cpu_read(0xE000), p(63));
+        cart.cpu_write(0x4107, 3);
+        assert_eq!(cart.cpu_read(0x8000), p(3));
+        // MMC3 forwarding: index 6 -> PQ0.
+        cart.cpu_write(0x8000, 6);
+        cart.cpu_write(0x8001, 7);
+        assert_eq!(cart.cpu_read(0x8000), p(7));
+        // PQ2EN makes $C000 switchable.
+        cart.cpu_write(0x410B, 0x40);
+        cart.cpu_write(0x4109, 5);
+        assert_eq!(cart.cpu_read(0xC000), p(5));
+        // COMR6 swaps the low and high PRG pairs.
+        cart.cpu_write(0x8000, 0x40);
+        assert_eq!(cart.cpu_read(0x8000), p(62));
+        assert_eq!(cart.cpu_read(0xC000), p(7));
+        // CHR: MMC3 index 0 forwards to $2016 (slots 0/1 = banks 4/5).
+        cart.cpu_write(0x8000, 0);
+        cart.cpu_write(0x8001, 4);
+        let c = |n: usize| rom[16 + 512 * 1024 + n * 0x400];
+        assert_eq!(cart.ppu_read(0x0000), c(4));
+        assert_eq!(cart.ppu_read(0x0400), c(5));
+        assert!(cart.native_ppu_write(0x2016, 6));
+        assert_eq!(cart.ppu_read(0x0000), c(6));
+        cart.cpu_write(0x4106, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
     #[test]

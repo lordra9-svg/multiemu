@@ -988,14 +988,20 @@ impl CpuBus for System {
                 self.ram[usize::from(address) & 0x07FF] = value;
             }
             0x2000..=0x3FFF => {
-                self.ppu.write_register(address, value);
-                if address == 0x2000 {
-                    self.cart.set_ppu_ctrl(value);
-                }
-                // `$2006` sets the PPU address; a following `$2007` read must
-                // see the bank currently selected by the mapper.
-                if address & 7 == 6 {
+                // OneBus boards expose bank registers in the `$2008-$3FFF`
+                // mirror range; the cartridge claims those addresses.
+                if address >= 0x2008 && self.cart.native_ppu_write(address, value) {
                     self.refresh_chr();
+                } else {
+                    self.ppu.write_register(address, value);
+                    if address == 0x2000 {
+                        self.cart.set_ppu_ctrl(value);
+                    }
+                    // `$2006` sets the PPU address; a following `$2007` read
+                    // must see the bank currently selected by the mapper.
+                    if address & 7 == 6 {
+                        self.refresh_chr();
+                    }
                 }
             }
             0x4000..=0x4013 | 0x4015 | 0x4017 => {
