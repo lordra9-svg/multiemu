@@ -195,6 +195,9 @@ impl System {
         if let Some(nt) = cart.n163_nt() {
             ppu.set_n163_nt(nt);
         }
+        if let Some(aux) = cart.a12_irq() {
+            ppu.set_a12_irq(aux);
+        }
         if cart.has_rom_nametables() {
             if let Some(rom) = cart.chr_rom() {
                 ppu.set_rom_nametable_rom(rom.to_vec());
@@ -457,6 +460,8 @@ impl System {
         }
         self.ppu
             .set_rom_nametable_banks(self.cart.rom_nametable_banks());
+        self.ppu
+            .set_rom_nametable_quadrants(self.cart.rom_nametable_quadrants());
         self.ppu.set_nametable_map(self.cart.nametable_map());
     }
 

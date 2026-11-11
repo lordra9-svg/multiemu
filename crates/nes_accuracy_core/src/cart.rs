@@ -632,6 +632,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Shared A12-edge IRQ counter, when the board uses one (mapper 563).
+    fn a12_irq(&self) -> Option<Rc<RefCell<A12Irq>>> {
+        None
+    }
+
     /// Whether this mapper can drive nametables from CHR ROM.
     fn has_rom_nametables(&self) -> bool {
         false
@@ -639,6 +644,11 @@ pub trait Mapper: fmt::Debug {
 
     /// Two 1 KiB CHR bank indices for ROM nametables, when enabled.
     fn rom_nametable_banks(&self) -> Option<[u16; 2]> {
+        None
+    }
+
+    /// Per-quadrant 1 KiB CHR pages for ROM nametables (mapper 559).
+    fn rom_nametable_quadrants(&self) -> Option<[u16; 4]> {
         None
     }
 
@@ -1019,10 +1029,12 @@ impl Cartridge {
             549 => Box::new(Ks7016B::new(prg_rom, chr, header)),
             554 => Box::new(Ks7010::new(prg_rom, chr, header)),
             555 => Box::new(NeSEvent2_555::new(prg_rom, chr, prg_ram, header)),
+            563 => Box::new(J2020_563::new(prg_rom, chr, prg_ram, header)),
             564 => Box::new(LatchData564::new(prg_rom, chr, header)),
             576 => Box::new(LatchAddr576::new(prg_rom, chr, header)),
             585 => Box::new(LatchAddr585::new(prg_rom, chr, header)),
             557 => Box::new(N118::new(prg_rom, chr, prg_ram, header, 0x20, 557)),
+            559 => Box::new(SuborSango559::new(prg_rom, chr, prg_ram, header)),
             538 => Box::new(Soccer538::new(prg_rom, chr, header)),
             359 => Box::new(BmcSb5013::new(prg_rom, chr, header, false)),
             540 => Box::new(BmcSb5013::new(prg_rom, chr, header, true)),
@@ -1337,6 +1349,17 @@ impl Cartridge {
     #[must_use]
     pub fn nametable_map(&self) -> Option<[u8; 4]> {
         self.mapper.nametable_map()
+    }
+
+    /// Shared A12-edge IRQ counter, if the board uses one.
+    pub fn a12_irq(&self) -> Option<Rc<RefCell<A12Irq>>> {
+        self.mapper.a12_irq()
+    }
+
+    /// Per-quadrant ROM-nametable CHR pages, if the board provides them.
+    #[must_use]
+    pub fn rom_nametable_quadrants(&self) -> Option<[u16; 4]> {
+        self.mapper.rom_nametable_quadrants()
     }
 
     /// Whether the mapper drives PRG-ROM at `$6000-$7FFF`.
@@ -10586,6 +10609,287 @@ impl Mapper for LatchAddr585 {
     }
 }
 
+/// Subor Sango II board (mapper 559): a VRC4 core whose register select
+/// lines are CPU A10/A11, with a switchable `$C000` bank, per-quadrant
+/// CHR-ROM nametables and a 9-bit CHR bank.
+#[derive(Debug)]
+pub struct SuborSango559 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    prg_regs: [u8; 2],
+    chr_regs: [u16; 8],
+    prg_flip: bool,
+    wram_enable: bool,
+    mirroring: Mirroring,
+    cpu_c: u8,
+    nt: [u16; 4],
+    irq_latch: u8,
+    irq_counter: u8,
+    irq_reload: bool,
+    irq_enabled: bool,
+    irq_pending: bool,
+}
+
+impl SuborSango559 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
+        Self {
+            prg,
+            chr,
+            prg_ram,
+            prg_regs: [0, 1],
+            chr_regs: [0, 1, 2, 3, 4, 5, 6, 7],
+            prg_flip: false,
+            wram_enable: false,
+            mirroring: header.mirroring,
+            cpu_c: 0xFE,
+            nt: [0xE0, 0xE0, 0xE1, 0xE1],
+            irq_latch: 0,
+            irq_counter: 0,
+            irq_reload: false,
+            irq_enabled: false,
+            irq_pending: false,
+        }
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        self.prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Mapper for SuborSango559 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000)],
+            0x8000..=0x9FFF => {
+                let bank = if self.prg_flip {
+                    0x1E
+                } else {
+                    usize::from(self.prg_regs[0] & 0x1F)
+                };
+                self.prg_8k(bank, address)
+            }
+            0xA000..=0xBFFF => self.prg_8k(usize::from(self.prg_regs[1] & 0x1F), address),
+            0xC000..=0xDFFF => self.prg_8k(usize::from(self.cpu_c), address),
+            0xE000..=0xFFFF => self.prg_8k(0x1F, address),
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x8000..=0x8FFF => self.prg_regs[0] = value,
+            0xA000..=0xAFFF => self.prg_regs[1] = value,
+            0x9000..=0x9FFF => match (address >> 10) & 0x03 {
+                0 | 1 => {
+                    self.mirroring = match value & 0x03 {
+                        0 => Mirroring::Vertical,
+                        1 => Mirroring::Horizontal,
+                        2 => Mirroring::SingleLower,
+                        _ => Mirroring::SingleUpper,
+                    };
+                }
+                2 => {
+                    self.wram_enable = value & 0x01 != 0;
+                    self.prg_flip = value & 0x02 != 0;
+                }
+                _ => {
+                    if address & 0x04 != 0 {
+                        self.nt[usize::from(address & 0x03)] = u16::from(value);
+                    } else {
+                        self.cpu_c = value;
+                    }
+                }
+            },
+            0xB000..=0xEFFF => {
+                let bank = (address >> 12) & 0x0F;
+                let reg = usize::from((((bank - 0x0B) << 1) | ((address >> 11) & 1)) & 0x07);
+                if address & 0x0400 != 0 {
+                    self.chr_regs[reg] =
+                        (self.chr_regs[reg] & 0x00F) | (u16::from(value & 0x0F) << 4);
+                } else {
+                    self.chr_regs[reg] = (self.chr_regs[reg] & 0xFF0) | u16::from(value & 0x0F);
+                }
+            }
+            0xF000..=0xFFFF => {
+                let val = if address & 0x0400 != 0 {
+                    value >> 4
+                } else {
+                    value
+                };
+                match (address >> 10) & 0x03 {
+                    0 => self.irq_latch = (self.irq_latch & 0xF0) | (val & 0x0F),
+                    1 => self.irq_latch = (self.irq_latch & 0x0F) | ((val & 0x0F) << 4),
+                    2 => {
+                        self.irq_enabled = val & 0x02 != 0;
+                        if self.irq_enabled {
+                            self.irq_counter = self.irq_latch;
+                            self.irq_reload = true;
+                        }
+                        self.irq_pending = false;
+                    }
+                    _ => self.irq_pending = false,
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_regs[slot] & 0x01FF) % banks;
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.chr.len() / 0x400).max(1);
+        let bank = usize::from(self.chr_regs[slot] & 0x01FF) % banks;
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        559
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0xB000..=0xEFFF).contains(&address)
+    }
+
+    fn has_rom_nametables(&self) -> bool {
+        true
+    }
+
+    fn chr_rom(&self) -> Option<&[u8]> {
+        if self.chr.is_empty() {
+            None
+        } else {
+            Some(&self.chr)
+        }
+    }
+
+    fn rom_nametable_quadrants(&self) -> Option<[u16; 4]> {
+        Some(self.nt)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if self.irq_counter == 0 || self.irq_reload {
+            self.irq_counter = self.irq_latch;
+            self.irq_reload = false;
+        } else {
+            self.irq_counter -= 1;
+            if self.irq_counter == 0 && self.irq_enabled {
+                self.irq_pending = true;
+            }
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
+    }
+}
+
+/// J-2020 board (mapper 563): a VRC2 core with the $F000 register bank
+/// repurposed as an A12-edge IRQ control.
+#[derive(Debug)]
+pub struct J2020_563 {
+    inner: Vrc,
+    a12: Rc<RefCell<A12Irq>>,
+}
+
+impl J2020_563 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+        let mut vrc_header = header;
+        // VRC2b register wiring (A0/A1 at address bits 0/1).
+        vrc_header.mapper = 23;
+        // Our mapper-23 table maps submapper 3 to the VRC2b A0/A1 decode.
+        vrc_header.submapper = 3;
+        Self {
+            inner: Vrc::new(prg, chr, prg_ram, vrc_header),
+            a12: Rc::new(RefCell::new(A12Irq::new())),
+        }
+    }
+}
+
+impl Mapper for J2020_563 {
+    fn prg_read(&self, address: u16) -> u8 {
+        self.inner.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0xF000 {
+            let mut irq = self.a12.borrow_mut();
+            irq.pending = false;
+            match address & 0x1C {
+                0x0C => irq.enabled = false,
+                0x08 => irq.enabled = true,
+                0x1C => irq.counter = 0,
+                _ => {}
+            }
+            return;
+        }
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        563
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        self.inner.prg_ram()
+    }
+
+    fn a12_irq(&self) -> Option<Rc<RefCell<A12Irq>>> {
+        Some(self.a12.clone())
+    }
+
+    fn irq_line(&self) -> bool {
+        self.a12.borrow().pending
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.a12.borrow_mut().pending = false;
+    }
+}
+
 /// Nintendo Campus Challenge 1991 / NES-EVENT2 (mapper 555): an MMC3 core
 /// with extended PRG/CHR banking from a `$5800` register, a TQROM CHR-RAM
 /// mode and a cycle timer reported through the `$5800` status read.
@@ -14257,6 +14561,38 @@ impl Mapper for Cufrom29 {
 
     fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
         self.chr_aux.clone()
+    }
+}
+
+/// A12-edge IRQ counter shared between the PPU and a board (mapper 563).
+#[derive(Debug, Default)]
+pub struct A12Irq {
+    /// Whether the board has enabled IRQ generation.
+    pub enabled: bool,
+    /// Counts A12 falling edges.
+    pub counter: u16,
+    /// Whether an IRQ is pending.
+    pub pending: bool,
+    last: bool,
+}
+
+impl A12Irq {
+    /// Creates a disabled counter.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Observes one PPU bus address and counts A12 falling edges.
+    pub fn observe(&mut self, address: u16) {
+        let a12 = address & 0x1000 != 0;
+        if self.last && !a12 {
+            self.counter = self.counter.wrapping_add(1);
+            if self.counter & 0x000F == 0 && self.enabled {
+                self.pending = true;
+            }
+        }
+        self.last = a12;
     }
 }
 
@@ -32976,6 +33312,68 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
         cart.ppu_write(0x0123, 0x5A);
         assert_eq!(cart.ppu_read(0x0123), 0x5A);
+    }
+
+    #[test]
+    fn subor_sango_559_banks_and_nametables() {
+        // 256 KiB PRG and CHR.
+        let rom = synth_banked(559, 256, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 559);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 30 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 31 * 0x2000]);
+        cart.cpu_write(0x8000, 2);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 2 * 0x2000]);
+        // $9C00 selects the switchable $C000 bank; bit 2 selects the NT regs.
+        cart.cpu_write(0x9C00, 5);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 5 * 0x2000]);
+        assert_eq!(
+            cart.rom_nametable_quadrants(),
+            Some([0xE0, 0xE0, 0xE1, 0xE1])
+        );
+        cart.cpu_write(0x9C04, 1);
+        assert_eq!(cart.rom_nametable_quadrants(), Some([1, 0xE0, 0xE1, 0xE1]));
+        cart.cpu_write(0x9000, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        // CHR is 1 KiB banked with our test image's bank 3.
+        cart.cpu_write(0xB000, 3);
+        let chr = 16 + 256 * 1024;
+        assert_eq!(cart.ppu_read(0x0000), rom[chr + 3 * 0x400]);
+        assert!(cart.has_rom_nametables());
+    }
+
+    #[test]
+    fn j2020_563_banks_and_a12_irq() {
+        // 256 KiB PRG and CHR.
+        let rom = synth_banked(563, 256, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 563);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 30 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 31 * 0x2000]);
+        cart.cpu_write(0x8000, 5);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x2000]);
+        cart.cpu_write(0x9000, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0xB000, 0x0A);
+        cart.cpu_write(0xB001, 0x01);
+        let chr = 16 + 256 * 1024;
+        assert_eq!(cart.ppu_read(0x0000), rom[chr + 0x1A * 0x400]);
+        // A12 falling edges count down to an IRQ every 16 edges.
+        cart.cpu_write(0xF008, 0);
+        {
+            let aux = cart.a12_irq().expect("a12");
+            for _ in 0..16 {
+                aux.borrow_mut().observe(0x1000);
+                aux.borrow_mut().observe(0x0000);
+            }
+        }
+        assert!(cart.irq_line());
+        cart.cpu_write(0xF00C, 0);
+        assert!(!cart.irq_line());
     }
 
     #[test]

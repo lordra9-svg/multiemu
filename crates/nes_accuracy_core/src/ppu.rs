@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::cart::{Aux77, Chr512, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr};
+use crate::cart::{A12Irq, Aux77, Chr512, HybridChr, Mirroring, Mmc5Aux, N163Nt, OekaChr, Vrc7Chr};
 use crate::clock::Timing;
 
 /// PPU status bits.
@@ -140,6 +140,8 @@ pub struct Ppu {
     nt_rom: Vec<u8>,
     /// Two 1 KiB CHR nametable bank indices when ROM nametables are enabled.
     nt_banks: Option<[u16; 2]>,
+    /// Per-quadrant ROM-nametable CHR pages (mapper 559).
+    nt_banks4: Option<[u16; 4]>,
     /// PPU dots remaining in the post-reset warm-up window; while non-zero,
     /// writes to `$2000`/`$2001`/`$2005`/`$2006` are ignored (NES model).
     warmup_dots: u32,
@@ -149,6 +151,8 @@ pub struct Ppu {
     pub mirroring: Mirroring,
     /// Per-quadrant CIRAM page selection from the mapper, if any.
     nt_map: Option<[u8; 4]>,
+    /// Shared A12-edge IRQ counter (mapper 563).
+    a12: Option<Rc<RefCell<A12Irq>>>,
     /// NMI output line.
     pub nmi_line: bool,
     /// Latched NMI edge waiting for the CPU.
@@ -306,6 +310,7 @@ impl Ppu {
             chr,
             chr_ram_map: None,
             nt_map: None,
+            a12: None,
             mmc2: None,
             hybrid: None,
             mmc5_aux: None,
@@ -317,6 +322,7 @@ impl Ppu {
             ext_attr: None,
             nt_rom: Vec::new(),
             nt_banks: None,
+            nt_banks4: None,
             chr_ram,
             mirroring: if vertical_mirroring {
                 Mirroring::Vertical
@@ -440,6 +446,11 @@ impl Ppu {
         self.nt_banks = banks;
     }
 
+    /// Enables per-quadrant ROM nametables (mapper 559).
+    pub fn set_rom_nametable_quadrants(&mut self, banks: Option<[u16; 4]>) {
+        self.nt_banks4 = banks;
+    }
+
     /// Replaces the CHR window with latch-banked MMC2/MMC4 ROM.
     pub fn set_mmc2_chr(&mut self, rom: Vec<u8>, banks: [u8; 4]) {
         self.mmc2 = Some(Mmc2Chr::new(rom, banks));
@@ -535,8 +546,16 @@ impl Ppu {
         self.nt_map = map;
     }
 
+    /// Installs the mapper's shared A12-edge IRQ counter.
+    pub fn set_a12_irq(&mut self, aux: Rc<RefCell<A12Irq>>) {
+        self.a12 = Some(aux);
+    }
+
     /// Reads one byte of the active CHR window.
     fn chr_byte(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.a12 {
+            aux.borrow_mut().observe(address);
+        }
         if let Some(aux) = &self.aux77 {
             return aux.borrow().chr_read(address);
         }
@@ -1067,6 +1086,9 @@ impl Ppu {
     }
 
     fn read_nametable(&self, address: u16) -> u8 {
+        if let Some(aux) = &self.a12 {
+            aux.borrow_mut().observe(address);
+        }
         if let Some(aux) = &self.aux77 {
             return aux.borrow().nt_read(address);
         }
@@ -1087,6 +1109,14 @@ impl Ppu {
             }
             if let Some(index) = aux.nametable_index(address) {
                 return self.vram[index];
+            }
+        }
+        if let Some(banks) = self.nt_banks4 {
+            if !self.nt_rom.is_empty() {
+                let table = usize::from(address >> 10 & 3);
+                let bank = usize::from(banks[table]) % (self.nt_rom.len() / 0x400).max(1);
+                let offset = bank * 0x400 + usize::from(address & 0x3FF);
+                return self.nt_rom[offset];
             }
         }
         if let Some(banks) = self.nt_banks {
@@ -1207,7 +1237,7 @@ impl Ppu {
                 }
             }
             // ROM nametables are read-only.
-            if self.nt_banks.is_none() {
+            if self.nt_banks.is_none() && self.nt_banks4.is_none() {
                 let index = self.nametable_index(address);
                 self.vram[index] = value;
             }
