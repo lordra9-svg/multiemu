@@ -129,6 +129,7 @@ writes, and MMC1 bank switching.
 | 4-in-1 multicart (60) | soft-reset-selected 16 KiB PRG / 8 KiB CHR bank, four games (6/6 render) |
 | Bonza / Magic Jewelry II (216) | write-address-selected 32 KiB PRG / 8 KiB CHR page, `$5000` register read (4/6 render) |
 | Sachen SA-008-A (148) | mapper 79 latch moved to `$8000-$FFFF`, bus conflicts |
+| Gouder SL-1632 (14) | Huang-1 dual ASIC: VRC2b at power-on or MMC3, selected by the `$A131` PAL supervisor, which also adds CHR A18 for three PPU windows |
 | Jaleco SS88006 (18) | VRC4-like 8 KiB PRG / 1 KiB CHR nibble-pair banking, CPU-cycle IRQ |
 | NINA-03/06 (79/146) | 32 KiB PRG + 8 KiB CHR via a single control register |
 | DxROM (206/76/88/95/154) | MMC3-style 8 KiB PRG / 1 KiB CHR banking, no IRQ; `$C000`/`$E000` fixed |
@@ -321,6 +322,9 @@ through a shared CHR state, and all three images render by 120 frames.
 Mapper 12 (SL-5020B, 2 Dragon Ball Z 5 images) was next: it uses a NEC
 MMC3A, whose single-IRQ-at-zero revision was missing (the Sharp-B-style
 IRQ storm starved the main loop); both images now render at 20 frames.
+Mapper 14 (2 Wushi Hun images) was reimplemented as the Gouder SL-1632
+(VRC2b/MMC3 dual ASIC with the `$A131` supervisor); both render by 120
+frames (5 colors by 240).
 The sweep added the MesenCE-only 208/219/258/284/298/302/307/346 group,
 the 43/106/170/
 262/285/304/521 batch, the TEC9719/167/190/266/314 batch and the
