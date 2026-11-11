@@ -179,6 +179,12 @@ writes, and MMC1 bank switching.
 | Taito TC0690 (48) | TC0190-style PRG/CHR banking plus inverted-reload MMC3-style IRQ |
 | Jaleco JF-13 (86) | GNROM-style 32 KiB PRG / 8 KiB CHR latch at `$6000-$6FFF` (speech chip not modelled) |
 | TXC 01-22000 (36) | 2-bit latch/inverter PRG select plus an 8 KiB CHR latch at `$4200` |
+| CK-001 4-in-1 (301) | mapper-242 address latch plus the ET-113 512 KiB / 128 KiB chip select; 16 KiB switchable + fixed-bank windows, NROM modes, power-on last 32 KiB page |
+| 09-034A / LE10 (304) | 8 KiB PRG bank 4/5 at `$6000` from `$4027` bit 0, fixed first 32 KiB at `$8000-$FFFF`, direct `/IRQ` from `$4068` bit 0 (unverified locally: the library images are truncated) |
+| KS-7031 (305) | 32 KiB PRG at `$8000-$FFFF` with its 16 x 2 KiB pages reversed, four switchable 2 KiB `$6000` windows |
+| NTDEC 2131 (308) | VRC2b PRG/CHR banking, 8 KiB WRAM at `$6000`, and the NTDEC level IRQ (bit-12 half period plus a high-nibble down-counter) |
+| Whirlwind LH51 (309) | 8 KiB WRAM at `$6000`, switchable `$8000` bank, fixed last three banks, `$F000` mirroring |
+| SA-9602B (513) | MMC3 core whose outer PRG bits come from R0 and apply to `$8000`/`$A000` only |
 | N-32 SMB2j conversion (50) | `$6000`=bank 15, `$8000`/`$A000`=8/9, `$C000` from the scrambled `$4020` register, `$E000`=11; 13-bit CPU-cycle IRQ with inverted line polarity |
 | FDS conversions (42) | Two variants: KS-7050 (CHR-ROM; `$6000` powers on at bank `$FF`, `$8000-$8FFF` selects CHR, `$E000-$FFFF` selects PRG, no IRQ) and Mario Baby (CHR-RAM; `$E000`/`$E001`/`$E002` + 24576-cycle IRQ). The KS-7050 images boot the FDS BIOS and need the disk interface (`$4025`/`$4030`). |
 | SOMARI-P (116) | power-on MMC3 mode of the 3-mode VRC2/MMC3/MMC1 ASIC |
@@ -303,7 +309,7 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-7,073 loaded (99.6%), 3,859 rendering (54.3%), 3,214 blank (45.3%), 0
+7,073 loaded (99.6%), 3,861 rendering (54.3%), 3,212 blank (45.3%), 0
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
 A 120-frame pass renders 6,401 with 672 blank; a 240-frame pass renders
@@ -314,7 +320,10 @@ Only 60 images across 18 IDs render at neither 120 nor 240; after the 121
 fix the largest is mapper 42 (9 images). Those nine are Kaiser KS-7050
 Ai Senshi Nicol conversions: the board model now matches the variant, but
 they boot the FDS BIOS and stall at its disk interface (`$4025`/`$4030`),
-which the cartridge model does not provide. Mapper 303 (6 images) was
+which the cartridge model does not provide. Of the 18 IDs in that set, all
+but 42 have since been traced: 121, 303, 13, 12, 14, 50, 301, 305, 308, 309
+and 513 now render (by 120 frames or, for 308, after Start), leaving 42 as
+the only genuinely blocked board. Mapper 303 (6 images) was
 fixed next: the KS-7017 model was missing its `$6000` work RAM and the
 `$5100` commit for the `$4A00` bank latch; all sampled Armana no Kiseki
 images now render by 120 frames. Mapper 13 (CPROM, 3 images) followed:
@@ -329,7 +338,16 @@ frames (5 colors by 240). Mapper 50 (N-32 SMB2j conversions, 2 images)
 followed: its `$4020`/`$4120` decode compared the masked address exactly,
 so the game's `$4022` PRG writes never latched; decoding by bit tests and
 inverting the 13-bit IRQ line (asserted while bit 12 is clear) makes both
-images render from frame ~40.
+images render from frame ~40. Mapper 301 (CK-001 4-in-1) followed: it uses
+the mapper-242 address latch with the ET-113 512 KiB / 128 KiB chip select,
+and power-on banks the last 32 KiB page (both images render at 20 frames).
+The never-rendering set was then cleared out: 305 (KS-7031, reversed 2 KiB
+windows), 309 (LH51, missing `$6000` WRAM), 513 (SA-9602B, R0 outer bits)
+and 12 (NEC IRQ) all render by 120 frames; 308 (NTDEC 2131) also needed its
+`$6000` WRAM and level IRQ and renders by 120 once Start is pressed (the
+audit runs headless, so it reports the wait screen as blank). 304 (LE10)
+was remodelled from NRS, but its full library images are truncated dumps,
+so only the unit test covers it.
 The sweep added the MesenCE-only 208/219/258/284/298/302/307/346 group,
 the 43/106/170/
 262/285/304/521 batch, the TEC9719/167/190/266/314 batch and the
@@ -1097,7 +1115,7 @@ contract as the RustyNES oracle.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **7,073 loaded, 3,859 rendering, 3,214 blank, 0 unsupported
+  audit is **7,073 loaded, 3,861 rendering, 3,212 blank, 0 unsupported
   (0 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.
