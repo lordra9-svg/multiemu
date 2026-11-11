@@ -316,23 +316,22 @@ Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
 7,073 loaded (99.6%), 3,867 rendering (54.3%), 3,206 blank (45.3%), 0
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
-A 120-frame pass renders 6,401 with 672 blank; a 240-frame pass renders
-6,331 with 742 blank (both before the mapper-121 fix, which brings 121 from
-0/20 to 18/20 at 240). The 120-frame pass attributes 2,556 of the 20-frame
-blanks to slow boot (MMC3 +654, MMC1 +424, UxROM +254, mapper 163 +69).
-Only 60 images across 18 IDs rendered at neither 120 nor 240 before the
-follow-up work. All of the multi-image IDs in that set have since been
-traced: 121, 303, 13, 12, 14, 50, 301, 305, 308, 309 and 513 render by
-120 frames (308 after Start), and 42 now renders 9/9 at 120 after fixing
-its `$6000` PRG window and `$4030` timer acknowledge. All but three of
-the single-image entries in that set have now been traced: 47 renders by
-120 frames after its outer-bank fix, and 52 renders at 20 frames. The
-last two were then fixed as well: 63 (Powerful 255-in-1) needed its
-8-bit latch and CHR protection, and 153 (Famicom Jump II) takes its
-outer PRG bank from the CHR registers sampled by PPU fetches; both
-render by 120 frames. Every ID in that set is now addressed. The only
-images that still need input are 252 (draws by 240 with Start) and 308
-(renders by 120 with Start).
+A 120-frame pass renders 6,459 with 614 blank; a 240-frame pass renders
+6,387 with 686 blank. The 240 total is slightly lower because several
+hundred games sit on a fade or transition frame at that exact sample;
+across both passes every loaded image renders except two input-gated
+titles. The 120-frame pass attributes 2,556 of the 20-frame blanks to
+slow boot (MMC3 +654, MMC1 +424, UxROM +254, mapper 163 +69).
+The follow-up work closed the original 18-ID never-rendering set:
+121/303/13/12/14/50/301/305/309/513 render by 120 frames, 42 renders
+9/9 at 120 after its `$6000` window and `$4030` timer acknowledge, 47
+renders by 120 after its outer-bank fix, 52 at 20, and 63/153 by 120
+after the NTDEC 2291 latch and PPU-driven FCG outer-bank fixes. MMC2
+(9, 10 Punch-Out!! images) needed its full 5-bit PRG register and
+renders 10/10 by 240 (~frame 210). Mapper 512 fades through a blank
+frame at 120 and renders at 240; 330 renders by 240. The only images
+with 0 rendering at both 120 and 240 are 252 and 308, which wait for
+Start; both render once input is pressed.
 Mapper 303 (6 images) was
 fixed next: the KS-7017 model was missing its `$6000` work RAM and the
 `$5100` commit for the `$4A00` bank latch; all sampled Armana no Kiseki
@@ -411,8 +410,11 @@ MMC2 (9) and MMC4 (10) are implemented, including the two 4 KiB CHR fetch
 latches that switch on tile `$FD`/`$FE` during rendering and the 5-bit bank
 register wrap for smaller CHR ROMs. MMC2's top 24 KiB is fixed to the last
 three 8 KiB banks (a real Punch-Out!! image caught the initial `N-2` mapping
-error). All 15 mapper-9/10 images in the local library render at 600 frames;
-the 20-frame audit window still shows them as blank because they are booting.
+error). The `$A000` PRG register is five bits wide; a four-bit mask wrapped
+every bank above 15 into the first 128 KiB, so the ten 256 KiB Punch-Out!!
+images spun on a blank screen. With the full mask they render 10/10 by 240
+frames (the title appears around frame 210, so the 20- and 120-frame
+snapshots are still blank).
 The audit also exposed two display bugs now fixed and unit-tested: the
 backdrop path double-indirected the palette, and CHR bank registers were not
 wrapped to the ROM size.
