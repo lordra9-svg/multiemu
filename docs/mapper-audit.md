@@ -26,17 +26,17 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 7,039 | 99.1% |
-| Rendering | 3,817 | 53.8% |
+| Loaded (mapper implemented) | 7,042 | 99.2% |
+| Rendering | 3,820 | 53.8% |
 | Blank | 3,222 | 45.4% |
-| Unsupported mapper | 34 | 0.5% |
+| Unsupported mapper | 31 | 0.4% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 170 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 7,039 (93.3% → 99.1%) and unsupported fell 446 → 34 (6.3% → 0.5%);
-19 mapper IDs remain (the ranking prints the top 80), led by 355/547/594
-(4 images each) and 394 (3).
+audit, 171 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 7,042 (93.3% → 99.2%) and unsupported fell 446 → 31 (6.3% → 0.4%);
+18 mapper IDs remain (the ranking prints the top 80), led by 355/547/594
+(4 images each).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
 is deliberately short; several families need hundreds of frames to leave their
@@ -156,10 +156,10 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254, 256, 258,
   262, 263, 264, 266, 284, 285, 289, 290, 292, 298, 299, 301, 302,
   303, 304, 305, 306, 307, 308, 309, 312, 313, 314, 332, 334, 346,
-  347, 351, 359, 368, 374, 380, 389, 396, 399, 400, 413, 415, 417,
-  422, 446, 470, 487, 493, 512, 513, 515, 516, 517, 518, 519, 521,
-  522, 523, 525, 526, 529, 530, 533, 534, 535, 538, 539, 540, 544,
-  548, 549, 551, 552, 553, 554)** — 170 boards
+  347, 351, 359, 368, 374, 380, 389, 394, 396, 399, 400, 413, 415,
+  417, 422, 446, 470, 487, 493, 512, 513, 515, 516, 517, 518, 519,
+  521, 522, 523, 525, 526, 529, 530, 533, 534, 535, 538, 539, 540,
+  544, 548, 549, 551, 552, 553, 554)** — 171 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
@@ -185,7 +185,8 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   515 Noraebang board, the 554 read-triggered conversion, the 374 reset-based
   MMC1 multicart, the 446 SMD172B supervisor, whose `$5000` table maps onto
   the UNROM/CNROM/MMC3/AxROM/GNROM/NINA/VRC1/VRC2-4/VRC6/152/189/H3001
-  cores, and the 334 32 KiB-bank multicart. The 256 OneBus
+  cores, the 334 32 KiB-bank multicart and the 394 HSK007 256 KiB-slice
+  multicart. The 256 OneBus
   core is partial: all five images load and boot, two reach video by 120
   frames. At 120 frames, 16 of the MesenCE group's 18 local images render
   (the two blanks are MesenCE-blank boot screens too); the 20-frame audit
@@ -417,9 +418,9 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 
 ## Unsupported mappers
 
-34 images (0.5%) name a mapper with no implementation across 19 IDs. The
-largest groups are 355/547/594 (4 images each) and 394 (3); the rest are
-one- and two-image boards. The sections below record the reference material
+31 images (0.4%) name a mapper with no implementation across 18 IDs. The
+largest groups are 355/547/594 (4 images each); the rest are one- and
+two-image boards. The sections below record the reference material
 for each ID and what still blocks it.
 
 ### NESdev references
@@ -439,7 +440,7 @@ board loads and boots but does not render, or renders only some images.
 | 334 | 5/20-in-1 1993 multicart | implemented | [NES 2.0 Mapper 334](https://www.nesdev.org/wiki/NES_2.0_Mapper_334) |
 | 355 | 3D-BLOCK (PIC16C54) | unimplemented | [NES 2.0 Mapper 355](https://www.nesdev.org/wiki/NES_2.0_Mapper_355) |
 | 374 | reset-based MMC1 multicart | implemented | [NES 2.0 Mapper 374](https://www.nesdev.org/wiki/NES_2.0_Mapper_374) |
-| 394 | Realtec HSK007 | unimplemented | [NES 2.0 Mapper 394](https://www.nesdev.org/wiki/NES_2.0_Mapper_394) |
+| 394 | Realtec HSK007 | implemented | [NES 2.0 Mapper 394](https://www.nesdev.org/wiki/NES_2.0_Mapper_394) |
 | 405 | UM6578 enhanced console | unimplemented | [NES 2.0 Mapper 405](https://www.nesdev.org/wiki/NES_2.0_Mapper_405) |
 | 418 | 820106-C/821007C | unimplemented | [NES 2.0 Mapper 418](https://www.nesdev.org/wiki/NES_2.0_Mapper_418) |
 | 446 | Mindkids SMD172B supervisor | partial (1/4 render) | [NES 2.0 Mapper 446](https://www.nesdev.org/wiki/NES_2.0_Mapper_446) |
