@@ -642,6 +642,9 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Observes every CPU bus address (mapper 355's protection MCU).
+    fn set_cpu_address(&mut self, _address: u16) {}
+
     /// Whether the board is a UM6578 enhanced famiclone.
     fn um6578(&self) -> bool {
         false
@@ -862,6 +865,7 @@ impl Cartridge {
         } else {
             chr
         };
+        let misc_rom = bytes[chr_end..].to_vec();
         let prg_ram = vec![0; header.prg_ram_size.max(0x2000)];
         let mapper: Box<dyn Mapper> = match header.mapper {
             0 => Box::new(Nrom::new(prg_rom, chr, header)),
@@ -1072,6 +1076,7 @@ impl Cartridge {
             396 => Box::new(Realtec396::new(prg_rom, chr, header)),
             399 => Box::new(Batmap399::new(prg_rom, chr, header)),
             351 => Box::new(Techline351::new(prg_rom, chr, header)),
+            355 => Box::new(Mapper355::new(prg_rom, chr, &misc_rom, header)),
             368 => Box::new(Yung08::new(prg_rom, chr, header)),
             400 => Box::new(Xmas400::new(prg_rom, chr, header)),
             405 => Box::new(Um6578::new(prg_rom, chr, prg_ram, header)),
@@ -1375,6 +1380,11 @@ impl Cartridge {
     /// Pops a pending cartridge DMA request.
     pub fn take_dma(&mut self) -> Option<DmaRequest> {
         self.mapper.take_dma()
+    }
+
+    /// Passes the current CPU bus address to the mapper.
+    pub fn set_cpu_address(&mut self, address: u16) {
+        self.mapper.set_cpu_address(address);
     }
 
     /// Whether the cartridge is a UM6578 enhanced famiclone.
@@ -10640,6 +10650,525 @@ impl Mapper for LatchAddr585 {
     fn chr_mapping_write(&self, address: u16) -> bool {
         address >= 0x8000
     }
+}
+
+/// Minimal PIC16C54 interpreter for mapper 355's protection MCU.
+#[derive(Debug)]
+pub struct Pic16c54 {
+    rom: Vec<u16>,
+    ram: [u8; 32],
+    w: u8,
+    pc: u16,
+    stack: [u16; 2],
+    sp: u8,
+    tris_a: u8,
+    tris_b: u8,
+    option: u8,
+    clock2cycle: u8,
+    icount: i32,
+    inst_cycles: i32,
+    delay_timer: i32,
+    prescaler: u32,
+    /// Current CPU bus address, presented on the port pins.
+    pub cpu_address: u16,
+    /// Level of the MCU's /IRQ output.
+    pub irq: bool,
+}
+
+impl Pic16c54 {
+    fn new(misc: &[u8]) -> Self {
+        let mut rom = vec![0u16; 512];
+        for (index, word) in rom.iter_mut().enumerate() {
+            let low = misc.get(index * 2).copied().unwrap_or(0);
+            let high = misc.get(index * 2 + 1).copied().unwrap_or(0);
+            *word = u16::from(low) | (u16::from(high) << 8);
+        }
+        let mut this = Self {
+            rom,
+            ram: [0; 32],
+            w: 0,
+            pc: 0x1FF,
+            stack: [0; 2],
+            sp: 0,
+            tris_a: 0xFF,
+            tris_b: 0xFF,
+            option: 0x3F,
+            clock2cycle: 0,
+            icount: 0,
+            inst_cycles: 1,
+            delay_timer: 0,
+            prescaler: 0,
+            cpu_address: 0,
+            irq: false,
+        };
+        this.reset();
+        this
+    }
+
+    fn reset(&mut self) {
+        self.ram = [0; 32];
+        self.w = 0;
+        self.pc = 0x1FF;
+        self.stack = [0; 2];
+        self.sp = 0;
+        self.tris_a = 0xFF;
+        self.tris_b = 0xFF;
+        self.option = 0x3F;
+        self.clock2cycle = 0;
+        self.icount = 0;
+        self.inst_cycles = 1;
+        self.delay_timer = 0;
+        self.prescaler = 0;
+        self.irq = false;
+        self.ram[2] = 0xFF;
+        self.ram[3] = 0x18;
+        self.ram[4] = 0xE0;
+    }
+
+    fn status(&self) -> u8 {
+        self.ram[3]
+    }
+
+    fn carries(&self) -> bool {
+        self.ram[3] & 0x01 != 0
+    }
+
+    fn set_carry(&mut self, value: bool) {
+        if value {
+            self.ram[3] |= 0x01;
+        } else {
+            self.ram[3] &= !0x01;
+        }
+    }
+
+    fn set_dc(&mut self, value: bool) {
+        if value {
+            self.ram[3] |= 0x02;
+        } else {
+            self.ram[3] &= !0x02;
+        }
+    }
+
+    fn set_zero(&mut self, value: bool) {
+        if value {
+            self.ram[3] |= 0x04;
+        } else {
+            self.ram[3] &= !0x04;
+        }
+    }
+
+    fn port_a_in(&self) -> u8 {
+        let a = self.cpu_address;
+        let mut value = 1u8;
+        if a & 0x0040 != 0 {
+            value |= 0x02;
+        }
+        if a & 0x0020 != 0 {
+            value |= 0x04;
+        }
+        if a & 0x0010 != 0 {
+            value |= 0x08;
+        }
+        value
+    }
+
+    fn port_b_in(&self) -> u8 {
+        let a = self.cpu_address;
+        let bits = [
+            (0x1000u16, 0x01u8),
+            (0x0080, 0x02),
+            (0x0400, 0x04),
+            (0x0800, 0x08),
+            (0x0200, 0x10),
+            (0x0100, 0x20),
+            (0x2000, 0x40),
+            (0x4000, 0x80),
+        ];
+        let mut value = 0u8;
+        for (mask, bit) in bits {
+            if a & mask != 0 {
+                value |= bit;
+            }
+        }
+        value
+    }
+
+    /// Applies a port-A output; bit 12 marks a TRIS update.
+    fn port_a_out(&mut self, value: u16) {
+        self.irq = value & 0x1001 != 0;
+    }
+
+    fn get_reg(&mut self, address: u8) -> u8 {
+        let index = if address == 0 {
+            usize::from(self.ram[4] & 0x1F)
+        } else {
+            usize::from(address & 0x1F)
+        };
+        match index {
+            0 => 0,
+            4 => self.ram[4] | 0xE0,
+            5 => (self.port_a_in() & self.tris_a) | ((!self.tris_a) & self.ram[5]) & 0x0F,
+            6 => (self.port_b_in() & self.tris_b) | ((!self.tris_b) & self.ram[6]),
+            _ => self.ram[index],
+        }
+    }
+
+    fn set_reg(&mut self, address: u8, value: u8) {
+        let index = if address == 0 {
+            usize::from(self.ram[4] & 0x1F)
+        } else {
+            usize::from(address & 0x1F)
+        };
+        match index {
+            0 => {}
+            1 => {
+                self.delay_timer = 2;
+                if self.option & 0x08 == 0 {
+                    self.prescaler = 0;
+                }
+                self.ram[1] = value;
+            }
+            2 => {
+                self.ram[2] = value;
+                self.pc = (((u16::from(self.ram[3]) & 0xE0) << 4) | u16::from(value)) & 0x1FF;
+            }
+            3 => {
+                self.ram[3] = (self.ram[3] & 0x18) | (value & !0x18);
+            }
+            4 => {
+                self.ram[4] = value | 0xE0;
+            }
+            5 => {
+                let value = value & 0x0F;
+                let out = u16::from(value & !self.tris_a);
+                self.port_a_out(out);
+                self.ram[5] = value;
+            }
+            6 => {
+                self.ram[6] = value;
+            }
+            _ => self.ram[index] = value,
+        }
+    }
+
+    fn store_result(&mut self, address: u8, value: u8, to_reg: bool) {
+        if to_reg {
+            self.set_reg(address, value);
+        } else {
+            self.w = value;
+        }
+    }
+
+    fn skip(&mut self) {
+        self.pc = (self.pc.wrapping_add(1)) & 0x1FF;
+        self.ram[2] = self.ram[2].wrapping_add(1);
+        self.inst_cycles += 1;
+    }
+
+    fn push(&mut self) {
+        let slot = usize::from(self.sp & 1);
+        self.stack[slot] = self.pc;
+        self.sp = self.sp.wrapping_add(1);
+    }
+
+    fn pop(&mut self) -> u16 {
+        self.sp = self.sp.wrapping_sub(1);
+        self.stack[usize::from(self.sp & 1)]
+    }
+
+    fn update_timer(&mut self, counts: u32) {
+        if self.option & 0x08 == 0 {
+            self.prescaler += counts;
+            let limit = 2u32 << (self.option & 0x07);
+            if self.prescaler >= limit {
+                self.ram[1] = self.ram[1].wrapping_add((self.prescaler / limit) as u8);
+                self.prescaler %= limit;
+            }
+        } else {
+            self.ram[1] = self.ram[1].wrapping_add(counts as u8);
+        }
+    }
+
+    fn execute(&mut self, op: u16) {
+        self.inst_cycles = 1;
+        let file = (op & 0x1F) as u8;
+        let to_reg = op & 0x20 != 0;
+        if op & 0xFF0 != 0 {
+            match (op >> 4) & 0xFF {
+                0x02 | 0x03 => {
+                    let value = self.w;
+                    self.set_reg(file, value);
+                }
+                0x04 => {
+                    self.w = 0;
+                    self.set_zero(true);
+                }
+                0x06 | 0x07 => {
+                    self.set_reg(file, 0);
+                    self.set_zero(true);
+                }
+                0x08..=0x0B => {
+                    let old = self.get_reg(file);
+                    let alu = old.wrapping_sub(self.w);
+                    self.store_result(file, alu, to_reg);
+                    self.set_zero(alu == 0);
+                    self.set_carry(old >= alu);
+                    self.set_dc((old & 0x0F) >= (alu & 0x0F));
+                }
+                0x0C..=0x0F => {
+                    let alu = self.get_reg(file).wrapping_sub(1);
+                    self.store_result(file, alu, to_reg);
+                    self.set_zero(alu == 0);
+                }
+                0x10..=0x13 => {
+                    let alu = self.get_reg(file) | self.w;
+                    self.store_result(file, alu, to_reg);
+                    self.set_zero(alu == 0);
+                }
+                0x14..=0x17 => {
+                    let alu = self.get_reg(file) & self.w;
+                    self.store_result(file, alu, to_reg);
+                    self.set_zero(alu == 0);
+                }
+                0x18..=0x1B => {
+                    let alu = self.get_reg(file) ^ self.w;
+                    self.store_result(file, alu, to_reg);
+                    self.set_zero(alu == 0);
+                }
+                0x1C..=0x1F => {
+                    let old = self.get_reg(file);
+                    let alu = old.wrapping_add(self.w);
+                    self.store_result(file, alu, to_reg);
+                    self.set_zero(alu == 0);
+                    self.set_carry(old > alu);
+                    self.set_dc((old & 0x0F) > (alu & 0x0F));
+                }
+                0x20..=0x23 => {
+                    let alu = self.get_reg(file);
+                    self.store_result(file, alu, to_reg);
+                    self.set_zero(alu == 0);
+                }
+                0x24..=0x27 => {
+                    let alu = !self.get_reg(file);
+                    self.store_result(file, alu, to_reg);
+                    self.set_zero(alu == 0);
+                }
+                0x28..=0x2B => {
+                    let alu = self.get_reg(file).wrapping_add(1);
+                    self.store_result(file, alu, to_reg);
+                    self.set_zero(alu == 0);
+                }
+                0x2C..=0x2F => {
+                    let alu = self.get_reg(file).wrapping_sub(1);
+                    self.store_result(file, alu, to_reg);
+                    if alu == 0 {
+                        self.skip();
+                    }
+                }
+                0x30..=0x33 => {
+                    let mut alu = self.get_reg(file);
+                    let bit7 = alu & 0x80 != 0;
+                    alu = (alu << 1) | u8::from(self.carries());
+                    self.store_result(file, alu, to_reg);
+                    self.set_carry(bit7);
+                }
+                0x34..=0x37 => {
+                    let mut alu = self.get_reg(file);
+                    let bit0 = alu & 0x01 != 0;
+                    alu = (alu >> 1) | if self.carries() { 0x80 } else { 0 };
+                    self.store_result(file, alu, to_reg);
+                    self.set_carry(bit0);
+                }
+                0x38..=0x3B => {
+                    let value = self.get_reg(file);
+                    let alu = value.rotate_right(4);
+                    self.store_result(file, alu, to_reg);
+                }
+                0x3C..=0x3F => {
+                    let alu = self.get_reg(file).wrapping_add(1);
+                    self.store_result(file, alu, to_reg);
+                    if alu == 0 {
+                        self.skip();
+                    }
+                }
+                0x40..=0x4F => {
+                    let bit = 1u8 << ((op >> 5) & 0x07);
+                    let value = self.get_reg(file) & !bit;
+                    self.set_reg(file, value);
+                }
+                0x50..=0x5F => {
+                    let bit = 1u8 << ((op >> 5) & 0x07);
+                    let value = self.get_reg(file) | bit;
+                    self.set_reg(file, value);
+                }
+                0x60..=0x6F => {
+                    let bit = 1u8 << ((op >> 5) & 0x07);
+                    if self.get_reg(file) & bit == 0 {
+                        self.skip();
+                    }
+                }
+                0x70..=0x7F => {
+                    let bit = 1u8 << ((op >> 5) & 0x07);
+                    if self.get_reg(file) & bit != 0 {
+                        self.skip();
+                    }
+                }
+                0x80..=0x8F => {
+                    self.w = (op & 0xFF) as u8;
+                    self.pc = self.pop() & 0x1FF;
+                    self.ram[2] = self.pc as u8;
+                    self.inst_cycles = 2;
+                }
+                0x90..=0x9F => {
+                    self.push();
+                    let page = (u16::from(self.status()) & 0xE0) << 4;
+                    self.pc = (page | (op & 0xFF)) & 0x1FF;
+                    self.ram[2] = self.pc as u8;
+                    self.inst_cycles = 2;
+                }
+                0xA0..=0xBF => {
+                    let page = (u16::from(self.status()) & 0xE0) << 4;
+                    self.pc = (page | (op & 0x1FF)) & 0x1FF;
+                    self.ram[2] = self.pc as u8;
+                    self.inst_cycles = 2;
+                }
+                0xC0..=0xCF => self.w = (op & 0xFF) as u8,
+                0xD0..=0xDF => {
+                    self.w |= (op & 0xFF) as u8;
+                    self.set_zero(self.w == 0);
+                }
+                0xE0..=0xEF => {
+                    self.w &= (op & 0xFF) as u8;
+                    self.set_zero(self.w == 0);
+                }
+                0xF0..=0xFF => {
+                    self.w ^= (op & 0xFF) as u8;
+                    self.set_zero(self.w == 0);
+                }
+                _ => {}
+            }
+        } else {
+            match op & 0x1F {
+                0x00 => {}
+                0x02 => self.option = self.w & 0x3F,
+                0x03 => {
+                    self.ram[3] |= 0x10;
+                    self.ram[3] &= !0x08;
+                }
+                0x04 => {
+                    self.ram[3] |= 0x18;
+                }
+                0x05 => {
+                    self.tris_a = self.w;
+                    let value = 0x1000 | u16::from(self.ram[5] & !self.tris_a & 0x0F);
+                    self.port_a_out(value);
+                }
+                0x06 => self.tris_b = self.w,
+                _ => {}
+            }
+        }
+    }
+
+    /// Advances the MCU by one M2 cycle (four cycles per instruction).
+    pub fn run(&mut self) {
+        self.clock2cycle = self.clock2cycle.wrapping_add(1);
+        if self.clock2cycle & 3 == 0 {
+            self.icount += 1;
+        }
+        while self.icount > 0 {
+            if self.ram[3] & 0x08 == 0 {
+                self.inst_cycles = 1;
+            } else {
+                let op = self.rom[usize::from(self.pc & 0x1FF)];
+                self.pc = (self.pc.wrapping_add(1)) & 0x1FF;
+                self.ram[2] = self.ram[2].wrapping_add(1);
+                self.execute(op);
+                if self.option & 0x20 == 0 {
+                    if self.delay_timer > 0 {
+                        self.delay_timer -= 1;
+                    } else {
+                        let counts = self.inst_cycles.max(1) as u32;
+                        self.update_timer(counts);
+                    }
+                }
+            }
+            self.icount -= self.inst_cycles;
+        }
+    }
+}
+
+/// 3D-BLOCK / Block Force board (mapper 355): NROM-256 plus a PIC16C54
+/// protection MCU that watches CPU A4-A14 and drives the cartridge IRQ.
+#[derive(Debug)]
+pub struct Mapper355 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    pic: Pic16c54,
+    mirroring: Mirroring,
+}
+
+impl Mapper355 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, misc: &[u8], header: Header) -> Self {
+        Self {
+            prg,
+            chr,
+            pic: Pic16c54::new(misc),
+            mirroring: header.mirroring,
+        }
+    }
+}
+
+impl Mapper for Mapper355 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let banks = (self.prg.len() / 0x8000).max(1);
+        self.prg
+            .get(
+                ((usize::from(address - 0x8000) / 0x8000) % banks) * 0x8000
+                    + usize::from(address & 0x7FFF),
+            )
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_write(&mut self, _address: u16, _value: u8) {}
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        355
+    }
+
+    fn set_cpu_address(&mut self, address: u16) {
+        self.pic.cpu_address = address;
+    }
+
+    fn clock_cpu(&mut self) {
+        self.pic.run();
+    }
+
+    fn irq_line(&self) -> bool {
+        self.pic.irq
+    }
+
+    fn acknowledge_irq(&mut self) {}
 }
 
 /// UM6578 enhanced famiclone (mapper 405): eight 4 KiB PRG windows selected
@@ -33533,6 +34062,30 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
         cart.ppu_write(0x0123, 0x5A);
         assert_eq!(cart.ppu_read(0x0123), 0x5A);
+    }
+
+    #[test]
+    fn pic355_runs_protection_program() {
+        // 32 KiB PRG plus a 1 KiB PIC program in the NES 2.0 Misc ROM.
+        let mut rom = synth_banked(355, 32, 0);
+        rom[14] = 0x01;
+        let mut misc = vec![0u8; 1024];
+        let mut set = |index: usize, value: u16| {
+            misc[index * 2] = value as u8;
+            misc[index * 2 + 1] = (value >> 8) as u8;
+        };
+        set(0x1FF, 0xA00); // reset vector: GOTO 0
+        set(0, 0xC00); // MOVLW 0
+        set(1, 0x005); // TRIS 5: port-A update asserts the IRQ line
+        set(2, 0xA02); // GOTO 2
+        rom.extend_from_slice(&misc);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 355);
+        assert!(!cart.irq_line());
+        for _ in 0..64 {
+            cart.clock_cpu();
+        }
+        assert!(cart.irq_line());
     }
 
     #[test]

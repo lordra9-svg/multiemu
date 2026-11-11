@@ -968,6 +968,7 @@ impl System {
 
 impl CpuBus for System {
     fn read(&mut self, address: u16) -> u8 {
+        self.cart.set_cpu_address(address);
         // $2004 reflects the OAM data bus at the end of the CPU read cycle.
         // Advance the final PPU dot before sampling it and suppress the usual
         // post-access step so the cycle length is unchanged.
@@ -1032,6 +1033,7 @@ impl CpuBus for System {
     }
 
     fn write(&mut self, address: u16, value: u8) {
+        self.cart.set_cpu_address(address);
         match address {
             0x0000..=0x1FFF => {
                 self.ram[usize::from(address) & 0x07FF] = value;
