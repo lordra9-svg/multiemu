@@ -839,6 +839,7 @@ impl Cartridge {
             309 => Box::new(Lh51::new(prg_rom, chr, header)),
             521 => Box::new(DreamTech01::new(prg_rom, chr, header)),
             522 => Box::new(Lh10::new(prg_rom, chr, prg_ram, header)),
+            525 => Box::new(Vrc::new(prg_rom, chr, prg_ram, header)),
             56 => Box::new(Ks202::new(prg_rom, chr, prg_ram, header)),
             57 => Box::new(Bmc57::new(prg_rom, chr, header)),
             120 => Box::new(FdsConv120::new(prg_rom, chr, header)),
@@ -30258,6 +30259,23 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), 0x82);
         cart.cpu_write(0x6000, 0x42);
         assert_eq!(cart.cpu_read(0x6000), 0x42);
+    }
+
+    #[test]
+    fn kaiser_7021a_525_vrc4() {
+        // 128 KiB PRG and CHR.
+        let rom = synth_banked(525, 128, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 525);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 14 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 15 * 0x2000]);
+        cart.cpu_write(0x8000, 3);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
+        cart.cpu_write(0xB000, 2);
+        assert_eq!(cart.ppu_read(0x0000), 0x82);
+        cart.cpu_write(0x9000, 0);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
     }
 
     #[test]
