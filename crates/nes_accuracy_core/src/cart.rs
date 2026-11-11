@@ -990,6 +990,8 @@ impl Cartridge {
             513 => Box::new(Sachen9602::new(prg_rom, chr, header)),
             530 => Box::new(Ax5705::new(prg_rom, chr, header)),
             538 => Box::new(Soccer538::new(prg_rom, chr, header)),
+            359 => Box::new(BmcSb5013::new(prg_rom, chr, header, false)),
+            540 => Box::new(BmcSb5013::new(prg_rom, chr, header, true)),
             539 => Box::new(KidIcarus539::new(prg_rom, chr, prg_ram, header)),
             533 => Box::new(Sachen3014::new(prg_rom, chr, header)),
             126 => Box::new(Tec9719::new(prg_rom, chr, header, 126)),
@@ -6676,6 +6678,239 @@ impl Mapper for LuckyRabbit415 {
 
     fn prg_rom_at_6000(&self) -> bool {
         true
+    }
+}
+
+/// SB-5013 / GCL8050 multicarts (mappers 359 and 540): four inner 8 KiB
+/// PRG banks inside a size-selectable outer bank, eight CHR registers
+/// (1 KiB for 359, rewired 2 KiB for 540) and the M2/PA12 IRQ.
+#[derive(Debug)]
+pub struct BmcSb5013 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    inner: [u8; 4],
+    outer: u8,
+    outer_mask: u8,
+    chr_regs: [u8; 8],
+    chr_base: u8,
+    chr_mask: u16,
+    mirroring: Mirroring,
+    chr_2k: bool,
+    m2_counter: u16,
+    pa12_latch: u8,
+    pa12_counter: u8,
+    pa12_reload: bool,
+    irq_enabled: bool,
+    irq_pa12: bool,
+    irq_auto: bool,
+    irq_pending: bool,
+}
+
+impl BmcSb5013 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header, chr_2k: bool) -> Self {
+        Self {
+            prg,
+            chr,
+            inner: [0; 4],
+            outer: 0,
+            outer_mask: 0x3F,
+            chr_regs: [0; 8],
+            chr_base: 0,
+            chr_mask: 0x7F,
+            mirroring: header.mirroring,
+            chr_2k,
+            m2_counter: 0,
+            pa12_latch: 0,
+            pa12_counter: 0,
+            pa12_reload: false,
+            irq_enabled: false,
+            irq_pa12: false,
+            irq_auto: false,
+            irq_pending: false,
+        }
+    }
+
+    fn outer_size(&self) -> usize {
+        usize::from(self.outer_mask) + 1
+    }
+
+    fn prg_page(&self, inner: usize) -> usize {
+        let banks = (self.prg.len() / 0x2000).max(1);
+        (usize::from(self.outer) * self.outer_size() + (inner & usize::from(self.outer_mask)))
+            % banks
+    }
+
+    fn prg_8k(&self, page: usize, address: u16) -> u8 {
+        self.prg
+            .get(page * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_bank(&self, address: u16) -> usize {
+        let banks = (self.chr.len() / 0x400).max(1);
+        if self.chr_2k {
+            let slot = usize::from(address) / 0x800;
+            let reg = match slot {
+                0 => self.chr_regs[0],
+                1 => self.chr_regs[1],
+                2 => self.chr_regs[6],
+                _ => self.chr_regs[7],
+            };
+            (usize::from(reg) * 2 + (usize::from(address >> 10) & 0x01)) % banks
+        } else {
+            let slot = usize::from(address) / 0x400;
+            let base = usize::from(self.chr_base) << 7;
+            (base + (usize::from(self.chr_regs[slot]) & usize::from(self.chr_mask))) % banks
+        }
+    }
+}
+
+impl Mapper for BmcSb5013 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x6000..=0x7FFF => self.prg_8k(self.prg_page(usize::from(self.inner[3])), address),
+            0x8000..=0x9FFF => self.prg_8k(self.prg_page(usize::from(self.inner[0])), address),
+            0xA000..=0xBFFF => self.prg_8k(self.prg_page(usize::from(self.inner[1])), address),
+            0xC000..=0xDFFF => self.prg_8k(self.prg_page(usize::from(self.inner[2])), address),
+            0xE000..=0xFFFF => {
+                let banks = (self.prg.len() / 0x2000).max(1);
+                let page = (usize::from(self.outer) * self.outer_size()
+                    + usize::from(self.outer_mask))
+                    % banks;
+                self.prg_8k(page, address)
+            }
+            _ => 0,
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address & 0xF003 {
+            0x8000..=0x8003 => self.inner[usize::from(address & 0x03)] = value,
+            0x9000 => self.outer = (value >> 2) & 0x07,
+            0x9001 => {
+                self.outer_mask = match value & 0x03 {
+                    0 => 0x3F,
+                    1 => 0x1F,
+                    2 => 0x2F,
+                    _ => 0x0F,
+                };
+                self.chr_mask = if value & 0x80 != 0 { 0xFF } else { 0x7F };
+            }
+            0x9002 => {
+                self.mirroring = match value & 0x03 {
+                    0 => Mirroring::Vertical,
+                    1 => Mirroring::Horizontal,
+                    2 => Mirroring::SingleLower,
+                    _ => Mirroring::SingleUpper,
+                };
+            }
+            0x9003 => self.chr_base = value & 0x03,
+            0xA000..=0xA003 => self.chr_regs[usize::from(address & 0x03)] = value,
+            0xB000..=0xB003 => self.chr_regs[4 + usize::from(address & 0x03)] = value,
+            0xC000 => {
+                if self.irq_pa12 {
+                    self.pa12_reload = true;
+                } else {
+                    self.m2_counter = (self.m2_counter & 0xFF00) | u16::from(value);
+                }
+                if self.irq_auto {
+                    self.irq_enabled = false;
+                }
+            }
+            0xC001 => {
+                if self.irq_pa12 {
+                    self.pa12_latch = value;
+                } else {
+                    self.m2_counter = (self.m2_counter & 0x00FF) | (u16::from(value) << 8);
+                }
+                if self.irq_auto {
+                    self.irq_enabled = true;
+                }
+            }
+            0xC002 => {
+                self.irq_pa12 = value & 0x02 != 0;
+                self.irq_auto = value & 0x04 != 0;
+                self.irq_enabled = value & 0x01 != 0;
+                self.irq_pending = false;
+            }
+            0xC003 if !self.irq_auto => {
+                self.irq_enabled = value & 0x01 != 0;
+                self.irq_pending = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let bank = self.chr_bank(address);
+        self.chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let bank = self.chr_bank(address);
+        if let Some(byte) = self
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        if self.chr_2k {
+            540
+        } else {
+            359
+        }
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        true
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        matches!(address & 0xF003, 0xA000..=0xA003 | 0xB000..=0xB003)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.irq_pending
+    }
+
+    fn clock_cpu(&mut self) {
+        if self.irq_pa12 || !self.irq_enabled || self.m2_counter == 0 {
+            return;
+        }
+        self.m2_counter -= 1;
+        if self.m2_counter == 0 {
+            self.irq_pending = true;
+        }
+    }
+
+    fn clock_scanline(&mut self) {
+        if !self.irq_pa12 || !self.irq_enabled {
+            return;
+        }
+        if self.pa12_counter == 0 || self.pa12_reload {
+            self.pa12_counter = self.pa12_latch;
+            self.pa12_reload = false;
+        } else {
+            self.pa12_counter -= 1;
+        }
+        if self.pa12_counter == 0 {
+            self.irq_pending = true;
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.irq_pending = false;
     }
 }
 
@@ -29068,6 +29303,35 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), page(62));
         assert_eq!(cart.cpu_read(0xC000), page(5));
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn sb5013_540_two_kib_chr() {
+        // 128 KiB PRG, 512 KiB CHR.
+        let rom = synth_banked(540, 128, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 540);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 15 * 0x2000]);
+        cart.cpu_write(0x8000, 5);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x2000]);
+        cart.cpu_write(0xA000, 3);
+        assert_eq!(cart.ppu_read(0x0000), 0x86);
+        assert_eq!(cart.ppu_read(0x0400), 0x87);
+        cart.cpu_write(0xA001, 4);
+        assert_eq!(cart.ppu_read(0x0800), 0x88);
+        cart.cpu_write(0xB002, 5);
+        assert_eq!(cart.ppu_read(0x1000), 0x8A);
+        cart.cpu_write(0xB003, 6);
+        assert_eq!(cart.ppu_read(0x1800), 0x8C);
+        cart.cpu_write(0x9002, 1);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0xC000, 2);
+        cart.cpu_write(0xC001, 0);
+        cart.cpu_write(0xC002, 1);
+        cart.clock_cpu();
+        cart.clock_cpu();
+        assert!(cart.irq_line());
     }
 
     #[test]
