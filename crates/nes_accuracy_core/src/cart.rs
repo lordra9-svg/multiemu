@@ -2950,7 +2950,8 @@ impl Mmc2 {
         if self.number == 9 {
             let banks = (self.prg.len() / 0x2000).max(1);
             let bank = if offset < 0x2000 {
-                usize::from(self.prg_bank & 0x0F) % banks
+                // The MMC2 register is 5 bits wide.
+                usize::from(self.prg_bank & 0x1F) % banks
             } else {
                 // The top 24 KiB is fixed to the last three 8 KiB banks:
                 // $A000/$C000/$E000 see banks N-3/N-2/N-1. Punch-Out!! keeps
@@ -3004,7 +3005,8 @@ impl Mapper for Mmc2 {
             return;
         }
         match address & 0xF000 {
-            0xA000 => self.prg_bank = value & 0x0F,
+            // MMC2's $A000 register is 5 bits (256 KiB = 32 x 8 KiB banks).
+            0xA000 => self.prg_bank = value & 0x1F,
             0xB000 => self.chr_banks[0] = value & 0x1F,
             0xC000 => self.chr_banks[1] = value & 0x1F,
             0xD000 => self.chr_banks[2] = value & 0x1F,
@@ -35556,6 +35558,26 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
         cart.cpu_write(0x6000, 0x04);
         assert_eq!(cart.cpu_read(0x8000), rom[16 + 3 * 0x2000]);
+    }
+
+    #[test]
+    fn mmc2_9_five_bit_prg_bank() {
+        // 256 KiB PRG (32 x 8 KiB), 128 KiB CHR.
+        let rom = synth_banked(9, 256, 128);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 9);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        // Bank 16 and 31 need the fifth bit (Punch-Out is 256 KiB).
+        cart.cpu_write(0xA000, 0x10);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 16 * 0x2000]);
+        cart.cpu_write(0xA000, 0x1F);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 31 * 0x2000]);
+        // Bit 4 of $A000 also disables writes to the $6000 work RAM.
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0);
+        cart.cpu_write(0xA000, 0x0F);
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
     }
 
     #[test]
