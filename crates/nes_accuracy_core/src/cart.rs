@@ -1008,6 +1008,7 @@ impl Cartridge {
             389 => Box::new(Caltron389::new(prg_rom, chr, header)),
             396 => Box::new(Realtec396::new(prg_rom, chr, header)),
             399 => Box::new(Batmap399::new(prg_rom, chr, header)),
+            351 => Box::new(Techline351::new(prg_rom, chr, header)),
             368 => Box::new(Yung08::new(prg_rom, chr, header)),
             400 => Box::new(Xmas400::new(prg_rom, chr, header)),
             415 => Box::new(LuckyRabbit415::new(prg_rom, chr, header)),
@@ -6686,6 +6687,166 @@ impl Mapper for LuckyRabbit415 {
     }
 }
 
+/// Techline XB-xxx multicart (mapper 351): an MMC3-compatible ASIC with
+/// outer PRG/CHR bases, selectable inner bank sizes and the CHR-RAM mode.
+#[derive(Debug)]
+pub struct Techline351 {
+    inner: Mmc3,
+    prg_base: u16,
+    prg_mask: usize,
+    chr_base: u16,
+    chr_mask: usize,
+    chr_ram: bool,
+    mode: u8,
+}
+
+impl Techline351 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 351),
+            prg_base: 0,
+            prg_mask: 0x1F,
+            chr_base: 0,
+            chr_mask: 0xFF,
+            chr_ram: false,
+            mode: 0,
+        }
+    }
+
+    fn prg_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.prg.len() / 0x2000).max(1);
+        let bank = if slot < 2 {
+            usize::from(self.prg_base) + (self.inner.prg_slot(slot) & self.prg_mask)
+        } else {
+            self.inner.prg_slot(slot)
+        };
+        bank % banks
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        (usize::from(self.chr_base) + (self.inner.chr_bank(slot) & self.chr_mask)) % banks
+    }
+}
+
+impl Mapper for Techline351 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address >= 0x8000 {
+            let slot = usize::from((address - 0x8000) / 0x2000);
+            let bank = self.prg_bank(slot);
+            self.inner
+                .prg
+                .get(bank * 0x2000 + usize::from(address & 0x1FFF))
+                .copied()
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x5000 => {
+                self.mode = value & 0x03;
+                self.chr_base = u16::from(value >> 2) * 8;
+            }
+            0x5001 => self.prg_base = u16::from(value >> 2) * 2,
+            0x5002 => {
+                self.chr_ram = value & 0x01 != 0;
+                let pp = (value >> 2) & 0x03;
+                let p = value & 0x10 != 0;
+                let prg_kib = if p {
+                    match pp {
+                        0 => 32,
+                        1 => 16,
+                        _ => 8,
+                    }
+                } else {
+                    match pp {
+                        0 => 256,
+                        1 => 128,
+                        _ => 8,
+                    }
+                };
+                self.prg_mask = (prg_kib / 8) - 1;
+                let chr_kib = match (value >> 4) & 0x07 {
+                    4..=7 => 8,
+                    2 | 3 => 128,
+                    1 => 32,
+                    _ => 256,
+                };
+                self.chr_mask = chr_kib - 1;
+            }
+            0x8000..=0xFFFF => self.inner.prg_write(address, value),
+            _ => {}
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        if self.chr_ram {
+            return self
+                .inner
+                .chr
+                .get(usize::from(address & 0x1FFF))
+                .copied()
+                .unwrap_or(0);
+        }
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        self.inner
+            .chr
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if self.chr_ram {
+            if let Some(byte) = self.inner.chr.get_mut(usize::from(address & 0x1FFF)) {
+                *byte = value;
+            }
+            return;
+        }
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot);
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        351
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x5000..=0x5002).contains(&address) || (0x8000..=0x9FFF).contains(&address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
 /// INX_007T_V01 Retro-Bit multicart (mapper 470): AOROM with a 256 KiB
 /// outer bank register at `$5000-$5FFF`.
 #[derive(Debug)]
@@ -6729,13 +6890,6 @@ impl Mapper for Inx470 {
         if (0x5000..=0x5FFF).contains(&address) {
             self.outer = value;
         } else if address >= 0x8000 {
-            let bank = (usize::from(self.outer) * 8 + usize::from(self.bank)) % self.banks();
-            let visible = self
-                .prg
-                .get(bank * 0x8000 + usize::from(address - 0x8000))
-                .copied()
-                .unwrap_or(0xFF);
-            let value = value & visible;
             self.bank = value & 0x07;
             self.mirroring = if value & 0x10 != 0 {
                 Mirroring::SingleUpper
@@ -29840,6 +29994,29 @@ mod tests {
     }
 
     #[test]
+    fn techline_351_outer_and_inner() {
+        // 512 KiB PRG and CHR.
+        let rom = synth_banked(351, 512, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 351);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 62 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 63 * 0x2000]);
+        cart.cpu_write(0x5001, 0x08);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 4 * 0x2000]);
+        cart.cpu_write(0x5000, 0x08);
+        assert_eq!(cart.ppu_read(0x0000), 0x90);
+        cart.cpu_write(0x5002, 0x10);
+        cart.cpu_write(0x8000, 6);
+        cart.cpu_write(0x8001, 5);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x2000]);
+        cart.cpu_write(0x8000, 0);
+        cart.cpu_write(0x8001, 3);
+        // MMC3 R0 is a 2 KiB bank, so slot 0 resolves to even bank 2.
+        assert_eq!(cart.ppu_read(0x0000), 0x92);
+    }
+
+    #[test]
     fn th2131_308_vrc2_and_irq() {
         // 128 KiB PRG and CHR.
         let rom = synth_banked(308, 128, 128);
@@ -29883,8 +30060,8 @@ mod tests {
 
     #[test]
     fn inx470_outer_and_aorom() {
-        // 1 MiB PRG: each 32 KiB bank is marked at offset 1, with $FF at 0 so
-        // the AOROM bus-conflict AND passes the written bank value.
+        // 1 MiB PRG: each 32 KiB bank is marked at offset 1. The Retro-Bit
+        // board does not have AOROM's bus conflicts.
         let prg = 1024 * 1024;
         let mut rom = vec![0xFFu8; 16 + prg];
         rom[0..4].copy_from_slice(b"NES\x1a");
