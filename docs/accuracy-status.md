@@ -327,9 +327,10 @@ the MMC1 16 KiB page (`page & (mask >> 1) | (outer >> 1)`), which fixes the
 `JMP ($FFFC)` entry after m446-65 locks to SNROM. All four local images render
 by 240 frames (m446-25 and m446-49 at 120, m446-42 and m446-65 at 240); the
 20-frame audit is blank because the multicart loader needs 1-2 s. The outer
-base/mask is applied to the MMC1, MMC3, VRC2/4, VRC6 and H3001 inner boards;
-the remaining fused boards (NROM/UNROM/CNROM/GNROM/152/189) still delegate
-their own latch logic.
+base/mask is applied to the MMC1, MMC3, VRC2/4, VRC6, VRC3, UNROM, CNROM,
+ANROM, GNROM, BNROM, Bandai 152 and 189 inner boards; untranslated fuses fall
+back to the direct ASIC-number table (e.g. fuse 3 locks CNROM rather than
+SKROM).
 See `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
 tail triage.
 
