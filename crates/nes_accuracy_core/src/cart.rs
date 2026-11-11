@@ -7666,6 +7666,14 @@ impl Supervisor446 {
             },
         };
         self.inner = match mapper {
+            // MMC1-family selections need the supervisor's outer/mask
+            // applied to the MMC1 page, which the Skrom path does.
+            Some(1) => Inner446::Skrom(Mmc1::new(
+                self.prg.clone(),
+                Vec::new(),
+                self.prg_ram.clone(),
+                self.header,
+            )),
             Some(id) if self.make_board(id).is_some() => {
                 Inner446::Board(self.make_board(id).expect("checked"))
             }
@@ -7707,20 +7715,6 @@ impl Supervisor446 {
             _ => 0x3F,
         }
     }
-
-    /// Combine the inner 8 KiB bank with the outer bank using `$5003`.
-    ///
-    /// Submappers 0-1 use "set bit = outer bank bit"; submapper 2 inverts
-    /// that (set bit = inner bank bit).
-    fn merge(&self, bank8: usize) -> usize {
-        let m = usize::from(self.mask);
-        let outer = usize::from(self.outer_lo) | (usize::from(self.outer_hi) << 8);
-        if self.submapper >= 2 {
-            (bank8 & m) | (outer & (0xFF & !m))
-        } else {
-            (bank8 & !m) | (outer & m)
-        }
-    }
 }
 
 impl Mapper for Supervisor446 {
@@ -7749,10 +7743,16 @@ impl Mapper for Supervisor446 {
         if address < 0x8000 {
             return mmc1.prg_read(address);
         }
+        // NRS applies the supervisor's 8 KiB mask/outer bank to the MMC1's
+        // 16 KiB page as `page & (mask >> 1) | (outer >> 1)`.
         let page = mmc1.prg_page(address);
+        let and16 = usize::from(self.mask) >> 1;
+        let outer = usize::from(self.outer_lo) | (usize::from(self.outer_hi) << 8);
+        let or16 = (outer >> 1) & !and16;
+        let page = (page & and16) | or16;
         let bank8 = page * 2 + usize::from((address >> 13) & 1);
         let banks = (self.prg.len() / 0x2000).max(1);
-        let bank = self.merge(bank8) % banks;
+        let bank = bank8 % banks;
         self.prg
             .get(bank * 0x2000 + usize::from(address & 0x1FFF))
             .copied()
@@ -35549,6 +35549,24 @@ mod tests {
         cart.cpu_write(0x5005, 0x00);
         cart.ppu_write(0x0001, 0x77);
         assert_eq!(cart.ppu_read(0x0001), 0x77);
+    }
+
+    #[test]
+    fn supervisor_446_locked_snrom_masking() {
+        // Submapper 0, 512 KiB: fuse 1 locks to SNROM (MMC1). The supervisor
+        // applies its 8 KiB mask to the MMC1's 16 KiB page, so a mask of
+        // $0F turns the fixed $C000 page into bank 7 (8K banks 14/15).
+        let rom = synth_banked(446, 512, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x5003, 0xF0); // stored inverted as $0F
+        cart.cpu_write(0x5001, 0x00);
+        cart.cpu_write(0x5000, 0x81);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 14 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 15 * 0x2000]);
+        // The indirect entry vector now reads from the masked fixed page.
+        assert_eq!(cart.cpu_read(0xFFFC), rom[16 + 15 * 0x2000 + 0x1FFC]);
     }
 
     #[test]
