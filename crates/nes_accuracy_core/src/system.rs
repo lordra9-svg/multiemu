@@ -198,6 +198,8 @@ impl System {
         if let Some(aux) = cart.a12_irq() {
             ppu.set_a12_irq(aux);
         }
+        let um6578 = cart.um6578();
+        ppu.set_um6578(um6578);
         if cart.has_rom_nametables() {
             if let Some(rom) = cart.chr_rom() {
                 ppu.set_rom_nametable_rom(rom.to_vec());
@@ -327,7 +329,47 @@ impl System {
         let mut cpu = self.cpu;
         let cycles = cpu.step(self);
         self.cpu = cpu;
+        self.pump_dma();
         cycles.max(1)
+    }
+
+    /// Executes any cartridge DMA request recorded by the mapper.
+    fn pump_dma(&mut self) {
+        while let Some(request) = self.cart.take_dma() {
+            let mut source = request.source;
+            for index in 0..u32::from(request.len) {
+                let byte = if request.source_rom {
+                    self.cart.prg_linear(source as usize)
+                } else {
+                    self.dma_cpu_read(source as u16)
+                };
+                let target = request.target.wrapping_add(index as u16);
+                if request.to_ppu {
+                    self.ppu.dma_write(target, byte);
+                } else {
+                    self.dma_cpu_write(target, byte);
+                }
+                source = source.wrapping_add(1);
+            }
+        }
+    }
+
+    fn dma_cpu_read(&self, address: u16) -> u8 {
+        if address < 0x2000 {
+            self.ram[usize::from(address) & 0x07FF]
+        } else {
+            self.cart.cpu_read(address)
+        }
+    }
+
+    fn dma_cpu_write(&mut self, address: u16, value: u8) {
+        if address < 0x2000 {
+            self.ram[usize::from(address) & 0x07FF] = value;
+        } else {
+            // Go through the normal bus so PPU/APU/cartridge registers see
+            // the transfer (the UM6578 uploads its palette at $2040).
+            self.write(address, value);
+        }
     }
 
     /// The active 8 KiB CHR window (including mappers with shared CHR).
@@ -376,6 +418,7 @@ impl System {
             let mut cpu = self.cpu;
             let cycles = cpu.step(self);
             self.cpu = cpu;
+            self.pump_dma();
             steps += cycles.max(1);
             if self.cpu.halted {
                 break;

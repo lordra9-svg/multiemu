@@ -153,6 +153,14 @@ pub struct Ppu {
     nt_map: Option<[u8; 4]>,
     /// Shared A12-edge IRQ counter (mapper 563).
     a12: Option<Rc<RefCell<A12Irq>>>,
+    /// UM6578 enhanced-mode flag (mapper 405).
+    um6578: bool,
+    /// UM6578 10 KiB video RAM.
+    um_vram: Vec<u8>,
+    /// UM6578 `$2008` colour/tile select.
+    um_ctrl: u8,
+    /// UM6578 64-entry palette.
+    um_palette: [u8; 64],
     /// NMI output line.
     pub nmi_line: bool,
     /// Latched NMI edge waiting for the CPU.
@@ -311,6 +319,10 @@ impl Ppu {
             chr_ram_map: None,
             nt_map: None,
             a12: None,
+            um6578: false,
+            um_vram: vec![0; 0x2800],
+            um_ctrl: 0,
+            um_palette: [0; 64],
             mmc2: None,
             hybrid: None,
             mmc5_aux: None,
@@ -549,6 +561,16 @@ impl Ppu {
     /// Installs the mapper's shared A12-edge IRQ counter.
     pub fn set_a12_irq(&mut self, aux: Rc<RefCell<A12Irq>>) {
         self.a12 = Some(aux);
+    }
+
+    /// Marks the PPU as a UM6578 enhanced famiclone.
+    pub fn set_um6578(&mut self, enabled: bool) {
+        self.um6578 = enabled;
+    }
+
+    /// Writes one byte from a cartridge DMA transfer to the PPU bus.
+    pub fn dma_write(&mut self, address: u16, value: u8) {
+        self.write_vram(address, value);
     }
 
     /// Reads one byte of the active CHR window.
@@ -948,6 +970,19 @@ impl Ppu {
 
     /// Writes a PPU register in `$2000..=$2007`.
     pub fn write_register(&mut self, index: u16, value: u8) {
+        if self.um6578 {
+            match index {
+                0x2008 => {
+                    self.um_ctrl = value;
+                    return;
+                }
+                0x2040..=0x207F => {
+                    self.um_palette[usize::from(index - 0x2040)] = value;
+                    return;
+                }
+                _ => {}
+            }
+        }
         self.io_bus = value;
         self.io_bus_age = 0;
         // The 2C02 ignores these writes for about one frame after reset.
@@ -1167,6 +1202,15 @@ impl Ppu {
     }
 
     fn read_vram(&self, address: u16) -> u8 {
+        if self.um6578 {
+            return if address < 0x2800 {
+                self.um_vram[usize::from(address)]
+            } else if (0x3F00..0x3F40).contains(&address) {
+                self.um_palette[usize::from(address - 0x3F00)]
+            } else {
+                0
+            };
+        }
         if address < 0x2000 {
             self.chr_byte(address)
         } else if address < 0x3F00 {
@@ -1177,6 +1221,14 @@ impl Ppu {
     }
 
     fn write_vram(&mut self, address: u16, value: u8) {
+        if self.um6578 {
+            if address < 0x2800 {
+                self.um_vram[usize::from(address)] = value;
+            } else if (0x3F00..0x3F40).contains(&address) {
+                self.um_palette[usize::from(address - 0x3F00)] = value;
+            }
+            return;
+        }
         if (0x2000..0x3F00).contains(&address) {
             if let Some(aux) = &self.aux77 {
                 aux.borrow_mut().nt_write(address, value);
@@ -2115,7 +2167,80 @@ impl Ppu {
     /// and mask changes take effect on the correct line.
     #[must_use]
     pub fn render_frame(&self) -> Vec<u8> {
+        if self.um6578 {
+            return self.render_um_frame();
+        }
         self.frame.clone()
+    }
+
+    /// Renders one frame of the UM6578 enhanced video mode: word name tables,
+    /// optional 4-bits-per-pixel background and the 64-entry palette.
+    fn render_um_frame(&self) -> Vec<u8> {
+        let mut frame = vec![0u8; 256 * 240 * 4];
+        let backdrop =
+            |index: usize| NES_PALETTE[usize::from(self.um_palette[index & 0x3F]) & 0x3F];
+        if self.mask & 0x08 == 0 {
+            let [r, g, b] = backdrop(0);
+            for pixel in frame.as_chunks_mut::<4>().0 {
+                pixel.copy_from_slice(&[r, g, b, 255]);
+            }
+            return frame;
+        }
+        let bg4 = self.um_ctrl & 0x80 != 0;
+        let single = self.um_ctrl & 0x01 != 0;
+        let scroll = self.t;
+        let start_x = usize::from(scroll & 0x1F) * 8 + usize::from(self.fine_x);
+        let start_y = usize::from((scroll >> 5) & 0x1F) * 8 + usize::from((scroll >> 12) & 0x07);
+        let nt_x = usize::from((scroll >> 10) & 0x01);
+        let nt_y = usize::from((scroll >> 11) & 0x01);
+        for y in 0..240usize {
+            let world_y = y + start_y;
+            let tile_y = (world_y / 8) % 32;
+            let row = world_y % 8;
+            for x in 0..256usize {
+                let world_x = x + start_x;
+                let tile_x = (world_x / 8) % 32;
+                let quadrant = if single {
+                    0
+                } else {
+                    ((((world_y / 256) & 1) ^ nt_y) * 2) + (((world_x / 256) & 1) ^ nt_x)
+                };
+                let base = if single { 0x2000 } else { quadrant * 0x800 };
+                let address = base + (tile_y * 32 + tile_x) * 2;
+                let lo = self.um_vram.get(address).copied().unwrap_or(0);
+                let hi = self.um_vram.get(address + 1).copied().unwrap_or(0);
+                let tile = usize::from(lo) | (usize::from(hi & 0x0F) << 8);
+                let attr = usize::from(hi >> 4);
+                let shift = 7 - (world_x & 7);
+                let (palette_base, bit) = if bg4 {
+                    let pattern = (tile & !1) << 4;
+                    let row_address = pattern + row * 4;
+                    let mut value = 0usize;
+                    for plane in 0..4 {
+                        let byte = self.um_vram.get(row_address + plane).copied().unwrap_or(0);
+                        value |= usize::from((byte >> shift) & 1) << plane;
+                    }
+                    ((attr & 0x03) * 16, value)
+                } else {
+                    let pattern = tile << 4;
+                    let row_address = pattern + row * 2;
+                    let low = self.um_vram.get(row_address).copied().unwrap_or(0);
+                    let high = self.um_vram.get(row_address + 1).copied().unwrap_or(0);
+                    (
+                        (attr & 0x0F) * 4,
+                        usize::from((low >> shift) & 1) | (usize::from((high >> shift) & 1) << 1),
+                    )
+                };
+                let index = if bit == 0 { 0 } else { palette_base + bit };
+                let [r, g, b] = backdrop(index);
+                let offset = (y * 256 + x) * 4;
+                frame[offset] = r;
+                frame[offset + 1] = g;
+                frame[offset + 2] = b;
+                frame[offset + 3] = 255;
+            }
+        }
+        frame
     }
 }
 

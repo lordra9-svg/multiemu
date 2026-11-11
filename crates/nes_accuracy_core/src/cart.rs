@@ -637,6 +637,21 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Pops a pending cartridge DMA request (UM6578).
+    fn take_dma(&mut self) -> Option<DmaRequest> {
+        None
+    }
+
+    /// Whether the board is a UM6578 enhanced famiclone.
+    fn um6578(&self) -> bool {
+        false
+    }
+
+    /// Reads PRG-ROM at a linear byte offset, for cartridge DMA.
+    fn prg_linear(&self, _offset: usize) -> u8 {
+        0
+    }
+
     /// Whether this mapper can drive nametables from CHR ROM.
     fn has_rom_nametables(&self) -> bool {
         false
@@ -1059,6 +1074,7 @@ impl Cartridge {
             351 => Box::new(Techline351::new(prg_rom, chr, header)),
             368 => Box::new(Yung08::new(prg_rom, chr, header)),
             400 => Box::new(Xmas400::new(prg_rom, chr, header)),
+            405 => Box::new(Um6578::new(prg_rom, chr, prg_ram, header)),
             413 => Box::new(Srrx413::new(prg_rom, chr, header)),
             415 => Box::new(LuckyRabbit415::new(prg_rom, chr, header)),
             186 => Box::new(StudyBox186::new(prg_rom, chr, prg_ram, header)),
@@ -1354,6 +1370,23 @@ impl Cartridge {
     /// Shared A12-edge IRQ counter, if the board uses one.
     pub fn a12_irq(&self) -> Option<Rc<RefCell<A12Irq>>> {
         self.mapper.a12_irq()
+    }
+
+    /// Pops a pending cartridge DMA request.
+    pub fn take_dma(&mut self) -> Option<DmaRequest> {
+        self.mapper.take_dma()
+    }
+
+    /// Whether the cartridge is a UM6578 enhanced famiclone.
+    #[must_use]
+    pub fn um6578(&self) -> bool {
+        self.mapper.um6578()
+    }
+
+    /// Reads PRG-ROM at a linear byte offset.
+    #[must_use]
+    pub fn prg_linear(&self, offset: usize) -> u8 {
+        self.mapper.prg_linear(offset)
     }
 
     /// Per-quadrant ROM-nametable CHR pages, if the board provides them.
@@ -10609,6 +10642,179 @@ impl Mapper for LatchAddr585 {
     }
 }
 
+/// UM6578 enhanced famiclone (mapper 405): eight 4 KiB PRG windows selected
+/// by readable `$4040-$4047` registers, 8 KiB work RAM plus 2 KiB at
+/// `$5000`, the `$4031` enhanced-mode latch, the timer/IRQ registers and the
+/// general-purpose `$4048-$404F` DMA engine.
+#[derive(Debug)]
+pub struct Um6578 {
+    prg: Vec<u8>,
+    prg_ram: Vec<u8>,
+    extra_ram: Vec<u8>,
+    banks: [u8; 8],
+    latch: u8,
+    enhanced: bool,
+    dma_ctrl: u8,
+    dma_src_page: u8,
+    dma_src_lsb: u8,
+    dma_src_msb: u8,
+    dma_dst_lsb: u8,
+    dma_dst_msb: u8,
+    dma_len_lsb: u8,
+    dma_len_msb: u8,
+    pending: bool,
+    irq_mask: u8,
+    irq_status: u8,
+    mirroring: Mirroring,
+    chr: Vec<u8>,
+}
+
+impl Um6578 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, mut prg_ram: Vec<u8>, header: Header) -> Self {
+        prg_ram.resize(0x2000, 0);
+        Self {
+            prg,
+            prg_ram,
+            extra_ram: vec![0; 0x800],
+            banks: [0, 1, 2, 3, 4, 5, 6, 7],
+            latch: 0,
+            enhanced: false,
+            dma_ctrl: 0,
+            dma_src_page: 0,
+            dma_src_lsb: 0,
+            dma_src_msb: 0,
+            dma_dst_lsb: 0,
+            dma_dst_msb: 0,
+            dma_len_lsb: 0,
+            dma_len_msb: 0,
+            pending: false,
+            irq_mask: 0,
+            irq_status: 0,
+            mirroring: header.mirroring,
+            chr,
+        }
+    }
+
+    fn prg_window(&self, address: u16) -> usize {
+        let slot = usize::from((address - 0x8000) / 0x1000);
+        let banks = (self.prg.len() / 0x1000).max(1);
+        let bank = usize::from(self.banks[slot]) % banks;
+        bank * 0x1000 + usize::from(address & 0x0FFF)
+    }
+}
+
+impl Mapper for Um6578 {
+    fn prg_read(&self, address: u16) -> u8 {
+        match address {
+            0x4033 => self.irq_status,
+            0x4036 => 0,
+            0x4040..=0x4047 => self.banks[usize::from(address - 0x4040)],
+            0x4048 => self.dma_ctrl | if self.pending { 0x80 } else { 0 },
+            0x4049 => self.dma_src_page,
+            0x404A => self.dma_src_lsb,
+            0x404B => self.dma_src_msb,
+            0x404C => self.dma_dst_lsb,
+            0x404D => self.dma_dst_msb,
+            0x404E => self.dma_len_lsb,
+            0x404F => self.dma_len_msb,
+            0x5000..=0x57FF => self.extra_ram[usize::from(address - 0x5000)],
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000)],
+            0x8000..=0xFFFF => self.prg.get(self.prg_window(address)).copied().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn read_io(&mut self, address: u16) -> u8 {
+        self.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x4031 => {
+                self.enhanced = self.latch == 0x65 && value == 0x76;
+                self.latch = value;
+            }
+            0x4032 => self.irq_mask = value,
+            0x4040..=0x4047 => self.banks[usize::from(address - 0x4040)] = value,
+            0x4048 => {
+                self.dma_ctrl = value;
+                if value & 0x80 != 0 {
+                    self.pending = true;
+                }
+            }
+            0x4049 => self.dma_src_page = value,
+            0x404A => self.dma_src_lsb = value,
+            0x404B => self.dma_src_msb = value,
+            0x404C => self.dma_dst_lsb = value,
+            0x404D => self.dma_dst_msb = value,
+            0x404E => self.dma_len_lsb = value,
+            0x404F => self.dma_len_msb = value,
+            0x5000..=0x57FF => self.extra_ram[usize::from(address - 0x5000)] = value,
+            0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000)] = value,
+            _ => {}
+        }
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x4032, 0x57FF))
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        405
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.prg_ram
+    }
+
+    fn um6578(&self) -> bool {
+        true
+    }
+
+    fn take_dma(&mut self) -> Option<DmaRequest> {
+        if !self.pending {
+            return None;
+        }
+        self.pending = false;
+        let source_rom = self.dma_src_msb & 0x80 != 0;
+        let source = if source_rom {
+            (u32::from(self.dma_src_page & 0x1F) << 15)
+                | (u32::from(self.dma_src_msb & 0x7F) << 8)
+                | u32::from(self.dma_src_lsb)
+        } else {
+            (u32::from(self.dma_src_msb & 0x7F) << 8) | u32::from(self.dma_src_lsb)
+        };
+        Some(DmaRequest {
+            to_ppu: self.dma_ctrl & 0x20 == 0,
+            source_rom,
+            source,
+            target: u16::from(self.dma_dst_lsb) | (u16::from(self.dma_dst_msb & 0x7F) << 8),
+            len: (u16::from(self.dma_len_msb & 0x7F) << 8) | u16::from(self.dma_len_lsb),
+        })
+    }
+
+    fn prg_linear(&self, offset: usize) -> u8 {
+        self.prg.get(offset).copied().unwrap_or(0)
+    }
+}
+
 /// Subor Sango II board (mapper 559): a VRC4 core whose register select
 /// lines are CPU A10/A11, with a switchable `$C000` bank, per-quadrant
 /// CHR-ROM nametables and a 9-bit CHR bank.
@@ -14562,6 +14768,21 @@ impl Mapper for Cufrom29 {
     fn vrc7_chr(&self) -> Option<Rc<RefCell<Vrc7Chr>>> {
         self.chr_aux.clone()
     }
+}
+
+/// A cartridge-initiated DMA transfer (UM6578 `$4048-$404F`).
+#[derive(Debug, Clone, Copy)]
+pub struct DmaRequest {
+    /// True to write the PPU bus, false for the CPU bus.
+    pub to_ppu: bool,
+    /// True when the source is PRG-ROM rather than CPU work RAM.
+    pub source_rom: bool,
+    /// Source byte offset (PRG-ROM) or CPU address (work RAM).
+    pub source: u32,
+    /// Destination address on the target bus.
+    pub target: u16,
+    /// Number of bytes to transfer.
+    pub len: u16,
 }
 
 /// A12-edge IRQ counter shared between the PPU and a board (mapper 563).
@@ -33312,6 +33533,46 @@ mod tests {
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
         cart.ppu_write(0x0123, 0x5A);
         assert_eq!(cart.ppu_read(0x0123), 0x5A);
+    }
+
+    #[test]
+    fn um6578_405_windows_registers_and_dma() {
+        // 1 MiB PRG, CHR-RAM.
+        let rom = synth_banked(405, 1024, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 405);
+        // Power-on windows are linear 4 KiB banks 0..7.
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0x9000), rom[16 + 0x1000]);
+        assert_eq!(cart.cpu_read(0xF000), rom[16 + 7 * 0x1000]);
+        cart.cpu_write(0x4040, 5);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x1000]);
+        // The bank registers are readable.
+        assert_eq!(cart.cpu_read_io(0x4040), 5);
+        cart.cpu_write(0x4041, 2);
+        assert_eq!(cart.cpu_read(0x9000), rom[16 + 2 * 0x1000]);
+        // 2 KiB at $5000 and 8 KiB at $6000.
+        cart.cpu_write(0x5000, 0x33);
+        assert_eq!(cart.cpu_read_io(0x5000), 0x33);
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+        // DMA request: RAM $0000 -> PPU $2000, 4 bytes.
+        cart.cpu_write(0x4048, 0x80);
+        cart.cpu_write(0x404A, 0x00);
+        cart.cpu_write(0x404B, 0x00);
+        cart.cpu_write(0x404C, 0x00);
+        cart.cpu_write(0x404D, 0x20);
+        cart.cpu_write(0x404E, 0x04);
+        cart.cpu_write(0x404F, 0x00);
+        let request = cart.take_dma().expect("dma");
+        assert!(request.to_ppu);
+        assert!(!request.source_rom);
+        assert_eq!(request.source, 0);
+        assert_eq!(request.target, 0x2000);
+        assert_eq!(request.len, 4);
+        assert!(cart.take_dma().is_none());
+        assert!(cart.um6578());
+        assert_eq!(cart.prg_linear(0), rom[16]);
     }
 
     #[test]
