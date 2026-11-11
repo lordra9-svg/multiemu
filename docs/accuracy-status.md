@@ -179,6 +179,7 @@ writes, and MMC1 bank switching.
 | Taito TC0690 (48) | TC0190-style PRG/CHR banking plus inverted-reload MMC3-style IRQ |
 | Jaleco JF-13 (86) | GNROM-style 32 KiB PRG / 8 KiB CHR latch at `$6000-$6FFF` (speech chip not modelled) |
 | TXC 01-22000 (36) | 2-bit latch/inverter PRG select plus an 8 KiB CHR latch at `$4200` |
+| N-32 SMB2j conversion (50) | `$6000`=bank 15, `$8000`/`$A000`=8/9, `$C000` from the scrambled `$4020` register, `$E000`=11; 13-bit CPU-cycle IRQ with inverted line polarity |
 | FDS conversions (42) | Two variants: KS-7050 (CHR-ROM; `$6000` powers on at bank `$FF`, `$8000-$8FFF` selects CHR, `$E000-$FFFF` selects PRG, no IRQ) and Mario Baby (CHR-RAM; `$E000`/`$E001`/`$E002` + 24576-cycle IRQ). The KS-7050 images boot the FDS BIOS and need the disk interface (`$4025`/`$4030`). |
 | SOMARI-P (116) | power-on MMC3 mode of the 3-mode VRC2/MMC3/MMC1 ASIC |
 | Waixing FS304 (162) | 32 KiB PRG banking from `$5000`/`$5100`/`$5200`/`$5300`, 8 KiB CHR-RAM |
@@ -324,7 +325,11 @@ MMC3A, whose single-IRQ-at-zero revision was missing (the Sharp-B-style
 IRQ storm starved the main loop); both images now render at 20 frames.
 Mapper 14 (2 Wushi Hun images) was reimplemented as the Gouder SL-1632
 (VRC2b/MMC3 dual ASIC with the `$A131` supervisor); both render by 120
-frames (5 colors by 240).
+frames (5 colors by 240). Mapper 50 (N-32 SMB2j conversions, 2 images)
+followed: its `$4020`/`$4120` decode compared the masked address exactly,
+so the game's `$4022` PRG writes never latched; decoding by bit tests and
+inverting the 13-bit IRQ line (asserted while bit 12 is clear) makes both
+images render from frame ~40.
 The sweep added the MesenCE-only 208/219/258/284/298/302/307/346 group,
 the 43/106/170/
 262/285/304/521 batch, the TEC9719/167/190/266/314 batch and the

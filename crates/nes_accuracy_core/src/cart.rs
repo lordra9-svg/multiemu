@@ -1034,7 +1034,7 @@ impl Cartridge {
             290 => Box::new(DiscreteBmc::new(prg_rom, chr, header, 290)),
             299 => Box::new(Bmc299::new(prg_rom, chr, header)),
             298 => Box::new(Tf1201::new(prg_rom, chr, header)),
-            301 => Box::new(DiscreteBmc::new(prg_rom, chr, header, 301)),
+            301 => Box::new(Bmc301::new(prg_rom, chr, header)),
             302 => Box::new(Ks7057::new(prg_rom, chr, header)),
             303 => Box::new(Kaiser303::new(prg_rom, chr, prg_ram, header)),
             304 => Box::new(Smb2j304::new(prg_rom, chr, header)),
@@ -17520,7 +17520,136 @@ impl Mapper for Mmc3Outer {
     }
 }
 
-/// Simple discrete BMC multicarts (mappers 104, 290 and 301): a 32 KiB PRG
+/// CK-001 4-in-1 (mapper 301): the mapper-242 address latch extended with
+/// the ET-113 style 512 KiB / 128 KiB chip select. The latch collects the
+/// write address bits (chip and fixed-bank select) plus the data bits
+/// (outer/inner bank, mirroring, mode), and is determined by both.
+#[derive(Debug)]
+pub struct Bmc301 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    /// Latched write address bits 8-10 (m, L, C).
+    latch_addr: u16,
+    /// Latched data byte (O QQ PP p M S).
+    latch_data: u8,
+    mirroring: Mirroring,
+}
+
+impl Bmc301 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, _header: Header) -> Self {
+        let chr = if chr.len() >= 0x2000 {
+            chr
+        } else {
+            let mut ram = vec![0; 0x2000];
+            let keep = chr.len().min(0x2000);
+            ram[..keep].copy_from_slice(&chr[..keep]);
+            ram
+        };
+        // Power-on: O=1, S=1 (32 KiB NROM) selects the last 32 KiB page,
+        // where the menu and its reset vector live.
+        Self {
+            prg,
+            chr,
+            latch_addr: 0x0400,
+            latch_data: 0xF9,
+            mirroring: Mirroring::Vertical,
+        }
+    }
+
+    fn chip(&self) -> (usize, usize) {
+        let total = self.prg.len();
+        if self.latch_addr & 0x0400 != 0 && total >= 0x80000 {
+            (0, 0x80000)
+        } else {
+            (total.saturating_sub(0x20000), total.min(0x20000))
+        }
+    }
+
+    fn inner_bank(&self) -> usize {
+        let q = usize::from((self.latch_data >> 5) & 0x03);
+        let p4 = usize::from((self.latch_data >> 4) & 0x01);
+        let p3 = usize::from((self.latch_data >> 3) & 0x01);
+        let p2 = usize::from((self.latch_data >> 2) & 0x01);
+        (q << 3) | (p4 << 2) | (p3 << 1) | p2
+    }
+
+    fn read_bank(&self, bank: usize, address: u16) -> u8 {
+        let (base, size) = self.chip();
+        let banks = (size / 0x4000).max(1);
+        let offset = base + (bank % banks) * 0x4000 + usize::from(address & 0x3FFF);
+        self.prg.get(offset).copied().unwrap_or(0)
+    }
+
+    fn read_bank32(&self, bank: usize, address: u16) -> u8 {
+        let (base, size) = self.chip();
+        let banks = (size / 0x8000).max(1);
+        let offset = base + (bank % banks) * 0x8000 + usize::from(address & 0x7FFF);
+        self.prg.get(offset).copied().unwrap_or(0)
+    }
+}
+
+impl Mapper for Bmc301 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return 0;
+        }
+        let o = self.latch_data & 0x80 != 0;
+        if o {
+            if self.latch_data & 0x01 != 0 {
+                // NROM-256: one 32 KiB bank over the whole window.
+                self.read_bank32(self.inner_bank() >> 1, address)
+            } else {
+                // NROM-128: the 16 KiB bank mirrored over both windows.
+                self.read_bank(self.inner_bank(), address)
+            }
+        } else if address < 0xC000 {
+            self.read_bank(self.inner_bank(), address)
+        } else {
+            // L selects fixed inner bank 0 or 7.
+            let fixed = if self.latch_addr & 0x0200 != 0 { 7 } else { 0 };
+            self.read_bank(fixed, address)
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        if address >= 0x8000 {
+            self.latch_addr = address & 0x0700;
+            self.latch_data = value;
+            self.mirroring = if value & 0x02 != 0 {
+                Mirroring::Horizontal
+            } else {
+                Mirroring::Vertical
+            };
+        }
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.chr
+            .get(usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        if let Some(byte) = self.chr.get_mut(usize::from(address & 0x1FFF)) {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+
+    fn number(&self) -> u16 {
+        301
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        address >= 0x8000
+    }
+}
+
+/// Simple discrete BMC multicarts (mappers 104 and 290): a 32 KiB PRG
 /// window with an 8 KiB fixed CHR window and board-specific latch decodes.
 #[derive(Debug)]
 pub struct DiscreteBmc {
@@ -34720,6 +34849,32 @@ mod tests {
     }
 
     #[test]
+    fn bmc301_242_latch_and_chip_select() {
+        // 512 KiB PRG (16 x 32 KiB pages), CHR-RAM.
+        let rom = synth_banked(301, 512, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 301);
+        // Power-on selects the last 32 KiB page (the menu).
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x78000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x7C000]);
+        assert_eq!(cart.cpu_read(0xFFFC), rom[16 + 0x7FFFC]);
+        // $846C = $0C: chip C (addr bit 10) = 1 selects the 512 KiB chip,
+        // inner bank = P P p = 3, and L (addr bit 9) = 0 fixes bank 0.
+        cart.cpu_write(0x846C, 0x0C);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0xC000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16]);
+        // Address bit 10 cleared selects the 128 KiB second chip (the last
+        // 128 KiB of the image); L = 1 fixes bank 7.
+        cart.cpu_write(0x826C, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x60000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x7C000]);
+        // Data bit 1 selects horizontal mirroring.
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0x826C, 0x02);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
     fn fds50_n32_register_decode() {
         // 128 KiB PRG (16 x 8 KiB), CHR-RAM.
         let rom = synth_banked(50, 128, 0);
@@ -37443,16 +37598,23 @@ mod tests {
 
     #[test]
     fn discrete_301_address_as_data() {
-        // 256 KiB PRG (16 x 16 KiB), CHR-RAM.
+        // 256 KiB PRG, CHR-RAM. The smaller image still uses the 128 KiB
+        // second-chip window (its last 128 KiB).
         let rom = synth_banked(301, 256, 0);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.mapper(), 301);
-        // $8008: inner = (8 >> 2) & 7 = 2, outer128 = 0.
-        cart.cpu_write(0x8008, 0);
-        assert_eq!(cart.cpu_read(0x8000), 4);
-        // $8022: inner = 0, outer128 = 1 -> 16 KiB bank 8 (8 KiB bank 16).
-        cart.cpu_write(0x8022, 0);
-        assert_eq!(cart.cpu_read(0x8000), 16);
+        // Power-on maps the last 32 KiB.
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x38000]);
+        // $846C = $0C: inner bank 3, L (addr bit 9) = 0 fixes bank 0.
+        cart.cpu_write(0x846C, 0x0C);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x2C000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x20000]);
+        // $826C = 0: inner bank 0, L = 1 fixes bank 7.
+        cart.cpu_write(0x826C, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 0x20000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 0x3C000]);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0x826C, 0x02);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
