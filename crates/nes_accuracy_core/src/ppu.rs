@@ -1022,7 +1022,7 @@ impl Ppu {
         self.io_bus = value;
         self.io_bus_age = 0;
         // The 2C02 ignores these writes for about one frame after reset.
-        if self.warmup_dots > 0 && matches!(index & 7, 0 | 1 | 5 | 6) {
+        if self.warmup_dots > 0 && matches!(index & 7, 0 | 1 | 5) {
             return;
         }
         match index & 7 {
@@ -2447,6 +2447,25 @@ mod tests {
         let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], true, false);
         ppu.end_warmup();
         ppu
+    }
+
+    #[test]
+    fn warmup_masks_control_and_scroll_but_not_address() {
+        let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], true, false);
+        assert!(ppu.warmup_dots > 0);
+        ppu.write_register(0x2000, 0x80);
+        ppu.write_register(0x2001, 0x1E);
+        assert_eq!(ppu.ctrl, 0);
+        assert_eq!(ppu.mask, 0);
+        ppu.write_register(0x2005, 0x12);
+        assert!(!ppu.write_latch, "the $2005 latch must not toggle");
+        // $2006 is not masked: games that probe CHR early rely on it.
+        ppu.write_register(0x2006, 0x20);
+        ppu.write_register(0x2006, 0x40);
+        assert_eq!(ppu.v, 0x2040);
+        ppu.end_warmup();
+        ppu.write_register(0x2000, 0x80);
+        assert_eq!(ppu.ctrl, 0x80);
     }
 
     #[test]
