@@ -7871,7 +7871,7 @@ impl Ks7016B {
         Self {
             prg,
             chr,
-            window: 8,
+            window: 0,
             mirroring: header.mirroring,
         }
     }
@@ -7899,25 +7899,14 @@ impl Mapper for Ks7016B {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         if address >= 0x8000 {
-            let mode = address & 0x30 == 0x30;
-            match address & 0xD943 {
-                0xD943 => {
-                    self.window = if mode {
-                        0x0B
-                    } else {
-                        ((address >> 2) & 0x0F) as u8
-                    };
-                }
-                0xD903 => {
-                    self.window = if mode {
-                        0x08 | ((address >> 2) & 0x03) as u8
-                    } else {
-                        0x0B
-                    };
-                }
-                _ => {}
-            }
+            // Any write latches the address; A2-A5 select the $6000 ROM
+            // bank, and A5 additionally forces address bit 2.
             let _ = value;
+            let mut bank = (address >> 2) & 0x0F;
+            if address & 0x20 != 0 {
+                bank |= 0x04;
+            }
+            self.window = (bank & 0x0F) as u8;
         }
     }
 
@@ -7940,6 +7929,10 @@ impl Mapper for Ks7016B {
 
     fn number(&self) -> u16 {
         549
+    }
+
+    fn prg_rom_at_6000(&self) -> bool {
+        true
     }
 }
 
@@ -8214,11 +8207,16 @@ impl Mapper for Multicart380 {
 pub struct Techline351 {
     inner: Mmc3,
     prg_base: u16,
+    prg_reg: u8,
     prg_mask: usize,
     chr_base: u16,
     chr_mask: usize,
     chr_ram: bool,
+    chr8: bool,
+    nrom: bool,
+    nrom_fixed: bool,
     mode: u8,
+    fds_mirroring: Option<Mirroring>,
 }
 
 impl Techline351 {
@@ -8226,27 +8224,43 @@ impl Techline351 {
         Self {
             inner: Mmc3::new_as(prg, chr, header, 351),
             prg_base: 0,
+            prg_reg: 0,
             prg_mask: 0x1F,
             chr_base: 0,
             chr_mask: 0xFF,
             chr_ram: false,
+            chr8: false,
+            nrom: false,
+            nrom_fixed: false,
             mode: 0,
+            fds_mirroring: None,
         }
     }
 
     fn prg_bank(&self, slot: usize) -> usize {
         let banks = (self.inner.prg.len() / 0x2000).max(1);
-        let bank = if slot < 2 {
-            usize::from(self.prg_base) + (self.inner.prg_slot(slot) & self.prg_mask)
+        let bank = if self.nrom {
+            if self.nrom_fixed {
+                usize::from(self.prg_reg >> 1)
+            } else {
+                let base = usize::from(self.prg_reg >> 2);
+                let half = if slot < 2 { base & !1 } else { base | 1 };
+                half * 2 + (slot & 1)
+            }
         } else {
-            self.inner.prg_slot(slot)
+            // The outer base and inner-size mask apply to all four MMC3
+            // slots. Base bits inside the inner window are ignored, matching
+            // `base & ~mask`.
+            let outer = usize::from(self.prg_base) & !self.prg_mask;
+            outer | (self.inner.prg_slot(slot) & self.prg_mask)
         };
         bank % banks
     }
 
     fn chr_bank(&self, slot: usize) -> usize {
         let banks = (self.inner.chr.len() / 0x400).max(1);
-        (usize::from(self.chr_base) + (self.inner.chr_bank(slot) & self.chr_mask)) % banks
+        let outer = usize::from(self.chr_base) & !self.chr_mask;
+        (outer | (self.inner.chr_bank(slot) & self.chr_mask)) % banks
     }
 }
 
@@ -8267,13 +8281,26 @@ impl Mapper for Techline351 {
 
     fn prg_write(&mut self, address: u16, value: u8) {
         match address {
+            0x4025 => {
+                self.fds_mirroring = Some(if value & 0x08 != 0 {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                });
+            }
             0x5000 => {
                 self.mode = value & 0x03;
                 self.chr_base = u16::from(value >> 2) * 8;
             }
-            0x5001 => self.prg_base = u16::from(value >> 2) * 2,
+            0x5001 => {
+                self.prg_reg = value;
+                self.prg_base = u16::from(value >> 1);
+            }
             0x5002 => {
                 self.chr_ram = value & 0x01 != 0;
+                self.nrom = value & 0x10 != 0;
+                self.nrom_fixed = value & 0x08 != 0;
+                self.chr8 = value & 0x40 != 0;
                 let pp = (value >> 2) & 0x03;
                 let p = value & 0x10 != 0;
                 let prg_kib = if p {
@@ -8312,6 +8339,16 @@ impl Mapper for Techline351 {
                 .copied()
                 .unwrap_or(0);
         }
+        if self.chr8 {
+            let base = usize::from(self.chr_base) / 8;
+            let banks = (self.inner.chr.len() / 0x2000).max(1);
+            return self
+                .inner
+                .chr
+                .get((base % banks) * 0x2000 + usize::from(address & 0x1FFF))
+                .copied()
+                .unwrap_or(0);
+        }
         let slot = usize::from(address) / 0x400;
         let bank = self.chr_bank(slot);
         self.inner
@@ -8328,6 +8365,18 @@ impl Mapper for Techline351 {
             }
             return;
         }
+        if self.chr8 {
+            let base = usize::from(self.chr_base) / 8;
+            let banks = (self.inner.chr.len() / 0x2000).max(1);
+            if let Some(byte) = self
+                .inner
+                .chr
+                .get_mut((base % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            {
+                *byte = value;
+            }
+            return;
+        }
         let slot = usize::from(address) / 0x400;
         let bank = self.chr_bank(slot);
         if let Some(byte) = self
@@ -8340,7 +8389,7 @@ impl Mapper for Techline351 {
     }
 
     fn mirroring(&self) -> Mirroring {
-        self.inner.mirroring()
+        self.fds_mirroring.unwrap_or_else(|| self.inner.mirroring())
     }
 
     fn number(&self) -> u16 {
@@ -8352,7 +8401,7 @@ impl Mapper for Techline351 {
     }
 
     fn chr_mapping_write(&self, address: u16) -> bool {
-        (0x5000..=0x5002).contains(&address) || (0x8000..=0x9FFF).contains(&address)
+        matches!(address, 0x4025 | 0x5000..=0x5002) || (0x8000..=0x9FFF).contains(&address)
     }
 
     fn irq_line(&self) -> bool {
@@ -35413,14 +35462,25 @@ mod tests {
 
     #[test]
     fn ks7016b_549_window() {
-        // 128 KiB PRG, CHR-RAM.
+        // 128 KiB PRG (16 x 8 KiB), CHR-RAM.
         let rom = synth_banked(549, 128, 0);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.mapper(), 549);
+        // $8000-$FFFF is the fixed 32 KiB bank 2 (8K banks 8-11).
         assert_eq!(cart.cpu_read(0x8000), rom[16 + 8 * 0x2000]);
         assert_eq!(cart.cpu_read(0xE000), rom[16 + 11 * 0x2000]);
-        assert_eq!(cart.cpu_read(0x6000), rom[16 + 8 * 0x2000]);
-        cart.cpu_write(0xD943, 0);
+        // $6000 is an 8 KiB ROM bank latched from the write address.
+        assert!(cart.prg_rom_at_6000());
+        assert_eq!(cart.cpu_read(0x6000), rom[16]);
+        cart.cpu_write(0x8004, 0);
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 0x2000]);
+        cart.cpu_write(0x8010, 0);
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 4 * 0x2000]);
+        // A5 forces address bit 2, so $8020 selects bank $0C.
+        cart.cpu_write(0x8020, 0);
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 0x0C * 0x2000]);
+        // Any write re-latches, regardless of the value.
+        cart.cpu_write(0x8000, 0xAA);
         assert_eq!(cart.cpu_read(0x6000), rom[16]);
     }
 
@@ -35495,21 +35555,48 @@ mod tests {
         let rom = synth_banked(351, 512, 512);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
         assert_eq!(cart.mapper(), 351);
+        // Default MMC3 mode, 256 KiB inner window: the fixed last banks are
+        // 30/31 of the window, not 62/63 of the whole ROM.
         assert_eq!(cart.cpu_read(0x8000), rom[16]);
-        assert_eq!(cart.cpu_read(0xC000), rom[16 + 62 * 0x2000]);
-        assert_eq!(cart.cpu_read(0xE000), rom[16 + 63 * 0x2000]);
-        cart.cpu_write(0x5001, 0x08);
-        assert_eq!(cart.cpu_read(0x8000), rom[16 + 4 * 0x2000]);
-        cart.cpu_write(0x5000, 0x08);
-        assert_eq!(cart.ppu_read(0x0000), 0x90);
-        cart.cpu_write(0x5002, 0x10);
-        cart.cpu_write(0x8000, 6);
-        cart.cpu_write(0x8001, 5);
-        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 30 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 31 * 0x2000]);
+        // $5002 bit 2 narrows the inner PRG window to 128 KiB, so the
+        // $5001 base (16 x 8 KiB) can select an outer window.
+        cart.cpu_write(0x5002, 0x24);
+        cart.cpu_write(0x5001, 0x20);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 16 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 31 * 0x2000]);
+        // $5002 bit 5 narrows CHR to 128 KiB; the $5000 base selects an
+        // outer 128 KiB window.
+        cart.cpu_write(0x5000, 0x40);
         cart.cpu_write(0x8000, 0);
-        cart.cpu_write(0x8001, 3);
-        // MMC3 R0 is a 2 KiB bank, so slot 0 resolves to even bank 2.
-        assert_eq!(cart.ppu_read(0x0000), 0x92);
+        cart.cpu_write(0x8001, 2);
+        assert_eq!(cart.ppu_read(0x0000), 0x82);
+        // $5002 bit 4 enters NROM mode: the 16 KiB pair comes from $5001.
+        cart.cpu_write(0x5002, 0x10);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 16 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 17 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 18 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 19 * 0x2000]);
+        // Bit 3 mirrors one 8 KiB bank across the whole ROM window.
+        cart.cpu_write(0x5002, 0x18);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 16 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 16 * 0x2000]);
+        // $5002 bit 6 selects an 8 KiB CHR bank from $5000.
+        cart.cpu_write(0x5000, 0x40);
+        cart.cpu_write(0x5002, 0x40);
+        // 8K CHR bank 16 starts at 1K bank 128 (synthetic fill 0x80).
+        assert_eq!(cart.ppu_read(0x0000), 0x80);
+        // Bit 0 switches CHR to RAM.
+        cart.cpu_write(0x5002, 0x01);
+        cart.ppu_write(0x0000, 0x5A);
+        assert_eq!(cart.ppu_read(0x0000), 0x5A);
+        // $4025 selects NROM mirroring.
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+        cart.cpu_write(0x4025, 0x00);
+        assert_eq!(cart.mirroring(), Mirroring::Vertical);
+        cart.cpu_write(0x4025, 0x08);
+        assert_eq!(cart.mirroring(), Mirroring::Horizontal);
     }
 
     #[test]
