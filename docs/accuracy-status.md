@@ -178,7 +178,7 @@ writes, and MMC1 bank switching.
 | Taito TC0690 (48) | TC0190-style PRG/CHR banking plus inverted-reload MMC3-style IRQ |
 | Jaleco JF-13 (86) | GNROM-style 32 KiB PRG / 8 KiB CHR latch at `$6000-$6FFF` (speech chip not modelled) |
 | TXC 01-22000 (36) | 2-bit latch/inverter PRG select plus an 8 KiB CHR latch at `$4200` |
-| FDS conversions (42) | 8 KiB bank at `$6000-$7FFF`, fixed last 32 KiB, CHR bank, 24576-cycle IRQ |
+| FDS conversions (42) | Two variants: KS-7050 (CHR-ROM; `$6000` powers on at bank `$FF`, `$8000-$8FFF` selects CHR, `$E000-$FFFF` selects PRG, no IRQ) and Mario Baby (CHR-RAM; `$E000`/`$E001`/`$E002` + 24576-cycle IRQ). The KS-7050 images boot the FDS BIOS and need the disk interface (`$4025`/`$4030`). |
 | SOMARI-P (116) | power-on MMC3 mode of the 3-mode VRC2/MMC3/MMC1 ASIC |
 | Waixing FS304 (162) | 32 KiB PRG banking from `$5000`/`$5100`/`$5200`/`$5300`, 8 KiB CHR-RAM |
 | HES NTD-8 (113) | 32 KiB PRG / 8 KiB CHR / mirroring control register at `$4100-$5FFF` |
@@ -309,7 +309,10 @@ A 120-frame pass renders 6,401 with 672 blank; a 240-frame pass renders
 0/20 to 18/20 at 240). The 120-frame pass attributes 2,556 of the 20-frame
 blanks to slow boot (MMC3 +654, MMC1 +424, UxROM +254, mapper 163 +69).
 Only 60 images across 18 IDs render at neither 120 nor 240; after the 121
-fix the largest is mapper 42 (9 images).
+fix the largest is mapper 42 (9 images). Those nine are Kaiser KS-7050
+Ai Senshi Nicol conversions: the board model now matches the variant, but
+they boot the FDS BIOS and stall at its disk interface (`$4025`/`$4030`),
+which the cartridge model does not provide.
 The sweep added the MesenCE-only 208/219/258/284/298/302/307/346 group,
 the 43/106/170/
 262/285/304/521 batch, the TEC9719/167/190/266/314 batch and the
