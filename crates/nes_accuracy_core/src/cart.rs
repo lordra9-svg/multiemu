@@ -893,7 +893,7 @@ impl Cartridge {
             77 => Box::new(Irem77::new(prg_rom, chr)),
             78 => Box::new(Irem78::new(prg_rom, chr, header)),
             12 => Box::new(Mmc3_12::new(prg_rom, chr, header)),
-            14 => Box::new(Jaleco14::new(prg_rom, chr, header)),
+            14 => Box::new(Sl1632::new(prg_rom, chr, prg_ram, header)),
             15 => Box::new(Multicart15::new(prg_rom, chr)),
             125 => Box::new(Lh32::new(prg_rom, chr, prg_ram, header)),
             155 => Box::new(Mmc1_155::new(prg_rom, chr, prg_ram, header)),
@@ -14992,73 +14992,161 @@ impl Mapper for Mmc3_12 {
     }
 }
 
-/// Jaleco JF-11/JF-14 (mapper 14): 32 KiB PRG and 8 KiB CHR banks from a
-/// single `$6000-$7FFF` register.
+/// Gouder SL-1632 (mapper 14): a Huang-1 ASIC that runs either a VRC2b
+/// (power-on) or an MMC3 clone, selected by the PAL supervisor at `$A131`.
+/// The supervisor's bits 7/5/3 extend CHR to A18 for PPU `$0000-$0FFF`,
+/// `$1000-$17FF` and `$1800-$1FFF`.
 #[derive(Debug)]
-pub struct Jaleco14 {
-    prg: Vec<u8>,
+pub struct Sl1632 {
+    vrc: Vrc,
+    mmc3: Mmc3,
     chr: Vec<u8>,
-    prg_bank: u8,
-    chr_bank: u8,
-    mirroring: Mirroring,
+    mode: u8,
 }
 
-impl Jaleco14 {
-    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
-        let last = (prg.len() / 0x8000).max(1) - 1;
+impl Sl1632 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+        let mut vrc_header = header;
+        vrc_header.mapper = 23;
+        // VRC2b A0/A1 wiring.
+        vrc_header.submapper = 3;
+        let mut mmc3_header = header;
+        mmc3_header.mapper = 4;
         Self {
-            prg,
+            vrc: Vrc::new(prg.clone(), chr.clone(), prg_ram, vrc_header),
+            mmc3: Mmc3::new_as(prg, chr.clone(), mmc3_header, 14),
             chr,
-            prg_bank: last as u8,
-            chr_bank: 0,
-            mirroring: header.mirroring,
+            mode: 0,
         }
+    }
+
+    fn mmc3_mode(&self) -> bool {
+        self.mode & 0x02 != 0
+    }
+
+    fn chr_a18(&self, slot: usize) -> usize {
+        let bit = if slot < 4 {
+            self.mode & 0x80
+        } else if slot < 6 {
+            self.mode & 0x20
+        } else {
+            self.mode & 0x08
+        };
+        if bit != 0 {
+            0x100
+        } else {
+            0
+        }
+    }
+
+    fn chr_bank(&self, slot: usize) -> usize {
+        let raw = if self.mmc3_mode() {
+            self.mmc3.chr_slot_bank(slot)
+        } else {
+            usize::from(self.vrc.chr_banks[slot])
+        };
+        raw | self.chr_a18(slot)
     }
 }
 
-impl Mapper for Jaleco14 {
+impl Mapper for Sl1632 {
     fn prg_read(&self, address: u16) -> u8 {
-        if address < 0x8000 {
-            return 0;
+        if self.mmc3_mode() {
+            self.mmc3.prg_read(address)
+        } else {
+            self.vrc.prg_read(address)
         }
-        let banks = (self.prg.len() / 0x8000).max(1);
-        self.prg
-            .get((usize::from(self.prg_bank) % banks) * 0x8000 + usize::from(address - 0x8000))
-            .copied()
-            .unwrap_or(0)
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        if (0x6000..=0x7FFF).contains(&address) {
-            self.prg_bank = (value >> 4) & 0x03;
-            self.chr_bank = value & 0x0F;
+        if (0xA000..=0xAFFF).contains(&address) {
+            if address == 0xA131 {
+                self.mode = value;
+                return;
+            }
+            if self.mmc3_mode() {
+                self.mmc3.prg_write(address, value);
+            } else {
+                self.vrc.prg_write(address, value);
+            }
+        } else if self.mmc3_mode() {
+            self.mmc3.prg_write(address, value);
+        } else {
+            self.vrc.prg_write(address, value);
         }
     }
 
     fn chr_read(&self, address: u16) -> u8 {
-        let banks = (self.chr.len() / 0x2000).max(1);
+        let banks = (self.chr.len() / 0x400).max(1);
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot) % banks;
         self.chr
-            .get((usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .get(bank * 0x400 + usize::from(address & 0x3FF))
             .copied()
             .unwrap_or(0)
     }
 
     fn chr_write(&mut self, address: u16, value: u8) {
-        let banks = (self.chr.len() / 0x2000).max(1);
+        let banks = (self.chr.len() / 0x400).max(1);
+        let slot = usize::from(address) / 0x400;
+        let bank = self.chr_bank(slot) % banks;
         if let Some(byte) = self
             .chr
-            .get_mut((usize::from(self.chr_bank) % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .get_mut(bank * 0x400 + usize::from(address & 0x3FF))
         {
             *byte = value;
         }
     }
 
     fn mirroring(&self) -> Mirroring {
-        self.mirroring
+        if self.mmc3_mode() {
+            self.mmc3.mirroring()
+        } else {
+            self.vrc.mirroring()
+        }
     }
 
     fn number(&self) -> u16 {
         14
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        if self.mmc3_mode() {
+            self.mmc3.prg_ram()
+        } else {
+            self.vrc.prg_ram()
+        }
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        if address == 0xA131 {
+            return true;
+        }
+        if self.mmc3_mode() {
+            self.mmc3.chr_mapping_write(address)
+        } else {
+            self.vrc.chr_mapping_write(address)
+        }
+    }
+
+    fn irq_line(&self) -> bool {
+        self.mmc3_mode() && self.mmc3.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        if self.mmc3_mode() {
+            self.mmc3.clock_scanline();
+        }
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.mmc3.acknowledge_irq();
+    }
+
+    fn set_cpu_cycle(&mut self, cycle: u64) {
+        if self.mmc3_mode() {
+            self.mmc3.set_cpu_cycle(cycle);
+        }
     }
 }
 
@@ -34623,6 +34711,39 @@ mod tests {
     }
 
     #[test]
+    fn sl1632_14_mode_and_chr_a18() {
+        // 256 KiB PRG, 512 KiB CHR.
+        let rom = synth_banked(14, 256, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 14);
+        // Power-on is VRC2 mode; $C000 is the second-last 8 KiB bank.
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 30 * 0x2000]);
+        // $A131 bit 7 is CHR A18 for PPU $0000-$0FFF.
+        cart.ppu_write(0x0000, 0xAA);
+        cart.cpu_write(0xA131, 0x80);
+        cart.ppu_write(0x0000, 0xBB);
+        assert_eq!(cart.ppu_read(0x0000), 0xBB);
+        cart.cpu_write(0xA131, 0x00);
+        assert_eq!(cart.ppu_read(0x0000), 0xAA);
+        // Bit 5 covers PPU $1000-$17FF.
+        cart.ppu_write(0x1000, 0xCC);
+        cart.cpu_write(0xA131, 0x20);
+        cart.ppu_write(0x1000, 0xDD);
+        assert_eq!(cart.ppu_read(0x1000), 0xDD);
+        cart.cpu_write(0xA131, 0x00);
+        assert_eq!(cart.ppu_read(0x1000), 0xCC);
+        // Bit 1 switches to the MMC3 clone.
+        cart.cpu_write(0xA131, 0x02);
+        cart.cpu_write(0x8000, 6);
+        cart.cpu_write(0x8001, 5);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 5 * 0x2000]);
+        // And back to VRC2.
+        cart.cpu_write(0xA131, 0x00);
+        assert_eq!(cart.cpu_read(0x8000), rom[16]);
+    }
+
+    #[test]
     fn mmc3_12_alternate_irq_and_outer_chr() {
         // 256 KiB PRG, 512 KiB CHR.
         let rom = synth_banked(12, 256, 512);
@@ -34966,17 +35087,6 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 3);
         cart.cpu_write(0xC000, 0x42);
         assert_eq!(cart.cpu_read(0xC000), 0x42);
-    }
-
-    #[test]
-    fn jaleco_14_banks() {
-        // 128 KiB PRG, 128 KiB CHR.
-        let rom = synth_banked(14, 128, 128);
-        let mut cart = Cartridge::from_ines(&rom).expect("cart");
-        assert_eq!(cart.mapper(), 14);
-        cart.cpu_write(0x6000, 0x25);
-        assert_eq!(cart.cpu_read(0x8000), 8);
-        assert_eq!(cart.ppu_read(0x0000), 0xA8);
     }
 
     #[test]
