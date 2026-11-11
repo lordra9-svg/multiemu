@@ -1025,6 +1025,7 @@ impl Cartridge {
             529 => Box::new(T230::new(prg_rom, chr, header)),
             332 => Box::new(Multicart332::new(prg_rom, chr)),
             334 => Box::new(Mmc3_334::new(prg_rom, chr, header)),
+            394 => Box::new(Hsk007::new(prg_rom, chr, header)),
             346 => Box::new(Ks7012::new(prg_rom, chr, prg_ram, header)),
             347 => Box::new(Ks7030::new(prg_rom, chr, prg_ram, header)),
             374 => Box::new(ResetMc374::new(prg_rom, chr, prg_ram, header)),
@@ -10155,6 +10156,159 @@ impl Mapper for Drip284 {
     }
 }
 
+/// Realtec HSK007 multicart (mapper 394): an MMC3 clone inside a switchable
+/// 256 KiB PRG/CHR slice, with a `$5009` mode register (`$0F` at power-on
+/// selects MMC3) and a `$500B` outer-bank register. BNROM mode uses a single
+/// 32 KiB bank built from both registers.
+#[derive(Debug)]
+pub struct Hsk007 {
+    inner: Mmc3,
+    mode: u8,
+    outer: u8,
+    submap: u8,
+}
+
+impl Hsk007 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, header: Header) -> Self {
+        Self {
+            inner: Mmc3::new_as(prg, chr, header, 394),
+            mode: 0x0F,
+            outer: 0x90,
+            submap: header.submapper,
+        }
+    }
+
+    fn mode_bits(&self) -> u8 {
+        (self.mode >> 3) & 0x03
+    }
+
+    /// 256 KiB PRG slice, in 8 KiB banks.
+    fn prg_outer(&self) -> usize {
+        let a18 = usize::from(self.mode & 0x01);
+        let a19 = usize::from((self.mode >> 1) & 0x01);
+        ((a19 << 1) | a18) * 32
+    }
+
+    /// 256 KiB CHR slice, in 1 KiB banks.
+    fn chr_outer(&self) -> usize {
+        let a18 = if self.submap == 0 {
+            usize::from(self.mode & 0x01)
+        } else {
+            usize::from((self.mode >> 2) & 0x01)
+        };
+        let a19 = usize::from((self.mode >> 1) & 0x01);
+        ((a19 << 1) | a18) * 256
+    }
+
+    fn prg_8k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.inner.prg.len() / 0x2000).max(1);
+        self.inner
+            .prg
+            .get((bank % banks) * 0x2000 + usize::from(address & 0x1FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prg_32k(&self, bank: usize, address: u16) -> u8 {
+        let banks = (self.inner.prg.len() / 0x8000).max(1);
+        self.inner
+            .prg
+            .get((bank % banks) * 0x8000 + usize::from(address & 0x7FFF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// BNROM 32 KiB bank from the two registers.
+    fn bnrom_bank(&self) -> usize {
+        let a18 = usize::from(self.mode & 0x01);
+        let a19 = usize::from((self.mode >> 1) & 0x01);
+        let a17 = usize::from((self.outer >> 3) & 0x01);
+        let a16 = usize::from((self.outer >> 2) & 0x01);
+        let a15 = usize::from((self.outer >> 1) & 0x01);
+        (a19 << 4) | (a18 << 3) | (a17 << 2) | (a16 << 1) | a15
+    }
+}
+
+impl Mapper for Hsk007 {
+    fn prg_read(&self, address: u16) -> u8 {
+        if address < 0x8000 {
+            return self.inner.prg_read(address);
+        }
+        match self.mode_bits() {
+            0 => self.prg_32k(self.bnrom_bank(), address),
+            _ => {
+                let slot = usize::from((address - 0x8000) / 0x2000);
+                let bank = self.prg_outer() + self.inner.prg_slot_in(slot, 32);
+                self.prg_8k(bank, address)
+            }
+        }
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        match address {
+            0x5009 => self.mode = value,
+            0x500B => self.outer = value,
+            _ => self.inner.prg_write(address, value),
+        }
+    }
+
+    fn low_window(&self) -> Option<(u16, u16)> {
+        Some((0x5000, 0x5FFF))
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let bank = self.chr_outer() + self.inner.chr_bank_in(slot, 256);
+        self.inner
+            .chr
+            .get((bank % banks) * 0x400 + usize::from(address & 0x3FF))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        let slot = usize::from(address) / 0x400;
+        let banks = (self.inner.chr.len() / 0x400).max(1);
+        let bank = self.chr_outer() + self.inner.chr_bank_in(slot, 256);
+        if let Some(byte) = self
+            .inner
+            .chr
+            .get_mut((bank % banks) * 0x400 + usize::from(address & 0x3FF))
+        {
+            *byte = value;
+        }
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        394
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        &self.inner.prg_ram
+    }
+
+    fn chr_mapping_write(&self, address: u16) -> bool {
+        (0x5009..=0x500B).contains(&address) || self.inner.chr_mapping_write(address)
+    }
+
+    fn irq_line(&self) -> bool {
+        self.inner.irq_line()
+    }
+
+    fn clock_scanline(&mut self) {
+        self.inner.clock_scanline();
+    }
+
+    fn acknowledge_irq(&mut self) {
+        self.inner.acknowledge_irq();
+    }
+}
+
 /// 5/20-in-1 1993 multicart (mapper 334): MMC3 supplies CHR banking,
 /// mirroring and IRQs, while a `$6000` register selects one 32 KiB PRG bank.
 #[derive(Debug)]
@@ -16466,7 +16620,12 @@ impl Mmc3 {
     }
 
     fn prg_slot(&self, index: usize) -> usize {
-        let banks = self.prg_banks();
+        self.prg_slot_in(index, self.prg_banks())
+    }
+
+    /// MMC3 PRG slot resolution inside a bank window of `banks` 8 KiB pages.
+    fn prg_slot_in(&self, index: usize, banks: usize) -> usize {
+        let banks = banks.max(1);
         let last = banks - 1;
         let second_last = banks.saturating_sub(2);
         let mode = self.select & 0x40;
@@ -16484,7 +16643,12 @@ impl Mmc3 {
     }
 
     fn chr_bank(&self, slot: usize) -> usize {
-        let banks = (self.chr.len() / 0x400).max(1);
+        self.chr_bank_in(slot, (self.chr.len() / 0x400).max(1))
+    }
+
+    /// MMC3 CHR slot resolution inside a window of `banks` 1 KiB pages.
+    fn chr_bank_in(&self, slot: usize, banks: usize) -> usize {
+        let banks = banks.max(1);
         let mode = self.select & 0x80;
         let raw = if mode == 0 {
             match slot {
@@ -31551,6 +31715,33 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), c(6));
         cart.cpu_write(0x4106, 1);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn hsk007_394_outer_slices() {
+        // 1 MiB PRG and CHR, submapper 0.
+        let rom = synth_banked(394, 1024, 1024);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 394);
+        let p = |n: usize| rom[16 + n * 0x2000];
+        // Power-on $5009 = $0F: MMC3 mode in the last 256 KiB slice.
+        assert_eq!(cart.cpu_read(0x8000), p(96));
+        assert_eq!(cart.cpu_read(0xC000), p(126));
+        assert_eq!(cart.cpu_read(0xE000), p(127));
+        let chr = 16 + 1024 * 1024;
+        let c = |n: usize| rom[chr + n * 0x400];
+        assert_eq!(cart.ppu_read(0x0000), c(768));
+        // MMC3 CHR registers stay inside the CHR slice (R0 is a 2 KiB bank).
+        cart.cpu_write(0x8000, 0);
+        cart.cpu_write(0x8001, 3);
+        assert_eq!(cart.ppu_read(0x0000), c(770));
+        // BNROM mode: one 32 KiB bank built from both registers.
+        cart.cpu_write(0x5009, 0x07);
+        cart.cpu_write(0x500B, 0x90);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 24 * 0x8000]);
+        // Back to MMC3 mode.
+        cart.cpu_write(0x5009, 0x0B);
+        assert_eq!(cart.cpu_read(0xE000), p(127));
     }
 
     #[test]
