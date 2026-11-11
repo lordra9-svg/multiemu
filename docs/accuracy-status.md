@@ -301,17 +301,17 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-7,020 loaded (98.9%), 3,808 rendering (53.6%), 3,212 blank (45.2%), 53
-unsupported (0.7%) and 28 load/run failures (0.39%). The batched totals
-reproduce the single-pass numbers exactly. The remaining 25 unsupported IDs
-are led by 256/515 (5 images each) and 355/446/547/594 (4 each); the
+7,032 loaded (99.0%), 3,815 rendering (53.7%), 3,217 blank (45.3%), 41
+unsupported (0.6%) and 28 load/run failures (0.39%). The batched totals
+reproduce the single-pass numbers exactly. The remaining 22 unsupported IDs
+are led by 355/446/547/594 (4 images each) and 394 (3); the
 MesenCE-only 208/219/258/284/298/302/307/346 group, the 43/106/170/
 262/285/304/521 batch, the TEC9719/167/190/266/314 batch and the
 292/518 pair, the 183/487/530 batch, the 493/517/526/553 group, the
 389/523 pair, the 415/417/538/539 group, the SB-5013 359/540 core and the
 400/544 pair, the 308/368/470 group, the Techline 351 MMC3 mode and mapper
-380, mapper 413, the 525 KS7021A VRC4 conversion and the 549 KS7016B latch
-are now implemented.
+380, mapper 413, the 525 KS7021A VRC4 conversion, the 549 KS7016B latch,
+the 515/554 pair and the 256 OneBus core are now implemented.
 See `docs/mapper-audit.md` for the per-mapper table, ranked gaps and the
 tail triage.
 
@@ -1052,8 +1052,8 @@ contract as the RustyNES oracle.
   **4/120 to 114/120 (95%)**, while SMB stayed at 599/600. The same pass
   declared the `$4100-$5FFF` and FK23C `$5000-$5FFF` read windows so
   protection reads reach the mapper instead of open bus. The refreshed
-  audit is **7,020 loaded, 3,808 rendering, 3,212 blank, 53 unsupported
-  (25 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
+  audit is **7,032 loaded, 3,815 rendering, 3,217 blank, 41 unsupported
+  (22 IDs), 28 failures**. A 252-image / 120-frame sample after the FK23C
   work measured **video 83.6% and audio 52.3%** identical frame hashes, up
   from the 120-image sweep's 81.1%.
   A fresh 260-image / 120-frame sweep after the A6 batch measured **video

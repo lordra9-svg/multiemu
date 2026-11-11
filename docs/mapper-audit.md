@@ -26,17 +26,17 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Metric | Count | Share |
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
-| Loaded (mapper implemented) | 7,020 | 98.9% |
-| Rendering | 3,808 | 53.6% |
-| Blank | 3,212 | 45.2% |
-| Unsupported mapper | 53 | 0.7% |
+| Loaded (mapper implemented) | 7,032 | 99.0% |
+| Rendering | 3,815 | 53.7% |
+| Blank | 3,217 | 45.3% |
+| Unsupported mapper | 41 | 0.6% |
 | Load/run failure | 28 | 0.39% |
 
 Batched totals reproduce the single-pass numbers exactly. Since the previous
-audit, 164 boards were added (listed in the completion sweep below). Loaded rose
-6,627 → 7,020 (93.3% → 98.9%) and unsupported fell 446 → 53 (6.3% → 0.7%);
-25 mapper IDs remain (the ranking prints the top 80), led by 256/515
-(5 images each) and 355/446/547/594 (4 each).
+audit, 167 boards were added (listed in the completion sweep below). Loaded rose
+6,627 → 7,032 (93.3% → 99.0%) and unsupported fell 446 → 41 (6.3% → 0.6%);
+22 mapper IDs remain (the ranking prints the top 80), led by 355/446/547/594
+(4 images each) and 394 (3).
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
 is deliberately short; several families need hundreds of frames to leave their
@@ -153,12 +153,13 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   97, 103, 104, 105, 106, 107, 117, 119, 120, 122, 123, 125, 133, 134,
   137, 140, 144, 145, 147, 149, 153, 155, 157, 167, 168, 170, 180,
   183, 187, 188, 190, 191, 192, 194, 198, 205, 208, 218, 219, 221,
-  225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254, 258, 262,
-  263, 264, 266, 284, 285, 289, 290, 292, 298, 299, 301, 302, 303,
-  304, 305, 306, 307, 308, 309, 312, 313, 314, 332, 346, 347, 351,
-  359, 368, 380, 389, 396, 399, 400, 413, 415, 417, 422, 470, 487,
-  493, 512, 513, 516, 517, 518, 519, 521, 522, 523, 525, 526, 529,
-  530, 533, 534, 535, 538, 539, 540, 544, 548, 549, 551, 552, 553)** — 164 boards
+  225, 228, 229, 238, 243, 244, 245, 246, 250, 252, 254, 256, 258,
+  262, 263, 264, 266, 284, 285, 289, 290, 292, 298, 299, 301, 302,
+  303, 304, 305, 306, 307, 308, 309, 312, 313, 314, 332, 346, 347,
+  351, 359, 368, 380, 389, 396, 399, 400, 413, 415, 417, 422, 470,
+  487, 493, 512, 513, 515, 516, 517, 518, 519, 521, 522, 523, 525,
+  526, 529, 530, 533, 534, 535, 538, 539, 540, 544, 548, 549, 551,
+  552, 553, 554)** — 167 boards
   added against the RustyNES and Mesen2 references:
   TQROM and the Waixing CHR-RAM overlays share `HybridKind`; the SMB2j
   Whirlwind board exposes PRG bank 6 at `$6000`; the Kaiser and Irem/Sunsoft
@@ -179,10 +180,13 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   539. The SB-5013 core now serves 359 and its 2 KiB-CHR 540 variant; the
   latest pair adds 8-BIT XMAS 2017 (400) and Waixing FS306 (544), followed
   by TH2131-1 (308), Yung-08 (368), INX_007T (470) and the Techline
-  351 MMC3 mode, plus the 380 address-latched multicart. At 120 frames
-  16 of the 18 local images render (the two blanks are MesenCE-blank boot
-  screens too); the 20-frame audit only catches 208/258 because the rest are
-  still in their boot code; the Sachen
+  351 MMC3 mode, plus the 380 address-latched multicart, the 413
+  BATMAP-SRR-X, the 525 KS7021A VRC4 conversion, the 549 KS7016B latch, the
+  515 Noraebang board and the 554 read-triggered conversion. The 256 OneBus
+  core is partial: all five images load and boot, two reach video by 120
+  frames. At 120 frames, 16 of the MesenCE group's 18 local images render
+  (the two blanks are MesenCE-blank boot screens too); the 20-frame audit
+  only catches 208/258 because the rest are still in their boot code; the Sachen
   3009/3018 and JV001 latches
   cover the A8-decoded `$4100-$5FFF` window; Nitra decodes the MMC3 protocol
   from the write address; Datach reuses the Bandai FCG core with the scanner
