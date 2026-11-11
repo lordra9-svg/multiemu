@@ -27,7 +27,7 @@ unko corpus <library-dir> --mapper 136 --frames 600
 |---|---:|---:|
 | Scanned | 7,101 | 100% |
 | Loaded (mapper implemented) | 7,073 | 99.6% |
-| Rendering | 3,842 | 54.1% |
+| Rendering | 3,843 | 54.1% |
 | Blank | 3,229 | 45.5% |
 | Unsupported mapper | 0 | 0.0% |
 | Load/run failure | 28 | 0.39% |
@@ -182,7 +182,7 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
   latest pair adds 8-BIT XMAS 2017 (400) and Waixing FS306 (544), followed
   by TH2131-1 (308), Yung-08 (368), INX_007T (470) and the Techline
   351 MMC3 mode, plus the 380 address-latched multicart, the 413
-  BATMAP-SRR-X, the 525 KS7021A VRC4 conversion, the 549 KS7016B latch, the
+  BATMAP-SRR-X, the 525 KS7021A VRC4 conversion, the fixed 549 KS7016B latch, the
   515 Noraebang board, the 554 read-triggered conversion, the 374 reset-based
   MMC1 multicart, the 446 SMD172B supervisor, whose `$5000` table maps onto
   the UNROM/CNROM/MMC3/AxROM/GNROM/NINA/VRC1/VRC2-4/VRC6/152/189/H3001
@@ -427,7 +427,7 @@ UxROM (55%), MMC1 (54%) and MMC3 (46%).
 **None.** All 7,073 images with a valid iNES/NES 2.0 header name a mapper that
 now has an implementation. The 28 remaining non-loading images are truncated
 dumps, not unsupported boards; the partial ports below still need hardware
-work (256, 446, 549, 351).
+work (256 and 446, plus the 351 CHR-RAM/PRG-enlargement path).
 
 ### NESdev references
 
@@ -453,7 +453,7 @@ board loads and boots but does not render, or renders only some images.
 | 515 | Family Noraebang (YM2413) | implemented | [NES 2.0 Mapper 515](https://www.nesdev.org/wiki/NES_2.0_Mapper_515) |
 | 525 | Kaiser KS7021A (VRC4) | implemented | [NES 2.0 Mapper 525](https://www.nesdev.org/wiki/NES_2.0_Mapper_525) |
 | 547 | Konami Q-Ta / VRC5 | implemented (QTRAM CHR banking pending) | [NES 2.0 Mapper 547](https://www.nesdev.org/wiki/NES_2.0_Mapper_547) |
-| 549 | Kaiser KS7016B | partial (blank) | [NES 2.0 Mapper 549](https://www.nesdev.org/wiki/NES_2.0_Mapper_549) |
+| 549 | Kaiser KS7016B | implemented (renders at ~40 frames) | [NES 2.0 Mapper 549](https://www.nesdev.org/wiki/NES_2.0_Mapper_549) |
 | 554 | Kaiser KS-7010 | implemented | [NES 2.0 Mapper 554](https://www.nesdev.org/wiki/NES_2.0_Mapper_554) |
 | 555 | Campus Challenge 1991 (NES-EVENT2) | implemented | [NES 2.0 Mapper 555](https://www.nesdev.org/wiki/NES_2.0_Mapper_555) |
 | 557 | NTDEC 2718 | implemented | [NES 2.0 Mapper 557](https://www.nesdev.org/wiki/NES_2.0_Mapper_557) |
