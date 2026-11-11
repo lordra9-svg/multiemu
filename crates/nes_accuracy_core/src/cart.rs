@@ -32538,16 +32538,23 @@ impl Mapper for Fds50 {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        match address & 0x4120 {
-            0x4020 => {
+        // NRS decodes bit 5 set + bit 6 clear; bit 8 selects the IRQ
+        // register and the low bits are don't-care, so the game's $4022 /
+        // $4122 writes both land.
+        if address & 0x0020 != 0 && address & 0x0040 == 0 {
+            if address & 0x0100 != 0 {
+                // E=1 only enables; E=0 disables, acknowledges and clears
+                // the counter. Enabling does not reset it.
+                if value & 0x01 != 0 {
+                    self.irq_enabled = true;
+                } else {
+                    self.irq_enabled = false;
+                    self.irq_pending = false;
+                    self.irq_counter = 0;
+                }
+            } else {
                 self.switch_bank = (value & 0x08) | ((value & 0x01) << 2) | ((value & 0x06) >> 1);
             }
-            0x4120 => {
-                self.irq_enabled = value & 0x01 != 0;
-                self.irq_pending = false;
-                self.irq_counter = 0;
-            }
-            _ => {}
         }
     }
 
@@ -32581,14 +32588,16 @@ impl Mapper for Fds50 {
     }
 
     fn clock_cpu(&mut self) {
+        // The 13-bit counter's MSB is inverted into /IRQ: the line is
+        // asserted while bit 12 is clear and released for the next 4096
+        // cycles. The counter keeps running while enabled.
         if !self.irq_enabled {
+            self.irq_pending = false;
+            self.irq_counter = 0;
             return;
         }
-        self.irq_counter += 1;
-        if self.irq_counter == 0x1000 {
-            self.irq_pending = true;
-            self.irq_enabled = false;
-        }
+        self.irq_counter = self.irq_counter.wrapping_add(1);
+        self.irq_pending = self.irq_counter & 0x1000 == 0;
     }
 
     fn acknowledge_irq(&mut self) {
@@ -34708,6 +34717,44 @@ mod tests {
         assert_eq!(cart.cpu_read(0x8000), 4);
         cart.cpu_write(0x4200, 2);
         assert_eq!(cart.ppu_read(0x0000), 0x90);
+    }
+
+    #[test]
+    fn fds50_n32_register_decode() {
+        // 128 KiB PRG (16 x 8 KiB), CHR-RAM.
+        let rom = synth_banked(50, 128, 0);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 50);
+        // Fixed banks: $6000=15, $8000=8, $A000=9, $E000=11.
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 15 * 0x2000]);
+        assert_eq!(cart.cpu_read(0x8000), rom[16 + 8 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xA000), rom[16 + 9 * 0x2000]);
+        assert_eq!(cart.cpu_read(0xE000), rom[16 + 11 * 0x2000]);
+        // $4022 is the scrambled PRG register: value 5 -> bank 6.
+        cart.cpu_write(0x4022, 0x05);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 6 * 0x2000]);
+        // Other addresses with bit 5 set and bit 6 clear also latch.
+        cart.cpu_write(0x40A8, 0x01);
+        assert_eq!(cart.cpu_read(0xC000), rom[16 + 4 * 0x2000]);
+        // $4122 enables the IRQ; the line is asserted while the 13-bit
+        // counter's bit 12 is clear.
+        cart.cpu_write(0x4122, 0x01);
+        cart.clock_cpu();
+        assert!(cart.irq_line());
+        for _ in 0..0xFFF {
+            cart.clock_cpu();
+        }
+        assert!(!cart.irq_line());
+        // The line returns when the counter reaches $2000.
+        for _ in 0..0x1000 {
+            cart.clock_cpu();
+        }
+        assert!(cart.irq_line());
+        // E=0 disables, acknowledges and clears the counter.
+        cart.cpu_write(0x4122, 0x00);
+        assert!(!cart.irq_line());
+        cart.clock_cpu();
+        assert_eq!(cart.cpu_read(0x6000), rom[16 + 15 * 0x2000]);
     }
 
     #[test]
@@ -37425,22 +37472,26 @@ mod tests {
     }
 
     #[test]
-    fn fds_50_irq_fires_once_after_4096_cycles() {
+    fn fds_50_irq_polarity_and_acknowledge() {
         let rom = synth_banked(50, 128, 0);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
-        cart.cpu_write(0x4120, 0x01);
-        for _ in 0..0x0FFF {
+        // NRS asserts /IRQ while the 13-bit counter's bit 12 is clear.
+        cart.cpu_write(0x4122, 0x01);
+        cart.clock_cpu();
+        assert!(cart.irq_line());
+        for _ in 0..0xFFF {
             cart.clock_cpu();
         }
-        assert!(!cart.mapper.irq_line());
-        cart.clock_cpu();
-        assert!(cart.mapper.irq_line());
-        // The one-shot disables itself; a further 0x1000 cycles stay quiet.
-        cart.mapper.acknowledge_irq();
+        assert!(!cart.irq_line(), "bit 12 releases /IRQ at $1000");
         for _ in 0..0x1000 {
             cart.clock_cpu();
         }
-        assert!(!cart.mapper.irq_line());
+        assert!(cart.irq_line(), "and re-asserts at $2000");
+        // E=0 disables, acknowledges and clears the counter.
+        cart.cpu_write(0x4122, 0x00);
+        assert!(!cart.irq_line());
+        cart.clock_cpu();
+        assert!(!cart.irq_line());
     }
 
     #[test]
