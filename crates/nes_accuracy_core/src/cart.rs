@@ -736,6 +736,15 @@ pub struct Cartridge {
     header: Header,
 }
 
+/// A PRG/CHR byte window with the bank counts the inner logic should use.
+#[derive(Debug, Clone, Copy, Default)]
+struct BankWindow {
+    prg_offset: usize,
+    prg_banks: usize,
+    chr_offset: usize,
+    chr_banks: usize,
+}
+
 /// Parsed header fields retained after loading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header {
@@ -1016,6 +1025,7 @@ impl Cartridge {
             332 => Box::new(Multicart332::new(prg_rom, chr)),
             346 => Box::new(Ks7012::new(prg_rom, chr, prg_ram, header)),
             347 => Box::new(Ks7030::new(prg_rom, chr, prg_ram, header)),
+            374 => Box::new(ResetMc374::new(prg_rom, chr, prg_ram, header)),
             380 => Box::new(Multicart380::new(prg_rom, chr, header)),
             389 => Box::new(Caltron389::new(prg_rom, chr, header)),
             396 => Box::new(Realtec396::new(prg_rom, chr, header)),
@@ -1508,6 +1518,14 @@ pub struct Mmc1 {
     cpu_cycle: u64,
     /// Cycle of the previous serial write (`u64::MAX` = none).
     last_write_cycle: u64,
+    /// Byte offset of the PRG window (reset multicarts).
+    prg_window: usize,
+    /// Size of the PRG window in 16 KiB banks (0 = whole ROM).
+    prg_window_banks: usize,
+    /// Byte offset of the CHR window (reset multicarts).
+    chr_window: usize,
+    /// Size of the CHR window in 4 KiB banks (0 = whole ROM).
+    chr_window_banks: usize,
 }
 
 impl Mmc1 {
@@ -1532,11 +1550,43 @@ impl Mmc1 {
             battery: header.battery,
             cpu_cycle: 0,
             last_write_cycle: u64::MAX,
+            prg_window: 0,
+            prg_window_banks: 0,
+            chr_window: 0,
+            chr_window_banks: 0,
         }
+    }
+
+    /// An MMC1 restricted to a PRG/CHR window (mapper 374).
+    fn new_windowed(
+        prg: Vec<u8>,
+        chr: Vec<u8>,
+        prg_ram: Vec<u8>,
+        header: Header,
+        window: BankWindow,
+    ) -> Self {
+        let mut this = Self::new(prg, chr, prg_ram, header);
+        this.prg_window = window.prg_offset;
+        this.prg_window_banks = window.prg_banks;
+        this.chr_window = window.chr_offset;
+        this.chr_window_banks = window.chr_banks;
+        this
     }
 
     fn prg_offset(&self, address: u16) -> usize {
         let offset = usize::from(address - 0x8000);
+        if self.prg_window_banks > 0 {
+            let half_banks = self.prg_window_banks;
+            let mode = (self.control >> 2) & 3;
+            let bank = usize::from(self.prg_bank & 0x0F);
+            let (first, second) = match mode {
+                0 | 1 => (bank & !1, (bank & !1) + 1),
+                2 => (0, bank),
+                _ => (bank, half_banks - 1),
+            };
+            let slot = if offset < 0x4000 { first } else { second };
+            return self.prg_window + (slot % half_banks) * 0x4000 + (offset & 0x3FFF);
+        }
         // SUROM/SXROM: with <= 8 KiB of CHR, the CHR register's bit 4 becomes
         // PRG A18 and selects which 256 KiB half the whole window uses.
         let outer = if self.chr.len() <= 0x2000 && self.prg.len() > 0x40000 {
@@ -1561,6 +1611,18 @@ impl Mmc1 {
 
     fn chr_offset(&self, address: u16) -> usize {
         let index = usize::from(address) & 0x1FFF;
+        if self.chr_window_banks > 0 {
+            let banks = self.chr_window_banks;
+            let mode = (self.control >> 4) & 1;
+            let base = if mode == 0 {
+                (usize::from(self.chr0 & 0x1E) % banks) * 0x1000 + index
+            } else if index < 0x1000 {
+                (usize::from(self.chr0) % banks) * 0x1000 + index
+            } else {
+                (usize::from(self.chr1) % banks) * 0x1000 + (index - 0x1000)
+            };
+            return self.chr_window + base;
+        }
         let mode = (self.control >> 4) & 1;
         let banks = (self.chr.len() / 0x1000).max(1);
         if mode == 0 {
@@ -7196,6 +7258,95 @@ impl Mapper for OneBus256 {
 
     fn acknowledge_irq(&mut self) {
         self.irq_pending = false;
+    }
+}
+
+/// Byte size of one game slot on the reset-based MMC1 multicart (374).
+const MC374_WINDOW: usize = 0x2_0000;
+
+/// Reset-based MMC1 multicart (mapper 374): each console reset increments
+/// the outer PRG/CHR window while MMC1 handles the inner banks.
+#[derive(Debug)]
+pub struct ResetMc374 {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    header: Header,
+    outer: usize,
+    inner: Mmc1,
+}
+
+impl ResetMc374 {
+    fn new(prg: Vec<u8>, chr: Vec<u8>, prg_ram: Vec<u8>, header: Header) -> Self {
+        let mut this = Self {
+            prg,
+            chr,
+            prg_ram,
+            header,
+            outer: 0,
+            inner: Mmc1::new(Vec::new(), Vec::new(), Vec::new(), header),
+        };
+        this.rebuild();
+        this
+    }
+
+    fn games(&self) -> usize {
+        (self.prg.len() / MC374_WINDOW).max(1)
+    }
+
+    fn rebuild(&mut self) {
+        let offset = self.outer * MC374_WINDOW;
+        self.inner = Mmc1::new_windowed(
+            self.prg.clone(),
+            self.chr.clone(),
+            self.prg_ram.clone(),
+            self.header,
+            BankWindow {
+                prg_offset: offset,
+                prg_banks: MC374_WINDOW / 0x4000,
+                chr_offset: offset,
+                chr_banks: MC374_WINDOW / 0x1000,
+            },
+        );
+    }
+}
+
+impl Mapper for ResetMc374 {
+    fn prg_read(&self, address: u16) -> u8 {
+        self.inner.prg_read(address)
+    }
+
+    fn prg_write(&mut self, address: u16, value: u8) {
+        self.inner.prg_write(address, value);
+    }
+
+    fn chr_read(&self, address: u16) -> u8 {
+        self.inner.chr_read(address)
+    }
+
+    fn chr_write(&mut self, address: u16, value: u8) {
+        self.inner.chr_write(address, value);
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.inner.mirroring()
+    }
+
+    fn number(&self) -> u16 {
+        374
+    }
+
+    fn prg_ram(&self) -> &[u8] {
+        self.inner.prg_ram()
+    }
+
+    fn set_cpu_cycle(&mut self, cycle: u64) {
+        self.inner.set_cpu_cycle(cycle);
+    }
+
+    fn soft_reset(&mut self) {
+        self.outer = (self.outer + 1) % self.games();
+        self.rebuild();
     }
 }
 
@@ -30892,6 +31043,30 @@ mod tests {
         assert_eq!(cart.ppu_read(0x0000), c(6));
         cart.cpu_write(0x4106, 1);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn reset_mc_374_windows() {
+        // 512 KiB PRG and CHR: four 128 KiB game slots.
+        let rom = synth_banked(374, 512, 512);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 374);
+        let p = |n: usize| rom[16 + n * 0x4000];
+        let c = |n: usize| rom[16 + 512 * 1024 + n];
+        assert_eq!(cart.cpu_read(0x8000), p(0));
+        assert_eq!(cart.cpu_read(0xC000), p(7));
+        assert_eq!(cart.ppu_read(0x0000), c(0));
+        cart.soft_reset();
+        // A reset advances to the next 128 KiB PRG/CHR slot.
+        assert_eq!(cart.cpu_read(0x8000), p(8));
+        assert_eq!(cart.cpu_read(0xC000), p(15));
+        assert_eq!(cart.ppu_read(0x0000), c(0x2_0000));
+        cart.soft_reset();
+        cart.soft_reset();
+        cart.soft_reset();
+        // Four slots wrap back to the first.
+        assert_eq!(cart.cpu_read(0x8000), p(0));
+        assert_eq!(cart.ppu_read(0x0000), c(0));
     }
 
     #[test]
