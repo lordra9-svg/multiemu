@@ -182,7 +182,7 @@ writes, and MMC1 bank switching.
 | Jaleco JF-13 (86) | GNROM-style 32 KiB PRG / 8 KiB CHR latch at `$6000-$6FFF` (speech chip not modelled) |
 | TXC 01-22000 (36) | 2-bit latch/inverter PRG select plus an 8 KiB CHR latch at `$4200` |
 | CK-001 4-in-1 (301) | mapper-242 address latch plus the ET-113 512 KiB / 128 KiB chip select; 16 KiB switchable + fixed-bank windows, NROM modes, power-on last 32 KiB page |
-| 09-034A / LE10 (304) | 8 KiB PRG bank 4/5 at `$6000` from `$4027` bit 0, fixed first 32 KiB at `$8000-$FFFF`, direct `/IRQ` from `$4068` bit 0 (unverified locally: the library images are truncated) |
+| 09-034A / LE10 (304) | 8 KiB PRG bank 4/5 at `$6000` from `$4027` bit 0, fixed first 32 KiB at `$8000-$FFFF`, direct `/IRQ` from `$4068` bit 0; the two loadable 48 KiB LE08/LF11 images render 2/2 at 120/240, while the SMB2 LE10 dumps carry corrupt 864 KiB headers and fail to load |
 | KS-7031 (305) | 32 KiB PRG at `$8000-$FFFF` with its 16 x 2 KiB pages reversed, four switchable 2 KiB `$6000` windows |
 | NTDEC 2131 (308) | VRC2b PRG/CHR banking, 8 KiB WRAM at `$6000`, and the NTDEC level IRQ (bit-12 half period plus a high-nibble down-counter) |
 | Whirlwind LH51 (309) | 8 KiB WRAM at `$6000`, switchable `$8000` bank, fixed last three banks, `$F000` mirroring |
@@ -331,7 +331,12 @@ after the NTDEC 2291 latch and PPU-driven FCG outer-bank fixes. MMC2
 renders 10/10 by 240 (~frame 210). Mapper 512 fades through a blank
 frame at 120 and renders at 240; 330 renders by 240. The only images
 with 0 rendering at both 120 and 240 are 252 and 308, which wait for
-Start; both render once input is pressed.
+Start; both render once input is pressed (308: 6 colors / 7,760 px at
+120 and 10 / 16,638 at 240; 252: 2 / 962 at 240).
+The 28 load failures are all `image truncated`, in four groups:
+expected 40,976 got 16,400 (20 images), expected 172,048 got 49,168 (4),
+expected 32,784 got 8,208 (3) and expected 81,936 got 18,448 (1). No
+failure is an unsupported mapper.
 Mapper 303 (6 images) was
 fixed next: the KS-7017 model was missing its `$6000` work RAM and the
 `$5100` commit for the `$4A00` bank latch; all sampled Armana no Kiseki
@@ -355,8 +360,11 @@ windows), 309 (LH51, missing `$6000` WRAM), 513 (SA-9602B, R0 outer bits)
 and 12 (NEC IRQ) all render by 120 frames; 308 (NTDEC 2131) also needed its
 `$6000` WRAM and level IRQ and renders by 120 once Start is pressed (the
 audit runs headless, so it reports the wait screen as blank). 304 (LE10)
-was remodelled from NRS, but its full library images are truncated dumps,
-so only the unit test covers it.
+was remodelled from NRS; the two loadable 48 KiB LE08/LF11 images render
+2/2 at 120/240, and the SMB2 LE10 dumps have corrupt headers (864 KiB) and
+fall in the truncated-load set rather than being a mapper failure. All
+four such LE10 dumps, given corrected 48 KiB headers, still spin in an
+FDS-BIOS-like loop, so they are recorded as data-blocked fragments.
 The sweep added the MesenCE-only 208/219/258/284/298/302/307/346 group,
 the 43/106/170/
 262/285/304/521 batch, the TEC9719/167/190/266/314 batch and the

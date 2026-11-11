@@ -43,7 +43,9 @@ Batched totals reproduce the single-pass numbers exactly. Since the previous
 audit, the 177 mapper IDs in the completion sweep below were added. Loaded rose
 6,627 → 7,073 (93.3% → 99.6%) and unsupported fell 446 → 0 (6.3% → 0.0%).
 Every image that names a mapper now has an implementation; the only remaining
-non-loading images are truncated dumps.
+non-loading images are truncated dumps: all 28 report `image truncated`
+(expected/got: 40,976/16,400 ×20, 172,048/49,168 ×4, 32,784/8,208 ×3,
+81,936/18,448 ×1). No load failure is an unimplemented mapper.
 
 `rendering` is a smoke signal, not a compatibility claim. The 20-frame window
 is deliberately short; several families need hundreds of frames to leave their
