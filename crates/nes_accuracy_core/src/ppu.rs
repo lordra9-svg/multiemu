@@ -250,6 +250,8 @@ pub struct Ppu {
     overflow_count: u8,
     /// Timing data.
     pub timing: Timing,
+    /// Display palette preset (does not affect emulated values).
+    palette_variant: PaletteVariant,
     /// Accumulated RGBA frame (256x240).
     frame: Vec<u8>,
     /// Background shift registers (MSB is the next pixel).
@@ -404,6 +406,7 @@ impl Ppu {
             vblank_clear_dot: 1,
             disable_cancel_dot: 3,
             timing,
+            palette_variant: PaletteVariant::Canonical,
             frame: vec![0; 256 * 240 * 4],
             bg_lo: 0,
             bg_hi: 0,
@@ -1287,6 +1290,12 @@ impl Ppu {
         }
     }
 
+    /// Selects the display palette preset and rebuilds the RGB cache.
+    pub fn set_palette_variant(&mut self, variant: PaletteVariant) {
+        self.palette_variant = variant;
+        self.refresh_palette_rgb();
+    }
+
     /// The 32 palette entries as RGB, after emphasis, for debuggers.
     #[must_use]
     pub fn debug_palette_rgb(&self) -> [[u8; 3]; 32] {
@@ -1461,7 +1470,7 @@ impl Ppu {
         let emph = (self.mask >> 5) & 0x07;
         for index in 0..32 {
             let colour = self.palette[index] & 0x3F;
-            let base = NES_PALETTE[usize::from(colour)];
+            let base = palette_colour(self.palette_variant, NES_PALETTE[usize::from(colour)]);
             self.palette_rgb[index] = if emph == 0 {
                 base
             } else {
@@ -2343,8 +2352,12 @@ impl Ppu {
     /// optional 4-bits-per-pixel background and the 64-entry palette.
     fn render_um_frame(&self) -> Vec<u8> {
         let mut frame = vec![0u8; 256 * 240 * 4];
-        let backdrop =
-            |index: usize| NES_PALETTE[usize::from(self.um_palette[index & 0x3F]) & 0x3F];
+        let backdrop = |index: usize| {
+            palette_colour(
+                self.palette_variant,
+                NES_PALETTE[usize::from(self.um_palette[index & 0x3F]) & 0x3F],
+            )
+        };
         // Palette entries whose low five bits are all ones are transparent;
         // the SH6578 draws the universal backdrop instead (MAME's rule).
         let transparent = |index: usize| self.um_palette[index & 0x3F] & 0x1F == 0x1F;
@@ -2468,6 +2481,49 @@ impl Ppu {
             }
         }
         frame
+    }
+}
+
+/// Display palette variant, serialized with the machine state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum PaletteVariant {
+    /// Canonical 2C02 table (oracle parity).
+    #[default]
+    Canonical,
+    /// Warmer, slightly softer consumer-TV look.
+    Consumer,
+    /// Saturated, gamma-corrected RGB-monitor look.
+    Rgb,
+    /// Luminance-only output.
+    Monochrome,
+}
+
+/// Applies a display palette preset to a canonical 2C02 colour.
+fn palette_colour(variant: PaletteVariant, base: [u8; 3]) -> [u8; 3] {
+    let r = f32::from(base[0]);
+    let g = f32::from(base[1]);
+    let b = f32::from(base[2]);
+    let clamp = |value: f32| value.clamp(0.0, 255.0) as u8;
+    match variant {
+        PaletteVariant::Canonical => base,
+        PaletteVariant::Consumer => {
+            // Slightly gamma-lifted, warm white point and softer blue.
+            let lift = |value: f32| 255.0 * (value / 255.0).powf(0.92);
+            [clamp(lift(r) * 1.06), clamp(lift(g)), clamp(lift(b) * 0.92)]
+        }
+        PaletteVariant::Rgb => {
+            // Saturation boost around Rec.601 luma, then gamma-corrected.
+            let luma = 0.299 * r + 0.587 * g + 0.114 * b;
+            let saturate = |value: f32| {
+                let value = luma + (value - luma) * 1.35;
+                255.0 * (value / 255.0).powf(0.9)
+            };
+            [clamp(saturate(r)), clamp(saturate(g)), clamp(saturate(b))]
+        }
+        PaletteVariant::Monochrome => {
+            let luma = 0.299 * r + 0.587 * g + 0.114 * b;
+            [clamp(luma); 3]
+        }
     }
 }
 
@@ -2612,6 +2668,20 @@ mod tests {
         let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], true, false);
         ppu.end_warmup();
         ppu
+    }
+
+    #[test]
+    fn palette_presets_transform_the_canonical_table() {
+        let base = [0x6A, 0x6D, 0x6A];
+        assert_eq!(palette_colour(PaletteVariant::Canonical, base), base);
+        assert_eq!(palette_colour(PaletteVariant::Rgb, [0, 0, 0]), [0, 0, 0]);
+        let mono = palette_colour(PaletteVariant::Monochrome, [200, 40, 10]);
+        assert_eq!(mono[0], mono[1]);
+        assert_eq!(mono[1], mono[2]);
+        let warm = palette_colour(PaletteVariant::Consumer, [120, 120, 120]);
+        assert!(warm[0] > warm[2], "consumer palette is warm");
+        let saturated = palette_colour(PaletteVariant::Rgb, [200, 40, 10]);
+        assert!(saturated[0] > 200, "RGB palette boosts saturation");
     }
 
     #[test]

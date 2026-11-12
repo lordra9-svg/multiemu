@@ -457,6 +457,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut device2 = unko_core::PortDevice::Gamepad;
             let mut paddle: Option<u8> = None;
             let mut paddle_fire = false;
+            let mut filter = unko_core::VideoFilter::Raw;
+            let mut palette = unko_core::Palette::Canonical;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--frames" => {
@@ -491,6 +493,18 @@ fn run() -> Result<(), Box<dyn Error>> {
                         );
                     }
                     "--paddle-fire" => paddle_fire = true,
+                    "--filter" => {
+                        filter = match args.next().ok_or("--filter needs a name")?.as_str() {
+                            "composite" => unko_core::VideoFilter::Composite,
+                            "crt" => unko_core::VideoFilter::Crt,
+                            _ => unko_core::VideoFilter::Raw,
+                        };
+                    }
+                    "--palette" => {
+                        palette = unko_core::Palette::from_name(
+                            &args.next().ok_or("--palette needs a name")?,
+                        );
+                    }
                     "--break" => {
                         let pc = args.next().ok_or("--break needs an address")?;
                         let pc = pc.trim_start_matches("0x").trim_start_matches('$');
@@ -539,7 +553,16 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             let registry = registry();
             let mut core = create_core(&registry, core_id.as_deref())?;
-            core.load(&rom, &LoadOptions::default())?;
+            core.load(
+                &rom,
+                &LoadOptions {
+                    video_filter: filter,
+                    palette,
+                    ..LoadOptions::default()
+                },
+            )?;
+            core.set_video_filter(filter);
+            core.set_palette(palette);
             if let Some(sram) = &sram_path {
                 if std::path::Path::new(sram).exists() {
                     core.load_sram(&fs::read(sram)?)?;
@@ -1141,6 +1164,7 @@ fn usage() -> String {
   unko signatures <dir> [--frames N] [--mapper ID] [--limit N] [--check FILE]
   unko run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID]
           [--device1 NAME] [--device2 NAME] [--paddle N] [--paddle-fire]
+          [--filter raw|composite|crt] [--palette canonical|consumer|rgb|mono]
   unko verify <rom|archive> [frames]
   unko trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N] [--audio-dir DIR]
   unko diff <a.trace> <b.trace> [--skip N] [--video]

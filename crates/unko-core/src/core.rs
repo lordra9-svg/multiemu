@@ -5,7 +5,7 @@ use std::fmt;
 use crate::debug::{ApuState, CpuState, DebugSpace, Disassembly, PpuState};
 use crate::input::InputState;
 use crate::types::{
-    AudioBuffer, CoreInfo, FrameBuffer, FrameStats, LoadOptions, PortDevice, VideoFilter,
+    AudioBuffer, CoreInfo, FrameBuffer, FrameStats, LoadOptions, Palette, PortDevice, VideoFilter,
 };
 
 /// Errors a core may return to the host.
@@ -95,6 +95,9 @@ pub trait Core {
 
     /// Changes the core-side video filter.
     fn set_video_filter(&mut self, filter: VideoFilter);
+
+    /// Changes the display palette.
+    fn set_palette(&mut self, _palette: Palette) {}
 
     /// Serializes the full machine state into `out`, replacing its contents.
     fn save_state(&mut self, out: &mut Vec<u8>) -> Result<(), CoreError>;

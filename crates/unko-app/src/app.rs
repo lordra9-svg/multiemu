@@ -263,6 +263,7 @@ impl App {
         self.settings.zapper_port2 = self.settings.port2_device == PortDevice::Zapper;
         if let Some(player) = &mut self.player {
             player.set_filter(self.settings.filter);
+            player.set_palette(self.settings.palette);
             let rate = self
                 .audio
                 .as_ref()
@@ -1776,6 +1777,34 @@ fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         VideoFilter::Composite,
         "Composite / NTSC simulation",
     );
+    ui.radio_value(
+        &mut settings.filter,
+        VideoFilter::Crt,
+        "CRT (composite + scanlines + bloom)",
+    );
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label("Palette");
+        egui::ComboBox::from_id_salt("palette")
+            .selected_text(palette_label(settings.palette))
+            .show_ui(ui, |ui| {
+                for palette in [
+                    unko_core::Palette::Canonical,
+                    unko_core::Palette::Consumer,
+                    unko_core::Palette::Rgb,
+                    unko_core::Palette::Monochrome,
+                ] {
+                    ui.selectable_value(&mut settings.palette, palette, palette_label(palette));
+                }
+            });
+    });
+    ui.label(
+        RichText::new(
+            "Canonical matches the reference oracle; the other palettes are display presets.",
+        )
+        .weak()
+        .small(),
+    );
     ui.add_space(8.0);
     ui.checkbox(&mut settings.integer_scale, "Integer scaling when possible");
     ui.checkbox(
@@ -1788,6 +1817,15 @@ fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings) {
             .weak()
             .small(),
     );
+}
+
+fn palette_label(palette: unko_core::Palette) -> &'static str {
+    match palette {
+        unko_core::Palette::Canonical => "Canonical 2C02",
+        unko_core::Palette::Consumer => "Consumer TV (warm)",
+        unko_core::Palette::Rgb => "RGB monitor (saturated)",
+        unko_core::Palette::Monochrome => "Monochrome",
+    }
 }
 
 fn audio_tab(
@@ -2162,7 +2200,7 @@ fn advanced_tab(ui: &mut egui::Ui) {
     ui.heading("Advanced");
     ui.add_space(8.0);
     ui.label("Core: Unko NES accuracy core");
-    ui.label("State format: UNKOST02, ROM-fingerprinted and core-tagged");
+    ui.label("State format: UNKOST03, ROM-fingerprinted and core-tagged");
     ui.label("Settings file: unko.conf");
     ui.add_space(8.0);
     ui.label(

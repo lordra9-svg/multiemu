@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 
-use unko_core::{PortDevice, Region, VideoFilter};
+use unko_core::{Palette, PortDevice, Region, VideoFilter};
 
 use crate::gamepad::{button_name, NesButton, PadMapping};
 
@@ -150,6 +150,8 @@ pub struct Settings {
     pub region: Region,
     /// Core-side video filter.
     pub filter: VideoFilter,
+    /// Display palette preset.
+    pub palette: Palette,
     /// Requested audio sample rate.
     pub sample_rate: f32,
     /// Keep integer pixel scaling when possible.
@@ -204,6 +206,7 @@ impl Default for Settings {
             save_dir: default_data_root().join("saves"),
             region: Region::Auto,
             filter: VideoFilter::Raw,
+            palette: Palette::Canonical,
             sample_rate: 48_000.0,
             integer_scale: true,
             linear_filter: false,
@@ -267,6 +270,7 @@ impl Settings {
                 "save_dir" => settings.save_dir = value.into(),
                 "region" => settings.region = parse_region(value),
                 "filter" => settings.filter = parse_filter(value),
+                "palette" => settings.palette = Palette::from_name(value),
                 "sample_rate" => settings.sample_rate = value.parse().unwrap_or(48_000.0),
                 "integer_scale" => settings.integer_scale = parse_bool(value),
                 "linear_filter" => settings.linear_filter = parse_bool(value),
@@ -341,6 +345,7 @@ filter={}
 sample_rate={}
 integer_scale={}
 linear_filter={}
+palette={}
 port1_device={}
 port2_device={}
 zapper_port2={}
@@ -366,6 +371,7 @@ per_game_input={}
             self.sample_rate,
             self.integer_scale,
             self.linear_filter,
+            self.palette.name(),
             self.port1_device.name(),
             self.port2_device.name(),
             self.port2_device == PortDevice::Zapper,
@@ -439,6 +445,7 @@ fn region_name(region: Region) -> &'static str {
 fn parse_filter(value: &str) -> VideoFilter {
     match value {
         "composite" => VideoFilter::Composite,
+        "crt" => VideoFilter::Crt,
         _ => VideoFilter::Raw,
     }
 }
@@ -447,6 +454,7 @@ fn filter_name(filter: VideoFilter) -> &'static str {
     match filter {
         VideoFilter::Raw => "raw",
         VideoFilter::Composite => "composite",
+        VideoFilter::Crt => "crt",
     }
 }
 
@@ -459,9 +467,10 @@ mod tests {
         let path = std::env::temp_dir().join("unko-settings-test.conf");
         let settings = Settings {
             region: Region::Pal,
-            filter: VideoFilter::Composite,
+            filter: VideoFilter::Crt,
             rom_dir: PathBuf::from("/games"),
             theme: Theme::Light,
+            palette: Palette::Consumer,
             ..Settings::default()
         };
         settings.save(&path).expect("writes");

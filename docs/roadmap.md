@@ -139,13 +139,17 @@ The main effort is now the reference-parity accuracy core. Details in
       Arkanoid paddle (inverted MSB-first position + fire, mouse steering),
       Power Pad / Family Trainer (12-button two-bit serial read with an
       on-screen mat) and the Family BASIC keyboard (9x8 matrix with the
-      documented host-key mapping). Device state is part of `UNKOST02` save
+      documented host-key mapping). Device state is part of `UNKOST03` save
       states; the Controllers tab selects a device per port.
 - [ ] FDS (BIOS supplied by the user, never bundled), Vs. System.
 - [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation
       pending).
 - [ ] Expansion audio levels and per-channel mixing.
-- [ ] NTSC/composite filter pass on the GPU, palette selection.
+- [x] NTSC/composite filter and palette selection: Raw, Composite and CRT
+      (composite + scanlines + bloom) post-process filters, plus Canonical
+      2C02, Consumer TV, RGB monitor and Monochrome palettes. The filters run
+      on the CPU for now; a GPU shader pass remains future work. The canonical
+      palette and raw filter are the defaults, so oracle parity is unchanged.
 - [x] Debugger: memory viewer and breakpoint UI. Headless pieces exist:
       `unko run --dump-ppu` prints per-frame CPU/PPU/APU state and
       `--break <hex>` stops on a PC. The desktop shell adds a Debugger window

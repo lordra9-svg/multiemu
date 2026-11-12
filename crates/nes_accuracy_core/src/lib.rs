@@ -28,14 +28,14 @@ pub use cart::{CartError, Cartridge, Header, Mapper, Mirroring};
 pub use clock::{Region, Timing};
 pub use cpu::{Cpu, Registers, Status};
 pub use nsf::{Nsf, NsfError, NsfHeader};
-pub use ppu::Ppu;
+pub use ppu::{PaletteVariant, Ppu};
 pub use resampler::Resampler;
 pub use system::System;
 
 use crate::clock::Region as ClockRegion;
 use unko_core::{
     Accuracy, ApuState, AudioBuffer, Core, CoreError, CoreInfo, CoreRegistration, CpuState,
-    DebugSpace, Disassembly, Features, FrameBuffer, FrameStats, InputState, LoadOptions,
+    DebugSpace, Disassembly, Features, FrameBuffer, FrameStats, InputState, LoadOptions, Palette,
     PixelFormat, PortDevice, PpuState, Region as HostRegion, SystemId, VideoFilter,
 };
 
@@ -86,6 +86,7 @@ pub struct AccuracyCore {
     audio: Vec<f32>,
     sample_rate: f32,
     filter: VideoFilter,
+    palette: Palette,
 }
 
 impl AccuracyCore {
@@ -98,6 +99,7 @@ impl AccuracyCore {
             audio: Vec::new(),
             sample_rate: 48_000.0,
             filter: VideoFilter::Raw,
+            palette: Palette::Canonical,
         }
     }
 }
@@ -111,21 +113,47 @@ impl Default for AccuracyCore {
 /// Simple composite/NTSC display approximation: a 3-tap horizontal luma blend
 /// plus a mild scanline attenuation. Display-only; it never feeds back into
 /// emulation state.
-fn composite_filter(frame: &mut [u8]) {
+/// Maps a host palette choice onto the core's palette table.
+fn palette_variant(palette: Palette) -> PaletteVariant {
+    match palette {
+        Palette::Canonical => PaletteVariant::Canonical,
+        Palette::Consumer => PaletteVariant::Consumer,
+        Palette::Rgb => PaletteVariant::Rgb,
+        Palette::Monochrome => PaletteVariant::Monochrome,
+    }
+}
+
+/// Horizontal 1-2-1 blend plus scanlines; `crt` adds a stronger scanline and
+/// a two-pixel horizontal bloom for a CRT-like presentation.
+fn composite_filter(frame: &mut [u8], crt: bool) {
     let width = WIDTH as usize;
     let height = HEIGHT as usize;
     let mut row = vec![0u8; width * 4];
+    let mut bloom = vec![0u8; width * 4];
     for y in 0..height {
         let start = y * STRIDE;
         row.copy_from_slice(&frame[start..start + STRIDE]);
+        if crt {
+            bloom.copy_from_slice(&row);
+            for x in 0..width {
+                let right = (x + 2).min(width - 1);
+                for channel in 0..3 {
+                    bloom[x * 4 + channel] = ((u16::from(row[x * 4 + channel]) * 3
+                        + u16::from(row[right * 4 + channel]))
+                        / 4) as u8;
+                }
+            }
+        }
         for x in 0..width {
             let left = x.saturating_sub(1);
             let right = (x + 1).min(width - 1);
             let scanline = if y & 1 == 0 { 1.0 } else { 0.82 };
+            let scanline = if crt { scanline * 0.94 } else { scanline };
             for channel in 0..3 {
-                let blended = (f32::from(row[left * 4 + channel])
-                    + 2.0 * f32::from(row[x * 4 + channel])
-                    + f32::from(row[right * 4 + channel]))
+                let source = if crt { &bloom } else { &row };
+                let blended = (f32::from(source[left * 4 + channel])
+                    + 2.0 * f32::from(source[x * 4 + channel])
+                    + f32::from(source[right * 4 + channel]))
                     / 4.0;
                 let value = (blended * scanline).clamp(0.0, 255.0) as u8;
                 frame[start + x * 4 + channel] = value;
@@ -155,6 +183,8 @@ impl Core for AccuracyCore {
             HostRegion::Dendy => system.set_region(ClockRegion::Dendy),
         }
         self.filter = options.video_filter;
+        self.palette = options.palette;
+        system.set_palette(palette_variant(options.palette));
         let rate = if options.sample_rate > 0.0 {
             options.sample_rate
         } else {
@@ -182,8 +212,10 @@ impl Core for AccuracyCore {
         system.run_frame();
         self.frame.clear();
         self.frame.extend_from_slice(system.video());
-        if self.filter == VideoFilter::Composite {
-            composite_filter(&mut self.frame);
+        match self.filter {
+            VideoFilter::Raw => {}
+            VideoFilter::Composite => composite_filter(&mut self.frame, false),
+            VideoFilter::Crt => composite_filter(&mut self.frame, true),
         }
         self.audio.clear();
         self.audio.extend_from_slice(system.audio());
@@ -228,6 +260,13 @@ impl Core for AccuracyCore {
 
     fn set_video_filter(&mut self, filter: VideoFilter) {
         self.filter = filter;
+    }
+
+    fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
+        if let Some(system) = self.system.as_mut() {
+            system.set_palette(palette_variant(palette));
+        }
     }
 
     fn set_port_device(&mut self, port: usize, device: PortDevice) {
@@ -403,6 +442,35 @@ mod tests {
         rom[vector] = 0x00;
         rom[vector + 1] = 0x80;
         rom
+    }
+
+    #[test]
+    fn palette_and_crt_filter_change_output_without_breaking_rendering() {
+        let mut core = AccuracyCore::new();
+        core.load(
+            &debug_nrom(),
+            &LoadOptions {
+                palette: Palette::Monochrome,
+                ..LoadOptions::default()
+            },
+        )
+        .expect("load");
+        // The first call reports the power-on frame, the second completes the
+        // wrap into the first executed frame, and the third renders a full
+        // frame with the palette applied.
+        core.run_frame().expect("power-on frame");
+        core.run_frame().expect("frame start");
+        core.run_frame().expect("frame");
+        // A monochrome palette leaves every pixel gray.
+        for pixel in core.video().data.as_chunks::<4>().0 {
+            assert_eq!(pixel[0], pixel[1]);
+            assert_eq!(pixel[1], pixel[2]);
+        }
+
+        core.set_palette(Palette::Canonical);
+        core.set_video_filter(VideoFilter::Crt);
+        core.run_frame().expect("frame");
+        assert_eq!(core.video().data.len(), (WIDTH * HEIGHT * 4) as usize);
     }
 
     #[test]

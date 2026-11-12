@@ -255,6 +255,48 @@ impl PortDevice {
     }
 }
 
+/// Display palette applied to the core's RGB output.
+///
+/// The canonical 2C02 table is the reference default (and what differential
+/// traces compare against). The other presets are display preferences derived
+/// from it, not hardware captures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Palette {
+    /// Canonical 2C02 RGB table used for oracle parity.
+    #[default]
+    Canonical,
+    /// Warmer, slightly softer consumer-TV look.
+    Consumer,
+    /// Saturated, gamma-corrected RGB-monitor look.
+    Rgb,
+    /// Luminance-only output.
+    Monochrome,
+}
+
+impl Palette {
+    /// Stable lowercase name used by settings and the CLI.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Canonical => "canonical",
+            Self::Consumer => "consumer",
+            Self::Rgb => "rgb",
+            Self::Monochrome => "mono",
+        }
+    }
+
+    /// Parses a palette name; unknown names fall back to the canonical table.
+    #[must_use]
+    pub fn from_name(name: &str) -> Self {
+        match name.trim() {
+            "consumer" | "warm" => Self::Consumer,
+            "rgb" => Self::Rgb,
+            "mono" | "monochrome" | "grayscale" => Self::Monochrome,
+            _ => Self::Canonical,
+        }
+    }
+}
+
 /// Preferred video output style.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum VideoFilter {
@@ -263,6 +305,9 @@ pub enum VideoFilter {
     Raw,
     /// Core-side composite/NTSC simulation, when the core offers one.
     Composite,
+    /// Composite simulation plus stronger scanlines and a slight horizontal
+    /// bloom, for a CRT-like presentation.
+    Crt,
 }
 
 /// Host options applied when a ROM is loaded.
@@ -274,6 +319,8 @@ pub struct LoadOptions {
     pub sample_rate: f32,
     /// Requested video output style.
     pub video_filter: VideoFilter,
+    /// Display palette.
+    pub palette: Palette,
 }
 
 impl Default for LoadOptions {
@@ -282,6 +329,7 @@ impl Default for LoadOptions {
             region: Region::Auto,
             sample_rate: 48_000.0,
             video_filter: VideoFilter::Raw,
+            palette: Palette::Canonical,
         }
     }
 }

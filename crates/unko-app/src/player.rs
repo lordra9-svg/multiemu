@@ -118,6 +118,7 @@ impl Player {
                 region: settings.region,
                 sample_rate: settings.sample_rate,
                 video_filter: settings.filter,
+                palette: settings.palette,
             },
         )
         .map_err(|err| err.to_string())?;
@@ -489,6 +490,11 @@ impl Player {
     /// Replaces the Family BASIC keyboard matrix.
     pub fn set_family_keyboard(&mut self, keys: [u8; 9]) {
         self.core.set_family_keyboard(keys);
+    }
+
+    /// Changes the display palette and rebuilds the cached colours.
+    pub fn set_palette(&mut self, palette: unko_core::Palette) {
+        self.core.set_palette(palette);
     }
 
     /// Sets the display texture filtering (nearest vs smooth).

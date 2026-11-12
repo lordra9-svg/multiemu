@@ -1695,7 +1695,7 @@ immediate buffer update; that experiment was reverted.
 
 ### 2026-11-12 — accuracy-core save states; TetaNES retired
 
-The accuracy core now owns the host save-state contract. `UNKOST02` states
+The accuracy core now owns the host save-state contract. `UNKOST03` states
 carry a ROM fingerprint, the mapper state and the CPU/PPU/APU/system state
 (including the resampler). `unko verify` resumes byte-identically, and state
 files are core-tagged (`<rom>.<core>.slotN.state`) so a state from another
@@ -1805,8 +1805,27 @@ unit-tested serial behavior taken from the NESdev documentation:
   active-low on `$4017` bits 1-4.
 
 `set_controller` now accepts players 1-4. The save-state magic moves to
-`UNKOST02` because the peripheral state and the four-controller array are part
+`UNKOST03` because the peripheral state and the four-controller array are part
 of the snapshot; old states are rejected with a clear format error. Arkanoid
 (USA) boots into gameplay with the paddle attached (the frame changes with the
 knob position in the demo), and Family Trainer 1 boots with the Power Pad.
 AccuracyCoin remains **146/151 (0 failures)**.
+
+### 2026-11-12 — display palettes, CRT filter and state format 03
+
+The PPU now supports four display palettes: the canonical 2C02 table (default,
+and still the table every differential trace uses), a warm Consumer TV preset,
+a saturated RGB-monitor preset and Monochrome. The presets are documented
+transforms of the canonical table, not hardware captures, so they are a
+display preference and do not change emulated values; `refresh_palette_rgb`
+applies the chosen table to every emphasis-adjusted entry.
+
+The video post-processor gained a CRT mode next to Raw and Composite: the
+1-2-1 horizontal blend stays, with stronger scanlines and a two-pixel
+horizontal bloom. The filters are CPU passes for now (256x240), applied after
+the frame is composed; a GPU shader pass remains future work.
+
+The palette preset lives in the PPU state so a restored state keeps its
+appearance; the save-state magic moves to `UNKOST03`. With the canonical
+palette and raw filter (the defaults) output is byte-identical, and the
+AccuracyCoin battery is unchanged at 146/151 with 0 failures.
