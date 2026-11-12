@@ -855,6 +855,7 @@ impl Cpu {
         }
     }
 
+    #[inline]
     fn read_value(&mut self, bus: &mut impl CpuBus, mode: Mode) -> u8 {
         match mode {
             Mode::Imm => self.fetch(bus),
@@ -890,6 +891,7 @@ impl Cpu {
         let _ = result;
     }
 
+    #[inline]
     fn address(&mut self, bus: &mut impl CpuBus, mode: Mode, penalty: Penalty) -> u16 {
         match mode {
             Mode::Imp | Mode::Acc | Mode::Imm => 0,
@@ -995,6 +997,7 @@ impl Cpu {
         value
     }
 
+    #[inline]
     fn read(&mut self, bus: &mut impl CpuBus, address: u16) -> u8 {
         self.wait_for_dma(bus, Some(address), None);
         self.cycles += 1;
@@ -1005,6 +1008,7 @@ impl Cpu {
         value
     }
 
+    #[inline]
     fn write(&mut self, bus: &mut impl CpuBus, address: u16, value: u8) {
         self.wait_for_dma(bus, Some(address), Some(value));
         self.cycles += 1;
@@ -1014,6 +1018,7 @@ impl Cpu {
         self.sample_cycle(bus);
     }
 
+    #[inline]
     fn idle(&mut self, bus: &mut impl CpuBus) {
         self.wait_for_dma(bus, None, None);
         self.cycles += 1;
@@ -1023,6 +1028,7 @@ impl Cpu {
         self.sample_cycle(bus);
     }
 
+    #[inline]
     fn wait_for_dma(&mut self, bus: &mut impl CpuBus, address: Option<u16>, write: Option<u8>) {
         while bus.dma_active() {
             self.cycles += 1;
@@ -1031,6 +1037,7 @@ impl Cpu {
         }
     }
 
+    #[inline]
     fn sample_cycle(&mut self, bus: &impl CpuBus) {
         self.prev_latched = self.nmi_latched;
         let nmi = bus.nmi_line();

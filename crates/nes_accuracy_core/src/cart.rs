@@ -805,6 +805,26 @@ pub trait Mapper: fmt::Debug + MapperState {
         0.0
     }
 
+    /// Whether this board has expansion audio at all.
+    fn has_expansion_audio(&self) -> bool {
+        false
+    }
+
+    /// Whether the board observes the CPU address on every bus access.
+    fn needs_cpu_address(&self) -> bool {
+        false
+    }
+
+    /// Whether this board does work on every CPU cycle.
+    fn needs_cpu_clock(&self) -> bool {
+        false
+    }
+
+    /// Whether this board can assert the mapper IRQ line.
+    fn irq_possible(&self) -> bool {
+        false
+    }
+
     /// Soft-reset notification (multicarts advance their selected game here).
     fn soft_reset(&mut self) {}
 
@@ -830,6 +850,10 @@ pub struct Cartridge {
     mapper: Box<dyn Mapper>,
     header: Header,
     fingerprint: u64,
+    audio_present: bool,
+    needs_cpu_address: bool,
+    needs_cpu_clock: bool,
+    irq_possible: bool,
 }
 
 /// A PRG/CHR byte window with the bank counts the inner logic should use.
@@ -877,6 +901,10 @@ impl Cartridge {
         }
         Ok(Self {
             chr_is_ram: true,
+            audio_present: true,
+            needs_cpu_address: false,
+            needs_cpu_clock: true,
+            irq_possible: true,
             mapper: Box::new(Fds::new(disk, bios)),
             fingerprint: fnv1a(&[disk, bios].concat()),
             header: Header {
@@ -1263,6 +1291,10 @@ impl Cartridge {
         }
         Ok(Self {
             chr_is_ram,
+            audio_present: mapper.has_expansion_audio(),
+            needs_cpu_address: mapper.needs_cpu_address(),
+            needs_cpu_clock: mapper.needs_cpu_clock(),
+            irq_possible: mapper.irq_possible(),
             mapper,
             header,
             fingerprint: fnv1a(bytes),
@@ -1279,6 +1311,30 @@ impl Cartridge {
     #[must_use]
     pub const fn fingerprint(&self) -> u64 {
         self.fingerprint
+    }
+
+    /// Whether the board can contribute expansion audio.
+    #[must_use]
+    pub const fn has_expansion_audio(&self) -> bool {
+        self.audio_present
+    }
+
+    /// Whether the board observes every CPU bus address.
+    #[must_use]
+    pub const fn needs_cpu_address(&self) -> bool {
+        self.needs_cpu_address
+    }
+
+    /// Whether the board needs a per-CPU-cycle callback.
+    #[must_use]
+    pub const fn needs_cpu_clock(&self) -> bool {
+        self.needs_cpu_clock
+    }
+
+    /// Whether the board can assert its IRQ line.
+    #[must_use]
+    pub const fn irq_possible(&self) -> bool {
+        self.irq_possible
     }
 
     /// Appends the mapper's mutable state.
@@ -1300,7 +1356,8 @@ impl Cartridge {
             .checked_add(len)
             .filter(|end| *end <= data.len())
             .ok_or("truncated mapper state")?;
-        self.mapper.load_state(&data[4..end])
+        self.mapper.load_state(&data[4..end])?;
+        Ok(())
     }
 
     /// Whether CHR is writable RAM.
@@ -2152,6 +2209,10 @@ impl Waixing195 {
 }
 
 impl Mapper for Waixing195 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if (0x5000..=0x5FFF).contains(&address) {
             return self.ram4k[usize::from(address - 0x5000)];
@@ -2261,6 +2322,10 @@ impl Mmc3_197 {
 }
 
 impl Mapper for Mmc3_197 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         self.inner.prg_read(address)
     }
@@ -2790,6 +2855,14 @@ impl Whirlwind40 {
 }
 
 impl Mapper for Whirlwind40 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.bank_byte(6, address),
@@ -2892,6 +2965,14 @@ impl Kaiser303 {
 }
 
 impl Mapper for Kaiser303 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if (0x6000..=0x7FFF).contains(&address) {
             return self.prg_ram[usize::from(address - 0x6000)];
@@ -3707,6 +3788,10 @@ impl Nitra250 {
 }
 
 impl Mapper for Nitra250 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -4463,6 +4548,10 @@ impl Mmc3_254 {
 }
 
 impl Mapper for Mmc3_254 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if (0x6000..=0x7FFF).contains(&address) {
             let value = self.inner.prg_read(address);
@@ -4978,6 +5067,14 @@ impl Tf1201 {
 }
 
 impl Mapper for Tf1201 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = (self.prg.len() / 0x2000).max(1);
         match address {
@@ -5127,6 +5224,10 @@ impl Unl158B {
 }
 
 impl Mapper for Unl158B {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -5222,6 +5323,10 @@ impl Mmc3_219 {
 }
 
 impl Mapper for Mmc3_219 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -5376,6 +5481,10 @@ impl Mmc3_208 {
 }
 
 impl Mapper for Mmc3_208 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -5712,6 +5821,14 @@ impl Mapper106 {
 }
 
 impl Mapper for Mapper106 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let slot = usize::from((address.wrapping_sub(0x8000)) / 0x2000);
         if address >= 0x8000 {
@@ -5853,6 +5970,14 @@ impl Mapper43 {
 }
 
 impl Mapper for Mapper43 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_8k(if self.swap { 0 } else { 2 }, address),
@@ -5978,6 +6103,10 @@ impl Mmc3_262 {
 }
 
 impl Mapper for Mmc3_262 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         self.inner.prg_read(address)
     }
@@ -6084,6 +6213,10 @@ impl Smb2j304 {
 }
 
 impl Mapper for Smb2j304 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.read_8k(usize::from(self.prg_bank) | 4, address),
@@ -6375,6 +6508,14 @@ impl CityFighter266 {
 }
 
 impl Mapper for CityFighter266 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let base = usize::from(self.prg_reg);
         match address {
@@ -6640,6 +6781,14 @@ impl Vrc183 {
 }
 
 impl Mapper for Vrc183 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_8k(usize::from(self.window), address),
@@ -7440,6 +7589,10 @@ impl OneBus256 {
 }
 
 impl Mapper for OneBus256 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -7551,6 +7704,14 @@ enum Inner446 {
 }
 
 impl Mapper for Inner446 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match self {
             Self::Skrom(m) => m.prg_read(address),
@@ -7936,6 +8097,14 @@ impl Supervisor446 {
 }
 
 impl Mapper for Supervisor446 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if !self.locked() {
             if (0x6000..=0x7FFF).contains(&address) {
@@ -8316,6 +8485,10 @@ impl Srrx413 {
 }
 
 impl Mapper for Srrx413 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x4800..=0x4FFF => 0,
@@ -8590,6 +8763,10 @@ impl Techline351 {
 }
 
 impl Mapper for Techline351 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address >= 0x8000 {
             let slot = usize::from((address - 0x8000) / 0x2000);
@@ -8847,6 +9024,14 @@ impl Th2131 {
 }
 
 impl Mapper for Th2131 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if (0x6000..=0x7FFF).contains(&address) {
             return self.prg_ram[usize::from(address - 0x6000)];
@@ -8954,6 +9139,14 @@ impl Yung08 {
 }
 
 impl Mapper for Yung08 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_8k(2, address),
@@ -9076,6 +9269,14 @@ impl Fs306 {
 }
 
 impl Mapper for Fs306 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = (self.inner.prg.len() / 0x2000).max(1);
         match address {
@@ -9337,6 +9538,14 @@ impl BmcSb5013 {
 }
 
 impl Mapper for BmcSb5013 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_8k(self.prg_page(usize::from(self.inner[3])), address),
@@ -9708,6 +9917,14 @@ impl FineStudio417 {
 }
 
 impl Mapper for FineStudio417 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = (self.prg.len() / 0x2000).max(1);
         let slot = usize::from((address.wrapping_sub(0x8000)) / 0x2000);
@@ -10103,6 +10320,14 @@ impl UnlBj56 {
 }
 
 impl Mapper for UnlBj56 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address >= 0x8000 {
             let slot = usize::from((address - 0x8000) / 0x2000);
@@ -10265,6 +10490,10 @@ impl DragonFighter292 {
 }
 
 impl Mapper for DragonFighter292 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address >= 0x8000 {
             let slot = usize::from((address - 0x8000) / 0x2000);
@@ -10539,6 +10768,14 @@ impl Drip284 {
 }
 
 impl Mapper for Drip284 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = (self.prg.len() / 0x4000).max(1);
         match address {
@@ -10682,6 +10919,10 @@ impl J2012 {
 }
 
 impl Mapper for J2012 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x8000..=0x9FFF => self.prg_8k(usize::from(self.prg0), address),
@@ -11179,6 +11420,14 @@ impl Mapper547 {
 }
 
 impl Mapper for Mapper547 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x6FFF => {
@@ -11512,6 +11761,18 @@ impl Mapper594 {
 }
 
 impl Mapper for Mapper594 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
+    fn has_expansion_audio(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x5000..=0x5FFF => {
@@ -11836,6 +12097,10 @@ impl Mapper169 {
 }
 
 impl Mapper for Mapper169 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if self.reg5501 & 0x80 != 0 {
             return self.mmc3.prg_read(address);
@@ -12451,6 +12716,18 @@ impl Mapper355 {
 }
 
 impl Mapper for Mapper355 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_address(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -12730,6 +13007,14 @@ impl SuborSango559 {
 }
 
 impl Mapper for SuborSango559 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000)],
@@ -12905,6 +13190,10 @@ impl J2020_563 {
 }
 
 impl Mapper for J2020_563 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         self.inner.prg_read(address)
     }
@@ -13016,6 +13305,14 @@ impl NeSEvent2_555 {
 }
 
 impl Mapper for NeSEvent2_555 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x5000..=0x57FF => self.prg_ram[0x2000 + usize::from(address - 0x5000)],
@@ -13176,6 +13473,14 @@ impl Sangokushi330 {
 }
 
 impl Mapper for Sangokushi330 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x4800..=0x4FFF => self.chip_ram[usize::from(self.chip_addr) & 0x7F],
@@ -13339,6 +13644,14 @@ impl DdPirate127 {
 }
 
 impl Mapper for DdPirate127 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -13814,6 +14127,10 @@ impl Hsk007 {
 }
 
 impl Mapper for Hsk007 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -13920,6 +14237,10 @@ impl Mmc3_334 {
 }
 
 impl Mapper for Mmc3_334 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6002 => 0x01,
@@ -14436,6 +14757,14 @@ impl Ks202 {
 }
 
 impl Mapper for Ks202 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => {
@@ -14620,6 +14949,14 @@ impl Vrc3_73 {
 }
 
 impl Mapper for Vrc3_73 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = (self.prg.len() / 0x4000).max(1);
         match address {
@@ -15294,6 +15631,10 @@ impl Mmc3_12 {
 }
 
 impl Mapper for Mmc3_12 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn low_window(&self) -> Option<(u16, u16)> {
         Some((0x4100, 0x41FF))
     }
@@ -15428,6 +15769,10 @@ impl Sl1632 {
 }
 
 impl Mapper for Sl1632 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if self.mmc3_mode() {
             self.mmc3.prg_read(address)
@@ -15914,6 +16259,10 @@ impl Tec9719 {
 }
 
 impl Mapper for Tec9719 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -16249,6 +16598,10 @@ impl Batmap399 {
 }
 
 impl Mapper for Batmap399 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let last = ((self.prg.len() / 0x2000).max(1) - 1) as u8;
         match address {
@@ -16395,6 +16748,14 @@ impl Lh53 {
 }
 
 impl Mapper for Lh53 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_8k(usize::from(self.prg_bank), address),
@@ -16508,6 +16869,14 @@ impl Ctc15 {
 }
 
 impl Mapper for Ctc15 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000)],
@@ -17190,6 +17559,10 @@ impl Sachen9602 {
 }
 
 impl Mapper for Sachen9602 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -17783,6 +18156,10 @@ impl Mmc3Outer {
 }
 
 impl Mapper for Mmc3Outer {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if self.board == 238 && (0x4020..0x8000).contains(&address) {
             return self.security;
@@ -18259,6 +18636,14 @@ impl Irem65 {
 }
 
 impl Mapper for Irem65 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -18381,6 +18766,14 @@ impl Sunsoft3 {
 }
 
 impl Mapper for Sunsoft3 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -18793,6 +19186,14 @@ impl Racermate168 {
 }
 
 impl Mapper for Racermate168 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -18894,6 +19295,10 @@ impl Unl117 {
 }
 
 impl Mapper for Unl117 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -19041,6 +19446,14 @@ impl Yoko264 {
 }
 
 impl Mapper for Yoko264 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -19426,6 +19839,10 @@ impl Mmc3_313 {
 }
 
 impl Mapper for Mmc3_313 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -19557,6 +19974,14 @@ impl T230 {
 }
 
 impl Mapper for T230 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -20672,6 +21097,10 @@ impl Mmc3 {
 }
 
 impl Mapper for Mmc3 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x6000 {
             return 0;
@@ -20874,6 +21303,10 @@ impl Mmc3_123 {
 }
 
 impl Mapper for Mmc3_123 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -20997,6 +21430,10 @@ impl Mmc3_187 {
 }
 
 impl Mapper for Mmc3_187 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -21133,6 +21570,10 @@ impl Mmc3_245 {
 }
 
 impl Mapper for Mmc3_245 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -21210,6 +21651,10 @@ impl Mmc3_198 {
 }
 
 impl Mapper for Mmc3_198 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if (0x5000..=0x7FFF).contains(&address) {
             return self.low_ram[usize::from(address - 0x5000) & 0x0FFF];
@@ -21295,6 +21740,10 @@ impl Mmc3_263 {
 }
 
 impl Mapper for Mmc3_263 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         self.inner.prg_read(address)
     }
@@ -21378,6 +21827,10 @@ impl Mmc3_37 {
 }
 
 impl Mapper for Mmc3_37 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -21504,6 +21957,10 @@ impl Ga23c {
 }
 
 impl Mapper for Ga23c {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -21657,6 +22114,10 @@ impl Mmc3_199 {
 }
 
 impl Mapper for Mmc3_199 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x5000..=0x5FFF => self.low_ram[usize::from(address - 0x5000)],
@@ -21780,6 +22241,10 @@ impl Ctc222 {
 }
 
 impl Mapper for Ctc222 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = self.prg8_banks();
         let bank = match address {
@@ -22238,6 +22703,10 @@ impl Mmc3_249 {
 }
 
 impl Mapper for Mmc3_249 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return self.inner.prg_read(address);
@@ -22379,6 +22848,14 @@ impl Waixing253 {
 }
 
 impl Mapper for Waixing253 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = self.prg8_banks();
         let bank = match address {
@@ -22602,6 +23079,14 @@ impl Vrc {
 }
 
 impl Mapper for Vrc {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x6000 {
             return 0;
@@ -23260,6 +23745,18 @@ impl Mmc5 {
 }
 
 impl Mapper for Mmc5 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
+    fn has_expansion_audio(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x5204 => {
@@ -24777,6 +25274,18 @@ impl Fme7 {
 }
 
 impl Mapper for Fme7 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
+    fn has_expansion_audio(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = self.prg_bank_count();
         match address {
@@ -24987,6 +25496,14 @@ impl Ss88006 {
 }
 
 impl Mapper for Ss88006 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = self.prg_bank_count();
         match address {
@@ -25640,6 +26157,18 @@ impl Namco163 {
 }
 
 impl Mapper for Namco163 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
+    fn has_expansion_audio(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x4800..=0x4FFF => self.chip_ram[usize::from(self.chip_addr) & 0x7F],
@@ -26027,6 +26556,14 @@ fn invert_prg_bits(value: u8) -> u8 {
 }
 
 impl Mapper for JyAsic {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x5000..=0x57FF => 0,
@@ -26364,6 +26901,10 @@ impl JyClone {
 }
 
 impl Mapper for JyClone {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = self.prg_bank_count();
         let outer = usize::from(self.outer_prg) << 4;
@@ -26528,6 +27069,14 @@ impl BandaiFcg {
 }
 
 impl Mapper for BandaiFcg {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if self.number == 153 {
             let banks = self.prg_bank_count();
@@ -27523,6 +28072,10 @@ impl Mmc3_32k {
 }
 
 impl Mapper for Mmc3_32k {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
@@ -27777,6 +28330,10 @@ impl Coolboy {
 }
 
 impl Mapper for Coolboy {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
@@ -28218,6 +28775,10 @@ impl Mmc3_176 {
 }
 
 impl Mapper for Mmc3_176 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn mirroring(&self) -> Mirroring {
         if self.board_523 {
             Mirroring::Horizontal
@@ -28524,6 +29085,10 @@ impl Mmc3_215 {
 }
 
 impl Mapper for Mmc3_215 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
@@ -28734,6 +29299,10 @@ impl Mmc3_115 {
 }
 
 impl Mapper for Mmc3_115 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => 0,
@@ -29240,6 +29809,10 @@ impl Mmc3_121 {
 }
 
 impl Mapper for Mmc3_121 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn low_window(&self) -> Option<(u16, u16)> {
         Some((0x5000, 0x5FFF))
     }
@@ -29516,6 +30089,14 @@ impl Cony83 {
 }
 
 impl Mapper for Cony83 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x5100..=0x5103 => self.scratch[usize::from(address & 0x03)],
@@ -30312,6 +30893,14 @@ impl Rambo1 {
 }
 
 impl Mapper for Rambo1 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -31351,6 +31940,18 @@ impl Fds {
 }
 
 impl Mapper for Fds {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
+    fn has_expansion_audio(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x4090..=0x4097 => self.audio.read(address),
@@ -31866,6 +32467,18 @@ impl Vrc7 {
 }
 
 impl Mapper for Vrc7 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
+    fn has_expansion_audio(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_ram[usize::from(address - 0x6000) % self.prg_ram.len()],
@@ -32296,6 +32909,18 @@ impl Vrc6 {
 }
 
 impl Mapper for Vrc6 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
+    fn has_expansion_audio(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let outer8 = self.prg_outer;
         let mask8 = self.prg_mask;
@@ -32691,6 +33316,14 @@ impl Jf13 {
 }
 
 impl Mapper for Jf13 {
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
+    fn has_expansion_audio(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -32788,6 +33421,10 @@ impl Taito48 {
 }
 
 impl Mapper for Taito48 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = (self.prg.len() / 0x2000).max(1);
         let bank = match address {
@@ -33015,6 +33652,14 @@ impl Waixing252 {
 }
 
 impl Mapper for Waixing252 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = (self.prg.len() / 0x2000).max(1);
         let bank = match address {
@@ -33196,6 +33841,14 @@ impl NesEvent105 {
 }
 
 impl Mapper for NesEvent105 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => {
@@ -33329,6 +33982,14 @@ impl Fds50 {
 }
 
 impl Mapper for Fds50 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         match address {
             0x6000..=0x7FFF => self.prg_8k(15, address),
@@ -33444,6 +34105,14 @@ impl Fds42 {
 }
 
 impl Mapper for Fds42 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn low_window(&self) -> Option<(u16, u16)> {
         // The patched BIOS acknowledges its timer through the FDS `$4030`
         // status register.
@@ -33848,6 +34517,10 @@ impl Mmc3_114 {
 }
 
 impl Mapper for Mmc3_114 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         if address < 0x8000 {
             return 0;
@@ -34258,6 +34931,14 @@ impl Ks7032 {
 }
 
 impl Mapper for Ks7032 {
+    fn irq_possible(&self) -> bool {
+        true
+    }
+
+    fn needs_cpu_clock(&self) -> bool {
+        true
+    }
+
     fn prg_read(&self, address: u16) -> u8 {
         let banks = (self.prg.len() / 0x2000).max(1);
         let bank = match address {

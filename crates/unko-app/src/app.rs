@@ -83,6 +83,7 @@ pub struct App {
     audio_error: Option<String>,
     hotkey_capture: Option<HotkeyAction>,
     active_mapping: PadMapping,
+    paused_by_focus: bool,
 }
 
 /// Command-line overrides.
@@ -149,6 +150,7 @@ impl App {
             audio_error,
             hotkey_capture: None,
             active_mapping,
+            paused_by_focus: false,
         };
         app.status_until = Some(Instant::now() + Duration::from_secs(6));
         if args.settings {
@@ -229,6 +231,7 @@ impl App {
     }
 
     fn stop_game(&mut self) {
+        self.paused_by_focus = false;
         if self.settings.per_game_input {
             if let Some(player) = &self.player {
                 let path = self.settings.save_dir.join(format!("{}.pad", player.stem));
@@ -1085,6 +1088,25 @@ impl eframe::App for App {
             self.status_bar(ctx);
         }
 
+        // Save power when the window is inactive, without overwriting the
+        // user's own pause state.
+        let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        if self.settings.pause_on_focus_loss && !focused {
+            if let Some(player) = &mut self.player {
+                if !player.paused {
+                    player.toggle_pause();
+                    self.paused_by_focus = true;
+                }
+            }
+        } else if self.paused_by_focus {
+            if let Some(player) = &mut self.player {
+                if player.paused {
+                    player.toggle_pause();
+                }
+            }
+            self.paused_by_focus = false;
+        }
+
         if self.settings.gamepad_enabled {
             if let Some(gamepads) = &mut self.gamepads {
                 self.input_states = gamepads.poll(
@@ -1096,6 +1118,10 @@ impl eframe::App for App {
             }
         } else {
             self.input_states = [unko_core::InputState::empty(); 4];
+        }
+        if let Some(audio) = &self.audio {
+            let running = self.player.as_ref().is_some_and(|player| !player.paused);
+            audio.set_active(running && !self.settings.muted);
         }
         let audio = self.audio.as_mut();
         if let Some(player) = &mut self.player {
@@ -1493,9 +1519,14 @@ fn audio_tab(
         Some(audio) => {
             ui.label(
                 RichText::new(format!(
-                    "Output: {:.0} Hz, {} channel(s), {} underruns, {} dropped samples",
+                    "Output: {:.0} Hz, {} channel(s), {}, {} underruns, {} dropped samples",
                     audio.sample_rate(),
                     audio.channels(),
+                    if audio.is_active() {
+                        "stream running"
+                    } else {
+                        "stream paused"
+                    },
                     audio.underruns(),
                     audio.dropped()
                 ))

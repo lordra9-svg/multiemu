@@ -647,10 +647,10 @@ impl System {
     fn refresh_chr(&mut self) {
         if self.cart.chr_is_ram() {
             self.ppu.set_chr_ram_map(self.cart.chr_ram_map());
-            return;
-        }
-        for address in 0..0x2000u16 {
-            self.ppu.chr[usize::from(address)] = self.cart.ppu_read(address);
+        } else {
+            for address in 0..0x2000u16 {
+                self.ppu.chr[usize::from(address)] = self.cart.ppu_read(address);
+            }
         }
     }
 
@@ -756,16 +756,23 @@ impl System {
         let dots = self.next_cpu_dots();
         self.advance_ppu_cycle(dots);
         self.sample_zapper();
-        self.cart.clock_cpu();
+        if self.cart.needs_cpu_clock() {
+            self.cart.clock_cpu();
+        }
         self.apu.phase_override = Some(self.phase);
         self.apu.tick();
         self.mix_sample();
         self.phase = !self.phase;
     }
 
+    #[inline]
     fn mix_sample(&mut self) {
-        self.resampler
-            .add_sample(self.apu.output + self.cart.audio_mix());
+        let output = if self.cart.has_expansion_audio() {
+            self.apu.output + self.cart.audio_mix()
+        } else {
+            self.apu.output
+        };
+        self.resampler.add_sample(output);
     }
 
     /// Starts or steps the DMA engine for one CPU cycle.
@@ -795,7 +802,9 @@ impl System {
 
         // Advance the APU for this CPU cycle before sampling the DMC request,
         // matching the reference where the APU runs before the CPU bus access.
-        self.cart.clock_cpu();
+        if self.cart.needs_cpu_clock() {
+            self.cart.clock_cpu();
+        }
         self.apu.phase_override = Some(self.phase);
         self.apu.tick();
         self.mix_sample();
@@ -952,6 +961,7 @@ impl System {
     /// pattern fetch window, not at the scanline boundary. Clocking at dot 260
     /// puts the IRQ handler's scroll write on the following line, matching the
     /// hardware split position; clocking at dot 0 put the split one line early.
+    #[inline]
     fn advance_ppu_cycle(&mut self, dots: u32) {
         let line = self.ppu.scanline;
         let dot = self.ppu.dot;
@@ -1081,7 +1091,12 @@ impl System {
     fn dma_read(&mut self, address: u16) -> u8 {
         match address {
             0x0000..=0x1FFF => self.ram[usize::from(address) & 0x07FF],
-            0x2000..=0x3FFF => self.ppu.read_register(address),
+            0x2000..=0x3FFF => {
+                if address & 7 == 7 {
+                    self.refresh_chr();
+                }
+                self.ppu.read_register(address)
+            }
             0x4015 => self.apu.read_status(),
             0x4016 => self.read_controller(0),
             0x4017 => self.read_controller(1),
@@ -1140,7 +1155,9 @@ impl System {
 
 impl CpuBus for System {
     fn read(&mut self, address: u16) -> u8 {
-        self.cart.set_cpu_address(address);
+        if self.cart.needs_cpu_address() {
+            self.cart.set_cpu_address(address);
+        }
         // $2004 reflects the OAM data bus at the end of the CPU read cycle.
         // Advance the final PPU dot before sampling it and suppress the usual
         // post-access step so the cycle length is unchanged.
@@ -1152,8 +1169,6 @@ impl CpuBus for System {
         let value = match address {
             0x0000..=0x1FFF => self.ram[usize::from(address) & 0x07FF],
             0x2000..=0x3FFF => {
-                // A `$2007` read returns the current CHR bank; refresh first so
-                // a bank written since the frame start is visible.
                 if address & 7 == 7 {
                     self.refresh_chr();
                 }
@@ -1205,7 +1220,9 @@ impl CpuBus for System {
     }
 
     fn write(&mut self, address: u16, value: u8) {
-        self.cart.set_cpu_address(address);
+        if self.cart.needs_cpu_address() {
+            self.cart.set_cpu_address(address);
+        }
         match address {
             0x0000..=0x1FFF => {
                 self.ram[usize::from(address) & 0x07FF] = value;
@@ -1220,8 +1237,6 @@ impl CpuBus for System {
                     if address == 0x2000 {
                         self.cart.set_ppu_ctrl(value);
                     }
-                    // `$2006` sets the PPU address; a following `$2007` read
-                    // must see the bank currently selected by the mapper.
                     if address & 7 == 6 {
                         self.refresh_chr();
                     }
@@ -1279,11 +1294,13 @@ impl CpuBus for System {
 
     fn tick(&mut self) {}
 
+    #[inline]
     fn begin_cycle(&mut self, address: Option<u16>, write: Option<u8>) {
         self.cycle_count = self.cycle_count.wrapping_add(1);
         self.begin_dma_cycle(address, write);
     }
 
+    #[inline]
     fn end_cycle(&mut self) {
         if self.end_dots == 0 {
             return;
@@ -1314,7 +1331,7 @@ impl CpuBus for System {
     }
 
     fn irq_line(&self) -> bool {
-        self.apu.irq_line() || self.cart.irq_line()
+        self.apu.irq_line() || (self.cart.irq_possible() && self.cart.irq_line())
     }
 
     fn take_nmi(&mut self) -> bool {

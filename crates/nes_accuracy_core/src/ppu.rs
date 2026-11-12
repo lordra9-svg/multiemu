@@ -926,6 +926,7 @@ impl Ppu {
     }
 
     /// Advances a number of dots.
+    #[inline]
     pub fn step_dots(&mut self, dots: u32) {
         for _ in 0..dots {
             self.step_dot();

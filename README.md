@@ -58,6 +58,9 @@ Details in `docs/systems.md`.
 
 ## Build and run
 
+A profile-guided build (about 10-13% faster) is available with
+`scripts/pgo.sh <rom-directory>`; see `docs/performance.md`.
+
 ```sh
 cargo build --release
 cargo run -p unko-cli -- scan roms

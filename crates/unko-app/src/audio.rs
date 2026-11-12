@@ -5,6 +5,7 @@
 //! every output channel. A short ring (about 85 ms at 48 kHz) absorbs desktop
 //! scheduling jitter without adding noticeable latency.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -14,7 +15,8 @@ use rtrb::{Producer, RingBuffer};
 
 /// A running cpal output stream and its producer side.
 pub struct AudioOutput {
-    _stream: cpal::Stream,
+    stream: cpal::Stream,
+    active: Cell<bool>,
     producer: Producer<f32>,
     sample_rate: f32,
     channels: usize,
@@ -103,7 +105,8 @@ impl AudioOutput {
             .map_err(|err| format!("start audio stream: {err}"))?;
 
         Ok(Self {
-            _stream: stream,
+            stream,
+            active: Cell::new(true),
             producer,
             sample_rate,
             channels,
@@ -145,6 +148,26 @@ impl AudioOutput {
     /// Mutes or unmutes the output.
     pub fn set_muted(&self, muted: bool) {
         self.muted.store(muted, Ordering::Relaxed);
+    }
+
+    /// Pauses or resumes the device stream. Pausing saves power while the
+    /// emulator is stopped, paused or muted.
+    pub fn set_active(&self, active: bool) {
+        if self.active.get() == active {
+            return;
+        }
+        if active {
+            let _ = self.stream.play();
+        } else {
+            let _ = self.stream.pause();
+        }
+        self.active.set(active);
+    }
+
+    /// Whether the device stream is running.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.active.get()
     }
 
     /// Number of callback underruns since start.
