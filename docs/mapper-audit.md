@@ -32,7 +32,7 @@ unko corpus <library-dir> --mapper 136 --frames 600
 | Unsupported mapper | 0 | 0.0% |
 | Load/run failure | 28 | 0.39% |
 
-Temporal passes: 120 frames renders 6,489 with 584 blank; 240 frames
+Temporal passes: 120 frames renders 6,490 with 583 blank; 240 frames
 renders 6,420 with 653 blank. The 240 count is lower because some games
 sit on a fade/transition frame; the only image with 0 rendering at both
 points is mapper 308, which waits for Start input. MMC2 (9, 10
