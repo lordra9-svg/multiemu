@@ -1688,6 +1688,7 @@ fn paths_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         if ui.text_edit_singleline(&mut rom_dir).changed() {
             settings.rom_dir = PathBuf::from(rom_dir);
         }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if ui.button("Browse…").clicked() {
             if let Some(path) = rfd::FileDialog::new()
                 .set_directory(&settings.rom_dir)
@@ -1703,6 +1704,7 @@ fn paths_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         if ui.text_edit_singleline(&mut save_dir).changed() {
             settings.save_dir = PathBuf::from(save_dir);
         }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if ui.button("Browse…").clicked() {
             if let Some(path) = rfd::FileDialog::new()
                 .set_directory(&settings.save_dir)
