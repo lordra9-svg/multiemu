@@ -1830,3 +1830,28 @@ The palette preset lives in the PPU state so a restored state keeps its
 appearance; the save-state magic moves to `UNKOST03`. With the canonical
 palette and raw filter (the defaults) output is byte-identical, and the
 AccuracyCoin battery is unchanged at 146/151 with 0 failures.
+
+### 2026-11-12 — expansion-audio parity probes and an FME-7 boot fix
+
+Added per-cycle expansion-channel columns to the APU debug trace and compared
+the summed expansion output with RustyNES (`APU_TRACE`):
+
+- MMC5 (*Just Breed*, frame 300): exact on all 29,780 cycles.
+- Namco 163 (*Erika*, frame 400): exact on 29,781 cycles.
+- VRC7 (*Lagrange Point*, frame 400): exact on 29,780 cycles.
+- VRC6 (*Akumajou Densetsu*, frame 400): APU pulse 1/triangle/noise/DMC exact;
+  pulse 2 and the expansion mix differ (see the ledger; the oracle's sawtooth
+  adds one extra time per sweep versus the wiki/Mesen schedule Unko follows).
+- Sunsoft 5B (*Gimmick!*, frame 400): still under investigation.
+
+The probe exposed a real **Sunsoft FME-7 (mapper 69)** bug: `$8000` command 8
+was treated as a PRG bank rather than the `$6000` window's RAM enable/select
+and bank; the nametable arrangement bits 0/1 were swapped; and the cycle IRQ
+used the wrong enable bit, a fictitious reload value and asserted without the
+assert-enable bit. Fixing all three makes *Gimmick!* boot and match the
+oracle's video on 118/120 frames (previously a blank backdrop). Unit tests
+cover FME-7 banking/mirroring/IRQ and the VRC6 sawtooth sweep.
+
+Gates: fmt, clippy (with and without `apu-trace`), 433 tests. The 20-frame
+library audit improved to **3,904 rendering / 3,169 blank** (8 more images
+draw, all mapper 69); AccuracyCoin remains **146/151 with 0 failures**.

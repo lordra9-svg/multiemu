@@ -15,6 +15,11 @@ use unko_core::DebugSpace;
 /// CPU clock in Hz (NTSC).
 pub const CPU_HZ: f64 = 1_789_773.0;
 
+/// Per-CPU-cycle APU debug trace: `(cycle, APU channels + mix, expansion
+/// channels)`.
+#[cfg(feature = "apu-trace")]
+type ApuTrace = Vec<(u64, [f32; 8], [f32; 8])>;
+
 /// A whole NES console.
 pub struct System {
     /// Cartridge and mapper state.
@@ -38,7 +43,7 @@ pub struct System {
     /// Debug: per-CPU-cycle APU channel outputs collected between
     /// `start_apu_trace` and `take_apu_trace` (feature `apu-trace`).
     #[cfg(feature = "apu-trace")]
-    apu_trace: Option<Vec<(u64, [f32; 6])>>,
+    apu_trace: Option<ApuTrace>,
     strobe: bool,
     /// Regional timing (NTSC/PAL/Dendy).
     timing: Timing,
@@ -785,10 +790,10 @@ impl System {
     }
 
     /// Takes the per-CPU-cycle trace: `(apu_cycles, [p1, p2, tri, noise, dmc,
-    /// mixed])`.
+    /// apu_mix, expansion_mix, total])`.
     #[cfg(feature = "apu-trace")]
     #[must_use]
-    pub fn take_apu_trace(&mut self) -> Vec<(u64, [f32; 6])> {
+    pub fn take_apu_trace(&mut self) -> ApuTrace {
         self.apu_trace.take().unwrap_or_default()
     }
 
@@ -1059,10 +1064,14 @@ impl System {
         self.mix_sample();
         #[cfg(feature = "apu-trace")]
         if let Some(trace) = &mut self.apu_trace {
-            let mut record = [0.0; 6];
+            let external = self.cart.audio_mix();
+            let mut record = [0.0; 8];
             record[..5].copy_from_slice(&self.apu.channel_outputs());
             record[5] = self.apu.output;
-            trace.push((self.apu.cycles(), record));
+            record[6] = external;
+            record[7] = self.apu.output + external;
+            let expansion = self.cart.debug_audio().unwrap_or([0.0; 8]);
+            trace.push((self.apu.cycles(), record, expansion));
         }
         self.phase = !self.phase;
     }

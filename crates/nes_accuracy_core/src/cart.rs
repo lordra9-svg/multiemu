@@ -810,6 +810,15 @@ pub trait Mapper: fmt::Debug + MapperState {
         false
     }
 
+    /// Raw per-channel expansion-audio outputs for differential debugging.
+    ///
+    /// The channel meaning is board-specific (VRC6: two pulses + saw, MMC5:
+    /// two pulses + PCM, N163: eight waves, 5B: three tones + noise, FDS: the
+    /// wavetable output). Unused entries are zero.
+    fn debug_audio(&self) -> Option<[f32; 8]> {
+        None
+    }
+
     /// Whether the board observes the CPU address on every bus access.
     fn needs_cpu_address(&self) -> bool {
         false
@@ -1521,6 +1530,12 @@ impl Cartridge {
     #[must_use]
     pub fn audio_mix(&self) -> f32 {
         self.mapper.audio_mix()
+    }
+
+    /// Raw expansion-audio channel outputs for differential debugging.
+    #[must_use]
+    pub fn debug_audio(&self) -> Option<[f32; 8]> {
+        self.mapper.debug_audio()
     }
 
     /// Battery-backed PRG-RAM contents.
@@ -25206,12 +25221,17 @@ pub struct Fme7 {
     command: u8,
     chr_banks: [u8; 8],
     prg_banks: [u8; 3],
+    /// `$6000-$7FFF` window: selected bank, RAM/ROM select and RAM enable.
     ram_bank: u8,
+    ram_selected: bool,
+    ram_enabled: bool,
     mirroring: Mirroring,
-    irq_enabled: bool,
+    /// IRQ counter decrement enable (`$D` bit 7).
+    irq_counter_enabled: bool,
+    /// IRQ assert enable (`$D` bit 0).
+    irq_assert: bool,
     irq_line: bool,
     irq_counter: u16,
-    irq_reload: u16,
     audio: Sunsoft5b,
 }
 
@@ -25225,11 +25245,13 @@ impl Fme7 {
             chr_banks: [0; 8],
             prg_banks: [0; 3],
             ram_bank: 0,
+            ram_selected: false,
+            ram_enabled: false,
             mirroring: header.mirroring,
-            irq_enabled: false,
+            irq_counter_enabled: false,
+            irq_assert: false,
             irq_line: false,
             irq_counter: 0,
-            irq_reload: 0,
             audio: Sunsoft5b::default(),
         }
     }
@@ -25242,29 +25264,31 @@ impl Fme7 {
         match self.command & 0x0F {
             0x0..=0x07 => self.chr_banks[usize::from(self.command & 0x07)] = value,
             0x08 => {
-                if value & 0x40 != 0 {
-                    self.ram_bank = value & 0x3F;
-                } else {
-                    self.prg_banks[0] = value & 0x3F;
-                }
+                // `ERbB BBBB`: bit 7 = RAM enable, bit 6 = RAM/ROM select,
+                // bits 0-5 = the bank mapped at `$6000-$7FFF`.
+                self.ram_enabled = value & 0x80 != 0;
+                self.ram_selected = value & 0x40 != 0;
+                self.ram_bank = value & 0x3F;
             }
             0x09 => self.prg_banks[0] = value & 0x3F,
             0x0A => self.prg_banks[1] = value & 0x3F,
             0x0B => self.prg_banks[2] = value & 0x3F,
             0x0C => {
+                // 0 = horizontal (A10), 1 = vertical (A11), 2 = 1scA (GND),
+                // 3 = 1scB (VCC).
                 self.mirroring = match value & 0x03 {
-                    0 => Mirroring::Vertical,
-                    1 => Mirroring::Horizontal,
+                    0 => Mirroring::Horizontal,
+                    1 => Mirroring::Vertical,
                     2 => Mirroring::SingleLower,
                     _ => Mirroring::SingleUpper,
                 }
             }
             0x0D => {
-                self.irq_enabled = value & 0x80 != 0;
-                if value & 0x01 != 0 {
-                    self.irq_line = false;
-                }
-                self.irq_reload = if value & 0x01 != 0 { 0x0001 } else { 0xFFFF };
+                // Bit 7 = counter decrement enable, bit 0 = IRQ assert enable.
+                // Any write acknowledges a pending IRQ.
+                self.irq_counter_enabled = value & 0x80 != 0;
+                self.irq_assert = value & 0x01 != 0;
+                self.irq_line = false;
             }
             0x0E => self.irq_counter = (self.irq_counter & 0xFF00) | u16::from(value),
             0x0F => self.irq_counter = (self.irq_counter & 0x00FF) | (u16::from(value) << 8),
@@ -25291,10 +25315,20 @@ impl Mapper for Fme7 {
         match address {
             0x6000..=0x7FFF => {
                 let offset = usize::from(self.ram_bank) * 0x2000 + usize::from(address - 0x6000);
-                self.prg_ram
-                    .get(offset % self.prg_ram.len())
-                    .copied()
-                    .unwrap_or(0)
+                if self.ram_selected {
+                    // RAM selected but disabled reads as open bus; return 0
+                    // here because the mapper has no bus value.
+                    if self.ram_enabled {
+                        self.prg_ram
+                            .get(offset % self.prg_ram.len())
+                            .copied()
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    }
+                } else {
+                    self.prg.get(offset).copied().unwrap_or(0)
+                }
             }
             0x8000..=0x9FFF => {
                 self.prg[(usize::from(self.prg_banks[0]) % banks) * 0x2000
@@ -25316,9 +25350,12 @@ impl Mapper for Fme7 {
     fn prg_write(&mut self, address: u16, value: u8) {
         match address {
             0x6000..=0x7FFF => {
-                let offset = usize::from(self.ram_bank) * 0x2000 + usize::from(address - 0x6000);
-                let len = self.prg_ram.len();
-                self.prg_ram[offset % len] = value;
+                if self.ram_selected && self.ram_enabled {
+                    let offset =
+                        usize::from(self.ram_bank) * 0x2000 + usize::from(address - 0x6000);
+                    let len = self.prg_ram.len();
+                    self.prg_ram[offset % len] = value;
+                }
             }
             0x8000..=0x9FFF => self.command = value & 0x0F,
             0xA000..=0xBFFF => self.write_parameter(value),
@@ -25363,12 +25400,14 @@ impl Mapper for Fme7 {
 
     fn clock_cpu(&mut self) {
         self.audio.tick();
-        if !self.irq_enabled {
+        if !self.irq_counter_enabled {
             return;
         }
         if self.irq_counter == 0 {
-            self.irq_counter = self.irq_reload;
-            self.irq_line = true;
+            self.irq_counter = 0xFFFF;
+            if self.irq_assert {
+                self.irq_line = true;
+            }
         } else {
             self.irq_counter -= 1;
         }
@@ -25376,6 +25415,19 @@ impl Mapper for Fme7 {
 
     fn audio_mix(&self) -> f32 {
         self.audio.mix()
+    }
+
+    fn debug_audio(&self) -> Option<[f32; 8]> {
+        Some([
+            self.audio.channel_output(0) as f32,
+            self.audio.channel_output(1) as f32,
+            self.audio.channel_output(2) as f32,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ])
     }
 }
 
@@ -32669,7 +32721,8 @@ impl Vrc6Pulse {
                 self.freq = (self.freq & 0x00FF) | (u16::from(value & 0x0F) << 8);
                 self.enabled = value & 0x80 != 0;
                 if !self.enabled {
-                    self.step = 15;
+                    // Clearing E resets and halts the duty generator.
+                    self.step = 0;
                 }
             }
             _ => {}
@@ -32677,17 +32730,12 @@ impl Vrc6Pulse {
     }
 
     fn clock(&mut self, halt: bool, shift: u8) {
-        if halt {
-            return;
-        }
-        if !self.enabled {
-            self.step = 15;
+        if halt || !self.enabled {
             return;
         }
         if self.divider == 0 {
             self.divider = self.freq >> shift;
-            // The 16-step duty generator counts down from 15 to 0.
-            self.step = if self.step == 0 { 15 } else { self.step - 1 };
+            self.step = (self.step + 1) & 0x0F;
         } else {
             self.divider -= 1;
         }
@@ -32721,27 +32769,29 @@ impl Vrc6Saw {
             2 => {
                 self.freq = (self.freq & 0x00FF) | (u16::from(value & 0x0F) << 8);
                 self.enabled = value & 0x80 != 0;
+                if !self.enabled {
+                    // "The accumulator is forced to zero until E is again set;
+                    // clearing E also resets the phase."
+                    self.accumulator = 0;
+                    self.step = 0;
+                }
             }
             _ => {}
         }
     }
 
     fn clock(&mut self, halt: bool, shift: u8) {
-        if halt {
-            return;
-        }
-        if !self.enabled {
-            self.accumulator = 0;
+        if halt || !self.enabled {
             return;
         }
         if self.divider == 0 {
             self.divider = self.freq >> shift;
-            self.step += 1;
-            if self.step >= 14 {
-                // The 14th clock resets the accumulator instead of adding.
-                self.step = 0;
+            // 14 steps per sweep; the 14th resets instead of adding, and the
+            // accumulator reacts on the even steps (2, 4, ... 12).
+            self.step = (self.step + 1) % 14;
+            if self.step == 0 {
                 self.accumulator = 0;
-            } else if self.step.is_multiple_of(2) {
+            } else if self.step & 1 == 0 {
                 self.accumulator = self.accumulator.wrapping_add(self.rate);
             }
         } else {
@@ -33040,6 +33090,19 @@ impl Mapper for Vrc6 {
 
     fn audio_mix(&self) -> f32 {
         self.audio.mix()
+    }
+
+    fn debug_audio(&self) -> Option<[f32; 8]> {
+        Some([
+            f32::from(self.audio.pulse1.output()),
+            f32::from(self.audio.pulse2.output()),
+            f32::from(self.audio.saw.output()),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ])
     }
 }
 
@@ -35452,6 +35515,84 @@ impl Mapper for Benshieng286 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fme7_banks_prg_mirrors_and_counts_irq_cycles() {
+        // 256 KiB PRG (32 x 8 KiB), 64 KiB CHR (64 x 1 KiB).
+        let rom = synth_banked(69, 256, 64);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 69);
+        // Default: $8000/$A000/$C000 all bank 0, $E000 fixed to the last.
+        assert_eq!(cart.cpu_read(0x8000), 0);
+        assert_eq!(cart.cpu_read(0xE000), 31);
+        cart.cpu_write(0x8000, 0x09);
+        cart.cpu_write(0xA000, 5);
+        assert_eq!(cart.cpu_read(0x8000), 5);
+        cart.cpu_write(0x8000, 0x0A);
+        cart.cpu_write(0xA000, 6);
+        assert_eq!(cart.cpu_read(0xA000), 6);
+        cart.cpu_write(0x8000, 0x0B);
+        cart.cpu_write(0xA000, 7);
+        assert_eq!(cart.cpu_read(0xC000), 7);
+        // Nametable arrangement: 0 = horizontal, 1 = vertical, 2/3 = 1sc.
+        for (value, expected) in [
+            (0, Mirroring::Horizontal),
+            (1, Mirroring::Vertical),
+            (2, Mirroring::SingleLower),
+            (3, Mirroring::SingleUpper),
+        ] {
+            cart.cpu_write(0x8000, 0x0C);
+            cart.cpu_write(0xA000, value);
+            assert_eq!(cart.mirroring(), expected);
+        }
+        // $6000 window: ROM bank by default, RAM when selected+enabled.
+        cart.cpu_write(0x8000, 0x08);
+        cart.cpu_write(0xA000, 3);
+        assert_eq!(cart.cpu_read(0x6000), 3, "PRG ROM bank 3 at $6000");
+        cart.cpu_write(0x8000, 0x08);
+        cart.cpu_write(0xA000, 0x40);
+        assert_eq!(cart.cpu_read(0x6000), 0, "RAM selected but disabled");
+        cart.cpu_write(0x8000, 0x08);
+        cart.cpu_write(0xA000, 0xC2);
+        cart.cpu_write(0x6000, 0x5A);
+        assert_eq!(cart.cpu_read(0x6000), 0x5A);
+        // Cycle IRQ: enable counter + assert, wrap from 0 to $FFFF.
+        cart.cpu_write(0x8000, 0x0E);
+        cart.cpu_write(0xA000, 0x02);
+        cart.cpu_write(0x8000, 0x0F);
+        cart.cpu_write(0xA000, 0x00);
+        cart.cpu_write(0x8000, 0x0D);
+        cart.cpu_write(0xA000, 0x81);
+        assert!(!cart.irq_line());
+        cart.clock_cpu();
+        cart.clock_cpu();
+        assert!(!cart.irq_line(), "3 -> 1 -> 0, no wrap yet");
+        cart.clock_cpu();
+        assert!(cart.irq_line(), "0 wraps to $FFFF and asserts");
+        cart.cpu_write(0x8000, 0x0D);
+        cart.cpu_write(0xA000, 0x81);
+        assert!(!cart.irq_line(), "any $D write acknowledges");
+    }
+
+    #[test]
+    fn vrc6_saw_adds_six_times_per_sweep() {
+        let mut saw = Vrc6Saw {
+            rate: 8,
+            freq: 0, // divider reload 0: one step per clock
+            enabled: true,
+            ..Vrc6Saw::default()
+        };
+        let mut outputs = Vec::new();
+        for _ in 0..14 {
+            saw.clock(false, 0);
+            outputs.push(saw.output());
+        }
+        assert_eq!(
+            outputs,
+            vec![0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 0],
+            "even steps add; the 14th resets"
+        );
+    }
+
     #[test]
     fn fs305_switches_prg_modes() {
         // 256 KiB PRG (16 x 16 KiB) so the 10th bank exists.

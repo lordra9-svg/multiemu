@@ -17,6 +17,33 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 
 None. All non-DRAW AccuracyCoin rows pass.
 
+## Expansion-audio parity (2026-11-12)
+
+A per-cycle differential probe (`apudump` with the expansion-channel columns;
+oracle `APU_TRACE` `RD` records) compared the summed expansion output against
+RustyNES:
+
+| Board | Title / frame | Result |
+|---|---|---|
+| MMC5 | *Just Breed*, frame 300 | all five APU channels, expansion mix and total match on 29,780/29,780 cycles |
+| Namco 163 | *Erika to Satoru no Yume Bouken*, frame 400 | exact on 29,781/29,781 cycles |
+| VRC7 | *Lagrange Point*, frame 400 | exact on 29,780/29,780 cycles |
+| VRC6 | *Akumajou Densetsu*, frame 400 | APU pulse 1/triangle/noise/DMC exact; pulse 2 diverges from cycle 2035 and the expansion mix by one unit |
+| Sunsoft 5B | *Gimmick!*, frame 400 | APU noise exact; pulse 1/2 and DMC diverge; one 5B channel is gated differently from cycle 13 |
+
+The probe found and fixed a real mapper bug: **Sunsoft FME-7 (mapper 69)**
+command 8 was decoded as a PRG bank instead of the `$6000` window's
+RAM-enable/RAM-select/bank bits, nametable arrangement 0/1 was swapped, and
+the cycle IRQ ignored the counter-enable bit, used a fictitious reload value
+and asserted without the enable bit. After the fix *Gimmick!* boots and its
+video matches RustyNES on 118/120 frames; before, it stayed on a blank
+backdrop.
+
+The VRC6 sawtooth difference is recorded rather than matched: RustyNES adds
+the accumulator on seven steps per 14-step sweep, while the NESdev wiki and
+Mesen add on six (even) steps and reset on the 14th. Unko follows the
+wiki/Mesen schedule.
+
 ## Known residual differences (no test failures)
 
 These do not fail any suite and are documented exceptions under the charter.
@@ -39,6 +66,14 @@ These do not fail any suite and are documented exceptions under the charter.
   CPU/PPU scheduler; both were measured and regressed video/audio parity, so
   the integer dot scheduler is kept. Closing this difference needs a hardware
   capture of the exact frame wrap, which is not available locally.
+
+- **Gimmick! expansion/DMC audio.** After the FME-7 boot fix, *Gimmick!*
+  video matches the oracle but its audio still diverges: pulse 2 and the
+  triangle/DMC latches hold different values at the same frame, and one 5B
+  channel is gated differently from cycle 13 of frame 400. The APU model is
+  exact for other titles and the 5B DAC tables/scale match the documented
+  curve, so this is an open investigation (sound-driver state or DMC/frame
+  IRQ interaction) rather than a known register bug.
 
 ## Recently closed (2026-11-12)
 

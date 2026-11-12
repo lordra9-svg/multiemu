@@ -24,10 +24,25 @@ fn main() {
     }
     system.start_apu_trace();
     system.run_frame();
-    for (cycle, values) in system.take_apu_trace() {
+    for (cycle, values, expansion) in system.take_apu_trace() {
         println!(
-            "{cycle} {:.1} {:.1} {:.1} {:.1} {:.1} {:.9}",
-            values[0], values[1], values[2], values[3], values[4], values[5]
+            "{cycle} {:.1} {:.1} {:.1} {:.1} {:.1} {:.9} {:.9} {:.9} {:.0} {:.0} {:.0} {:.0} {:.0} {:.0} {:.0} {:.0}",
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            values[6],
+            values[7],
+            expansion[0],
+            expansion[1],
+            expansion[2],
+            expansion[3],
+            expansion[4],
+            expansion[5],
+            expansion[6],
+            expansion[7]
         );
     }
 }
