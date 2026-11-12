@@ -211,6 +211,12 @@ writes, and MMC1 bank switching.
 
 NES 2.0 PRG (16 KiB units) and CHR (8 KiB units) sizes are parsed correctly.
 
+Educational-computer mappers are modelled at the board level: mapper 169
+implements the MMC3 game mode, the 32 KiB PRG/CHR-RAM windows, the 1-bpp and
+nametable-split graphics modes and the keyboard matrix, but the two available
+dumps are BIOS images with no FDS media, so their lessons cannot be exercised
+without the missing disk images.
+
 The UM6578 enhanced video path is verified against `colortest-sh6578` from
 the SH6578 documentation project: the 16-colour background test, all four
 background palettes and the sprite palette swatches render with the expected

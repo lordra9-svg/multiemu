@@ -448,7 +448,7 @@ board loads and boots but does not render, or renders only some images.
 | Mapper | Notes | Status | NESdev reference |
 |---:|---|---|---|
 | 127 | pirate Double Dragon II | implemented | [INES Mapper 127](https://www.nesdev.org/wiki/INES_Mapper_127) |
-| 169 | Yuxing educational computer | implemented | [INES Mapper 169](https://www.nesdev.org/wiki/INES_Mapper_169) |
+| 169 | Yuxing educational computer | implemented (computer/keyboard mode; no FDS media in the available dumps) | [INES Mapper 169](https://www.nesdev.org/wiki/INES_Mapper_169) |
 | 186 | Fukutake Study Box | implemented | [INES Mapper 186](https://www.nesdev.org/wiki/INES_Mapper_186) |
 | 256 | VT02+/VT03 OneBus | implemented (5/5 by 120 frames) | [NES 2.0 Mapper 256](https://www.nesdev.org/wiki/NES_2.0_Mapper_256) |
 | 272 | J-2012-II bootleg | implemented | [NES 2.0 Mapper 272](https://www.nesdev.org/wiki/NES_2.0_Mapper_272) |
