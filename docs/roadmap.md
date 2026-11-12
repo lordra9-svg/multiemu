@@ -75,15 +75,15 @@ The main effort is now the reference-parity accuracy core. Details in
       init/play unit tests. Remaining: FDS/VS, expansion audio, additional
       peripherals and validation against real PAL/NSF content.
 - [ ] **A7** differential harness, hardware captures, performance pass.
-      Performance pass started: headless accuracy core ~535 -> ~640 fps
-      (max-of-7, 2400 frames) via the sprite-list pixel loop, table-driven
-      mixer, palette RGB cache and the 8-dot background span; re-measured
-      2026-11-10 at ~1130-1159 fps (AccuracyCoin, 1200 frames, three runs).
-      Profile shares
-      logged in `docs/accuracy-status.md`. Single-ROM differential traces
-      (`unko trace` / `diff`) and directory-level frame signatures
-      (`unko signatures --check`) exist. Hardware captures still
-      outstanding.
+      The differential harness is complete: per-frame RGBA, audio and
+      palette-independent geometry hashes are compared against RustyNES, and
+      ares/MesenCE captures triage disagreements (`unko trace` / `diff` /
+      `parity` / `corpus --parity`). Performance pass done: 813-819 fps
+      (1.22 ms/frame) on the synthetic rendering NROM, 375-416 fps on the
+      MMC2 title, 1029-1040 fps with PGO, and >= 375 fps with 15 competing
+      CPU hogs. CI enforces a 300 fps synthetic budget, and the Windows/macOS
+      check jobs plus the Android/iOS core checks cover the other targets.
+      Hardware captures remain outstanding.
 
 ## M0 — core boundary (done)
 

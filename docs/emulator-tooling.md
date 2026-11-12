@@ -187,7 +187,9 @@ only the original two hashes still compare; geometry is skipped for them.
 The RustyNES adapter used for validation is a local, uncommitted black-box
 tool (the GPL reference checkout never enters the repository): it loads the
 ROM with `Nes::from_rom`, calls `run_frame`, and hashes the returned RGBA8
-framebuffer and `drain_audio()` samples with the same FNV-1a constants.
+framebuffer, the `drain_audio()` samples and the canonical colour indices with
+the same constants as `unko trace`. The ares/MesenCE wrappers emit the
+original two-hash format, so their runs report video and audio only.
 
 Current local result with the canonical 2C02 palette:
 

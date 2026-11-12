@@ -162,10 +162,25 @@ See `docs/accuracy-status.md` for the measured log.
 
 ## 7. Performance posture
 
-Accuracy first, but the core still targets real-time on a low-end desktop at
-native resolution. Dot-lockstep costs roughly 6–8% over a coarser scheduler in
-published comparisons; that is accepted. Optimisation happens only after the
-accuracy gate, and only when a benchmark proves a regression.
+Accuracy first. Optimisation happens only after the accuracy gate, and only
+when a benchmark proves a regression; there are no accuracy shortcuts,
+frame-skip or approximation modes.
+
+The core is single-threaded and deterministic. Its efficiency is measured as
+CPU time per emulated frame plus idle shell CPU, with budgets recorded in
+`docs/performance.md` and enforced in CI:
+
+| Budget | Value |
+|---|---|
+| CI throughput, synthetic rendering NROM, shared runner | >= 300 fps (<= 3.33 ms/frame) |
+| Local, worst case with every physical core contended (synthetic) | >= 300 fps |
+| Local, worst case with every physical core contended (MMC2 title) | >= 250 fps (<= 4 ms/frame) |
+| Idle shell | 4 UI repaints/s, no core work while paused or unfocused |
+
+Measured on the development machine: 813-819 fps (1.22 ms/frame) for the
+synthetic NROM, 375-416 fps (2.4-2.7 ms/frame) for the MMC2 title, and
+1029-1040 fps with PGO. Dot-lockstep costs roughly 6-8% over a coarser
+scheduler in published comparisons; that is accepted.
 
 ## 8. Known risks
 

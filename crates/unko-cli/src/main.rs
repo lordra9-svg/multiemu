@@ -812,8 +812,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                         ""
                     };
                     return Err(format!(
-                        "divergence at frame {index}: video {:.16x}/{:.16x}, \
-                         geometry {}/{}, audio {:.16x}/{:.16x}{note}",
+                        "divergence at frame {index}: video {:016x}/{:016x}, \
+                         geometry {}/{}, audio {:016x}/{:016x}{note}",
                         a.video,
                         b.video,
                         hex(a.geometry),
