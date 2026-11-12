@@ -688,11 +688,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                     }
                     system.run_frame();
                     let video = fnv1a(FNV_OFFSET, system.video());
+                    let geometry = hash_geometry(system.video());
                     let mut audio = FNV_OFFSET;
                     for sample in system.audio() {
                         audio = fnv1a(audio, &sample.to_bits().to_le_bytes());
                     }
-                    text.push_str(&format!("frame {frame} {video:016x} {audio:016x}\n"));
+                    text.push_str(&format!(
+                        "frame {frame} {video:016x} {audio:016x} {geometry:016x}\n"
+                    ));
                 }
                 if let Some(path) = out {
                     fs::write(&path, &text)?;
@@ -720,7 +723,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                 core.run_frame()?;
                 let video = hash_video(FNV_OFFSET, core.as_ref());
                 let audio = hash_audio(FNV_OFFSET, core.as_ref());
-                text.push_str(&format!("frame {frame} {video:016x} {audio:016x}\n"));
+                let geometry = hash_geometry(core.video().data);
+                text.push_str(&format!(
+                    "frame {frame} {video:016x} {audio:016x} {geometry:016x}\n"
+                ));
             }
             if with_state {
                 let mut state = Vec::new();
@@ -785,13 +791,35 @@ fn run() -> Result<(), Box<dyn Error>> {
                 .into());
             }
             let start = skip.min(count);
+            let hex = |value: Option<u64>| {
+                value.map_or_else(|| "-".to_string(), |value| format!("{value:016x}"))
+            };
             for index in start..count {
-                let (video_a, audio_a) = frames_a[index];
-                let (video_b, audio_b) = frames_b[index];
-                if video_a != video_b || (!video_only && audio_a != audio_b) {
+                let a = frames_a[index];
+                let b = frames_b[index];
+                let geometry_differs =
+                    matches!((a.geometry, b.geometry), (Some(x), Some(y)) if x != y);
+                if a.video != b.video || geometry_differs || (!video_only && a.audio != b.audio) {
+                    // A video-hash mismatch with an identical geometry hash is a
+                    // palette-table difference, not a rendering difference.
+                    let note = if a.video != b.video
+                        && !geometry_differs
+                        && a.geometry.is_some()
+                        && b.geometry.is_some()
+                    {
+                        " (palette only: geometry matches)"
+                    } else {
+                        ""
+                    };
                     return Err(format!(
-                        "divergence at frame {index}: video {video_a:016x}/{video_b:016x}, \
-                         audio {audio_a:016x}/{audio_b:016x}"
+                        "divergence at frame {index}: video {:.16x}/{:.16x}, \
+                         geometry {}/{}, audio {:.16x}/{:.16x}{note}",
+                        a.video,
+                        b.video,
+                        hex(a.geometry),
+                        hex(b.geometry),
+                        a.audio,
+                        b.audio
                     )
                     .into());
                 }
@@ -832,23 +860,32 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             let mut video_same = 0usize;
             let mut audio_same = 0usize;
+            let mut geometry_same = 0usize;
+            let mut geometry_frames = 0usize;
             let mut both_same = 0usize;
             let mut first_video = None;
             let mut first_audio = None;
-            for (i, (&(va, aa), &(vb, ab))) in
-                frames_a.iter().zip(&frames_b).take(count).enumerate()
-            {
-                if va == vb {
+            let mut first_geometry = None;
+            for (i, (a, b)) in frames_a.iter().zip(&frames_b).take(count).enumerate() {
+                if a.video == b.video {
                     video_same += 1;
                 } else if first_video.is_none() {
                     first_video = Some(i);
                 }
-                if aa == ab {
+                if a.audio == b.audio {
                     audio_same += 1;
                 } else if first_audio.is_none() {
                     first_audio = Some(i);
                 }
-                if va == vb && aa == ab {
+                if let (Some(ga), Some(gb)) = (a.geometry, b.geometry) {
+                    geometry_frames += 1;
+                    if ga == gb {
+                        geometry_same += 1;
+                    } else if first_geometry.is_none() {
+                        first_geometry = Some(i);
+                    }
+                }
+                if a.video == b.video && a.audio == b.audio {
                     both_same += 1;
                 }
             }
@@ -865,23 +902,37 @@ fn run() -> Result<(), Box<dyn Error>> {
                 first_audio.map_or("-".into(), |n| n.to_string())
             );
             println!("both  same-index  {both_same} ({:.1}%)", pct(both_same));
+            if geometry_frames > 0 {
+                println!(
+                    "geometry same-index {geometry_same}/{geometry_frames} ({:.1}%) first divergence {}",
+                    pct(geometry_same),
+                    first_geometry.map_or("-".into(), |n| n.to_string())
+                );
+            }
 
             let mut best_video = (0isize, 0usize);
             let mut best_audio = (0isize, 0usize);
+            let mut best_geometry = (0isize, 0usize);
             for shift in -(window as isize)..=(window as isize) {
                 let mut video = 0usize;
                 let mut audio = 0usize;
+                let mut geometry = 0usize;
                 for (i, frame) in frames_a.iter().take(count).enumerate() {
                     let j = i as isize + shift;
                     if !(0..count as isize).contains(&j) {
                         continue;
                     }
                     let other = &frames_b[j as usize];
-                    if frame.0 == other.0 {
+                    if frame.video == other.video {
                         video += 1;
                     }
-                    if frame.1 == other.1 {
+                    if frame.audio == other.audio {
                         audio += 1;
+                    }
+                    if let (Some(ga), Some(gb)) = (frame.geometry, other.geometry) {
+                        if ga == gb {
+                            geometry += 1;
+                        }
                     }
                 }
                 if video > best_video.1 {
@@ -889,6 +940,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 if audio > best_audio.1 {
                     best_audio = (shift, audio);
+                }
+                if geometry > best_geometry.1 {
+                    best_geometry = (shift, geometry);
                 }
             }
             println!(
@@ -903,6 +957,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                 best_audio.1,
                 pct(best_audio.1)
             );
+            if geometry_frames > 0 {
+                println!(
+                    "geometry best shift {:+} -> {} ({:.1}%)",
+                    best_geometry.0,
+                    best_geometry.1,
+                    pct(best_geometry.1)
+                );
+            }
         }
         "bench" => {
             let mut synthetic = false;
@@ -1068,10 +1130,41 @@ fn hash_frame(hash: u64, core: &dyn Core) -> u64 {
     hash_audio(hash_video(hash, core), core)
 }
 
-/// Per-frame `(video, audio)` hashes.
-type FrameHashes = Vec<(u64, u64)>;
+/// Palette-independent frame hash.
+///
+/// The RGBA hash of a frame depends on the emulator's RGB palette table, so
+/// two cores can disagree on every frame while rendering identical geometry
+/// and identical NES colour indices. Re-map each distinct RGBA colour to the
+/// index of its first appearance (scanline order) and hash those indices:
+/// the result is identical for any bijective palette, and still catches real
+/// tile, attribute and emphasis differences.
+fn hash_geometry(data: &[u8]) -> u64 {
+    use std::collections::HashMap;
+    let mut colours: HashMap<[u8; 4], u32> = HashMap::with_capacity(64);
+    let mut indices = Vec::with_capacity(data.len());
+    for pixel in data.as_chunks::<4>().0 {
+        let next = colours.len() as u32;
+        let index = *colours
+            .entry([pixel[0], pixel[1], pixel[2], pixel[3]])
+            .or_insert(next);
+        indices.extend_from_slice(&index.to_le_bytes());
+    }
+    fnv1a(FNV_OFFSET, &indices)
+}
+
+/// One trace frame: RGBA video hash, audio hash and, when the producer emits
+/// it, the palette-independent geometry hash.
+#[derive(Debug, Clone, Copy)]
+struct FrameHashes {
+    video: u64,
+    audio: u64,
+    geometry: Option<u64>,
+}
+
+/// Per-frame hashes in trace order.
+type Frames = Vec<FrameHashes>;
 /// Parsed trace: frame hashes plus an optional final-state hash.
-type Trace = (FrameHashes, Option<u64>);
+type Trace = (Frames, Option<u64>);
 
 /// Parses the frame records of a trace file.
 fn parse_trace(text: &str) -> Result<Trace, Box<dyn Error>> {
@@ -1094,6 +1187,10 @@ fn parse_trace(text: &str) -> Result<Trace, Box<dyn Error>> {
                     u64::from_str_radix(parts.next().ok_or("trace: frame has no video hash")?, 16)?;
                 let audio =
                     u64::from_str_radix(parts.next().ok_or("trace: frame has no audio hash")?, 16)?;
+                let geometry = match parts.next() {
+                    Some(value) => Some(u64::from_str_radix(value, 16)?),
+                    None => None,
+                };
                 if index != frames.len() {
                     return Err(format!(
                         "trace: frame {index} out of order (expected {})",
@@ -1101,7 +1198,11 @@ fn parse_trace(text: &str) -> Result<Trace, Box<dyn Error>> {
                     )
                     .into());
                 }
-                frames.push((video, audio));
+                frames.push(FrameHashes {
+                    video,
+                    audio,
+                    geometry,
+                });
             }
             Some("state") => {
                 state = Some(u64::from_str_radix(
@@ -1161,6 +1262,8 @@ fn run_parity(
         images: usize,
         video: u64,
         audio: u64,
+        geometry: u64,
+        geometry_total: u64,
         total: u64,
         /// Same-index video count plus the best of a +/-2-frame alignment, so a
         /// board that renders correctly but one frame out of phase is not
@@ -1173,6 +1276,7 @@ fn run_parity(
     fs::create_dir_all(&temp_dir)?;
     let mut per_mapper: BTreeMap<u16, Stat> = BTreeMap::new();
     let mut worst: Vec<(f64, u16, String, u64, u64, u64)> = Vec::new();
+    let mut worst_geometry: Vec<(f64, u16, String, u64, u64)> = Vec::new();
     let mut images = 0usize;
     let mut oracle_failures = 0usize;
 
@@ -1185,15 +1289,20 @@ fn run_parity(
         };
         let mapper = system.cart.mapper();
 
-        let mut ours: Vec<(u64, u64)> = Vec::with_capacity(frames as usize);
+        let mut ours: Vec<FrameHashes> = Vec::with_capacity(frames as usize);
         for _ in 0..frames {
             system.run_frame();
             let video = fnv1a(FNV_OFFSET, system.video());
+            let geometry = hash_geometry(system.video());
             let mut audio = FNV_OFFSET;
             for sample in system.audio() {
                 audio = fnv1a(audio, &sample.to_bits().to_le_bytes());
             }
-            ours.push((video, audio));
+            ours.push(FrameHashes {
+                video,
+                audio,
+                geometry: Some(geometry),
+            });
         }
 
         let path = match &entry.source {
@@ -1227,12 +1336,20 @@ fn run_parity(
         }
         let mut video = 0u64;
         let mut audio = 0u64;
+        let mut geometry = 0u64;
+        let mut geometry_total = 0u64;
         for index in 0..count {
-            if ours[index].0 == reference[index].0 {
+            if ours[index].video == reference[index].video {
                 video += 1;
             }
-            if ours[index].1 == reference[index].1 {
+            if ours[index].audio == reference[index].audio {
                 audio += 1;
+            }
+            if let (Some(a), Some(b)) = (ours[index].geometry, reference[index].geometry) {
+                geometry_total += 1;
+                if a == b {
+                    geometry += 1;
+                }
             }
         }
         let mut best_video = 0usize;
@@ -1244,7 +1361,7 @@ fn run_parity(
                 if !(0..count as isize).contains(&j) {
                     continue;
                 }
-                if frame.0 == reference[j as usize].0 {
+                if frame.video == reference[j as usize].video {
                     v += 1;
                 }
             }
@@ -1257,6 +1374,8 @@ fn run_parity(
         stat.images += 1;
         stat.video += video;
         stat.audio += audio;
+        stat.geometry += geometry;
+        stat.geometry_total += geometry_total;
         stat.total += count as u64;
         stat.best_video += best_video as u64;
         if best_shift != 0 {
@@ -1277,6 +1396,15 @@ fn run_parity(
             audio,
             count as u64,
         ));
+        if geometry_total > 0 {
+            worst_geometry.push((
+                pct(geometry),
+                mapper,
+                entry.title.clone(),
+                geometry,
+                geometry_total,
+            ));
+        }
         images += 1;
     }
 
@@ -1287,6 +1415,8 @@ fn run_parity(
     let total: u64 = per_mapper.values().map(|s| s.total).sum();
     let video: u64 = per_mapper.values().map(|s| s.video).sum();
     let audio: u64 = per_mapper.values().map(|s| s.audio).sum();
+    let geometry: u64 = per_mapper.values().map(|s| s.geometry).sum();
+    let geometry_total: u64 = per_mapper.values().map(|s| s.geometry_total).sum();
     let share = |n: u64| {
         if total == 0 {
             0.0
@@ -1302,16 +1432,23 @@ fn run_parity(
         share(audio),
         share(best)
     );
+    if geometry_total > 0 {
+        println!(
+            "geometry (palette-independent) {geometry}/{geometry_total} ({:.1}%)",
+            share2(geometry, geometry_total)
+        );
+    }
     println!("{shifted} images needed a non-zero frame shift");
-    println!("mapper images   video%  audio%  best%  shifted");
+    println!("mapper images   video%  audio%  best%  shifted   geom%");
     for (mapper, stat) in &per_mapper {
         println!(
-            "{mapper:>6} {:>6}   {:>6.1}  {:>6.1}  {:>6.1}  {:>7}",
+            "{mapper:>6} {:>6}   {:>6.1}  {:>6.1}  {:>6.1}  {:>7}   {:>5.1}",
             stat.images,
             share2(stat.video, stat.total),
             share2(stat.audio, stat.total),
             share2(stat.best_video, stat.total),
-            stat.shifted
+            stat.shifted,
+            share2(stat.geometry, stat.geometry_total)
         );
     }
     worst.sort_by(|a, b| {
@@ -1322,6 +1459,17 @@ fn run_parity(
     println!("lowest video parity:");
     for (_, mapper, title, video, audio, count) in worst.iter().take(20) {
         println!("  [{mapper:>3}] {title:<44} video {video}/{count} audio {audio}/{count}");
+    }
+    if !worst_geometry.is_empty() {
+        worst_geometry.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.1.cmp(&b.1))
+        });
+        println!("lowest geometry parity:");
+        for (_, mapper, title, geometry, count) in worst_geometry.iter().take(20) {
+            println!("  [{mapper:>3}] {title:<44} geometry {geometry}/{count}");
+        }
     }
     let video_pct = share(video);
     let audio_pct = share(audio);

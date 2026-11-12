@@ -29,15 +29,37 @@ None. All non-DRAW AccuracyCoin rows pass.
 
 ## Multi-oracle note
 
-Raw frame hashes are palette-sensitive. For *Star Wars* (Namco, mapper 19),
-the RustyNES oracle reports a blank screen for the whole 120-frame sample
-(2/120 video hashes), while ares and MesenCE both render the Namco title
-screen. At frame 120 our RGBA frame differs from the ares capture in only four
-palette colour pairs (24,134 of 61,440 pixels are byte-identical, and the
-geometry is identical); the remaining difference is the reference's RGB
-palette table. RustyNES is therefore a false negative for this title, and the
-oracle hierarchy must prefer ares/MesenCE for geometry and behaviour whenever
-the primary oracle's palette or boot model is suspect.
+Raw RGBA hashes are palette-sensitive, so the trace format now carries an
+optional fourth field: a palette-independent geometry hash that re-maps each
+distinct colour to its first-appearance index before hashing. Two frames with
+identical pixels but different RGB palette tables have equal geometry hashes;
+`unko diff` reports such a pair as "palette only". This separates "the RGB
+tables differ" from "the emulators render different pixels" and makes the
+ares/MesenCE captures usable even though their palettes differ from RustyNES
+(see `docs/emulator-tooling.md`).
+
+Verified with that hash: *Star Wars* (Namco, mapper 19) and *Juvei Quest*
+(Namco, mapper 19) at frame 120 are pixel-identical to **both** ares and
+MesenCE (0 of 61,440 pixels differ after canonicalising the palette), while
+RustyNES reports a blank or divergent frame. RustyNES is therefore a false
+negative for these titles; the oracle hierarchy must prefer ares/MesenCE for
+geometry and behaviour whenever the primary oracle's palette or boot model is
+suspect. (An earlier entry compared our frame 119 against the reference's
+frame 120 and reported four differing colour pairs; that was a frame-index
+offset in the comparison, not a rendering difference.)
+
+A 20-frame sweep of the whole 7,073-image library with the geometry hash
+(6,727 images comparable, 346 oracle load failures) gives video 84.3%,
+palette-independent geometry 85.9%, and 573 images that need a frame shift.
+Short 20-frame windows are dominated by boot and fade frames, so the number is
+a regression tripwire rather than an accuracy grade. The mappers where
+geometry is far above video parity (35: 35.0% -> 95.0%, 69: 41.0% -> 78.8%,
+12: 45.0% -> 85.0%, 513: 0.0% -> 90.0%) differ only in output RGB. Sampling
+*Batman - Return of the Joker* (mapper 69) shows why: at frame 300 all cores
+render a uniform backdrop, ours in NES index `$00` (grey) and ares in black
+(`$0F`), because palette RAM is uninitialised on real hardware and each core
+picks a different power-on value. That is a display choice, not a rendering
+defect, and the geometry hash correctly ignores it.
 
 ## Recently closed (2026-11-08)
 

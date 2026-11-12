@@ -2816,6 +2816,60 @@ mod tests {
     }
 
     #[test]
+    fn ppu_data_read_while_rendering_uses_the_fetch_byte() {
+        let mut ppu = ppu();
+        ppu.mask = 0x18;
+        ppu.scanline = 10;
+        // Dot 0 runs no background fetch, so the completion sees `fetch_byte`
+        // exactly as the test leaves it. VRAM holds a different value so the
+        // test proves which source filled the buffer.
+        ppu.dot = 0;
+        ppu.v = 0x2000;
+        ppu.write_vram(0x2000, 0x11);
+        ppu.fetch_byte = 0x7E;
+        ppu.fetch_hold = 0x04;
+        // The read returns the old buffer immediately.
+        assert_eq!(ppu.read_register(7), 0x00);
+        // Complete the deferred fill on the next dot.
+        ppu.data_read = 1;
+        ppu.step_dot();
+        assert_eq!(
+            ppu.read_buffer, 0x7E,
+            "buffer fills from the fetch pipeline"
+        );
+        // The increment is deferred and uses the rendering glitch (fine Y
+        // increments), so $2000 becomes $3001 rather than $2001.
+        assert_eq!(ppu.v, 0x3001);
+    }
+
+    #[test]
+    fn odd_frames_skip_one_pre_render_dot_only_while_rendering() {
+        fn steps_to_wrap(frames: u64, rendering: bool) -> u32 {
+            let mut ppu = ppu();
+            if rendering {
+                ppu.mask = 0x18;
+            }
+            ppu.frames = frames;
+            ppu.scanline = ppu.pre_render_line();
+            ppu.dot = 338;
+            let mut steps = 0;
+            while ppu.frames == frames {
+                ppu.step_dot();
+                steps += 1;
+                assert!(steps < 8, "frame wrap never happened");
+            }
+            steps
+        }
+        // Even frame with rendering: 338->339, 339->340, then the line wraps.
+        assert_eq!(steps_to_wrap(0, true), 3);
+        // Odd frame with rendering: dot 340 is skipped, so the wrap is a dot
+        // earlier.
+        assert_eq!(steps_to_wrap(1, true), 2);
+        // No skip when rendering is disabled, whatever the frame parity.
+        assert_eq!(steps_to_wrap(1, false), 3);
+    }
+
+    #[test]
     fn vblank_sets_and_clears() {
         let mut ppu = ppu();
         ppu.ctrl = 0x80;

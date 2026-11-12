@@ -1729,3 +1729,31 @@ both render the title; at frame 120 our RGBA frame differs from ares in only
 four palette colour pairs and has identical geometry (24,134/61,440 pixels
 byte-identical). Use ares/MesenCE for geometry when the primary oracle's
 boot/palette model disagrees.
+
+### 2026-11-12 — palette-independent differential harness and cycle tests
+
+The differential oracle harness now hashes a palette-independent view of each
+frame: distinct RGBA colours are re-mapped to their first-appearance index in
+scanline order and the indices are hashed. `trace` writes it as an optional
+fourth field, so references that emit only video/audio still compare, and
+`diff`/`parity`/`corpus --parity` report geometry separately from the RGBA
+hash. A video mismatch with an equal geometry hash is reported as palette-only.
+
+This resolved the mapper-19 audit: *Star Wars* and *Juvei Quest* at frame 120
+are pixel-identical (0/61,440) to both ares and MesenCE once the palette is
+canonicalised, while RustyNES renders a blank or different frame. The
+remaining 20-frame library sweep (6,727 images) measures geometry 85.9% vs
+video 84.3%; mappers 12/35/69/513 gain most of their parity back from the
+geometry hash, which traces to uninitialised palette RAM (our index `$00`
+backdrop vs ares's `$0F`), not to rendering.
+
+New regression tests pin the timing invariants that the harness relies on:
+
+- `frame_cycle_accounting_holds_over_a_long_run` runs 600 frames of a
+  non-rendering NROM and asserts the total CPU cycles equal
+  `frames x (341 x 262 / 3)` within an instruction overrun.
+- `odd_frames_skip_one_pre_render_dot_only_while_rendering` checks the
+  even/odd frame length difference and that disabling rendering removes it.
+- `ppu_data_read_while_rendering_uses_the_fetch_byte` checks that a `$2007`
+  read during rendering fills the buffer from the fetch pipeline (not VRAM)
+  and applies the deferred, glitching increment (`$2000 -> $3001`).

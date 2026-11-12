@@ -2256,6 +2256,31 @@ mod tests {
         assert_eq!(pad & 0x01, 0x01, "gamepad serial bit is read from the port");
     }
 
+    #[test]
+    fn frame_cycle_accounting_holds_over_a_long_run() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        // The first call reports the power-on frame without executing.
+        system.run_frame();
+        let start = system.cpu.cycles;
+        let frames = 600u32;
+        for _ in 0..frames {
+            system.run_frame();
+        }
+        let elapsed = system.cpu.cycles - start;
+        // This ROM never enables rendering, so it has no odd-frame dot skip:
+        // every frame is 341 x 262 dots, and the CPU runs one cycle per three
+        // dots. The total is fixed even though each frame ends on an
+        // instruction boundary. A drift here means the PPU/CPU divider is
+        // losing or gaining cycles.
+        let expected = f64::from(frames) * (341.0 * 262.0 / 3.0);
+        let error = (elapsed as f64 - expected).abs();
+        assert!(
+            error < 8.0,
+            "cycle accounting drifted by {error}: {elapsed} vs {expected}"
+        );
+    }
+
     fn synthetic_nrom(seed: u8) -> Vec<u8> {
         let prg_len = 16 * 1024;
         let mut rom = vec![0u8; 16 + prg_len + 8 * 1024];

@@ -138,13 +138,16 @@ gating:
   differential audit the standard run: the oracle path comes from
   `--oracle PATH` or `UNKO_ORACLE`, `--frames` defaults to 120, and every
   image is executed by both the accuracy core and the reference producer with
-  per-frame video/audio hashes compared at the same index. It prints overall
-  and per-mapper identical-hash percentages plus the lowest-parity titles.
-  `--min-video PCT` / `--min-audio PCT` turn a shortfall into a non-zero exit
-  status, so the same command gates CI.
+  per-frame video/audio/geometry hashes compared at the same index. It prints
+  overall and per-mapper identical-hash percentages, a palette-independent
+  geometry percentage, and the lowest-parity titles. `--min-video PCT` /
+  `--min-audio PCT` turn a shortfall into a non-zero exit status, so the same
+  command gates CI.
 - `boundary <rom|archive> [frames]` — prints the CPU cycle and PPU
   `(scanline, dot)` at which each frame completes, for comparing the frame
-  boundary with a reference capture.
+  boundary with a reference capture. The cycle deltas expose divider drift;
+  `frame_cycle_accounting_holds_over_a_long_run` asserts the invariant in the
+  unit suite.
 - `signatures <dir> [--frames N] [--mapper ID] [--check FILE]` — hashes every
   frame of every image and compares against a local manifest, reporting
   changed/new/missing titles.
@@ -166,10 +169,20 @@ gating:
 ### Differential oracle
 
 `trace` emits the `# unko trace v1` format: one `frame <index> <video>
-<audio>` line per frame using FNV-1a-64 over the RGBA8 framebuffer and over the
-`f32` audio samples. A reference emulator only needs to emit the same records;
-`diff` compares them frame by frame and reports the first divergent video or
-audio hash.
+<audio> [<geometry>]` line per frame using FNV-1a-64 over the RGBA8
+framebuffer, over the `f32` audio samples and, when the producer emits it,
+over a palette-independent frame description. A reference emulator only needs
+to emit the same records; `diff` compares them frame by frame and reports the
+first divergent video, geometry or audio hash.
+
+The geometry hash (fourth field, optional) re-maps each distinct RGBA colour
+to the index of its first appearance in scanline order and hashes those
+indices. Any bijective palette therefore produces the same hash, while a real
+tile, attribute, sprite or emphasis difference does not. It splits oracle
+disagreement into "the RGB palette tables differ" and "the emulators render
+different pixels": a video mismatch with an equal geometry hash is reported as
+palette-only and is not a rendering defect. Traces from references that emit
+only the original two hashes still compare; geometry is skipped for them.
 
 The RustyNES adapter used for validation is a local, uncommitted black-box
 tool (the GPL reference checkout never enters the repository): it loads the
