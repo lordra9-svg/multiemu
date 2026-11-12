@@ -194,6 +194,9 @@ impl System {
         if let Some(nt) = cart.n163_nt() {
             ppu.set_n163_nt(nt);
         }
+        if let Some(qt) = cart.qtram() {
+            ppu.set_qtram(qt);
+        }
         if let Some(aux) = cart.a12_irq() {
             ppu.set_a12_irq(aux);
         }
@@ -512,6 +515,8 @@ impl System {
             .set_rom_nametable_banks(self.cart.rom_nametable_banks());
         self.ppu
             .set_rom_nametable_quadrants(self.cart.rom_nametable_quadrants());
+        self.ppu
+            .set_nametable_quadrants(self.cart.nametable_quadrants());
         self.ppu.set_nametable_map(self.cart.nametable_map());
     }
 

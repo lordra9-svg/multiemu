@@ -137,7 +137,7 @@ writes, and MMC1 bank switching.
 | Sunsoft FME-7 (69) | 8 KiB PRG + 1 KiB CHR banking, mirroring, CPU-cycle IRQ |
 | Namco 129/163 (19) | 8 KiB PRG / 1 KiB CHR banking, NT-as-CHR, 15-bit CPU-cycle IRQ, 128-byte chip RAM (audio missing) |
 | Action 53 (28) | reference inner/outer PRG bank formula, 32 KiB CHR-RAM window, H/V/1-screen mirroring |
-| J.Y. ASIC (35/90/209/211) | 8/16/32 KiB PRG, 1/2/4/8 KiB CHR, mirroring, multiplier, prescaled M2/A12 IRQ; ROM nametables missing |
+| J.Y. ASIC (35/90/209/211) | 8/16/32 KiB PRG, 1/2/4/8 KiB CHR, multiplier, prescaled M2/A12 IRQ, per-quadrant nametables mixing CIRAM pages with 1 KiB CHR-ROM pages (`$B000-$B007`, `$D000` bit 5, `$D001` extended mirroring) |
 | Waixing FS305 (178) | 8 KiB CHR-RAM, NROM-256/UNROM/NROM-128/UNROM-fixed PRG modes, banked 8 KiB PRG-RAM |
 | J87 (87/101) | 32 KiB fixed PRG, 8 KiB CHR latch at `$6000-$7FFF` (87 swaps register bits 0/1); mapper 101 uses the raw value and reverses CHR bit order |
 | J.Y. clone (91) | two 8 KiB PRG banks + fixed last, four 2 KiB CHR banks, outer 128 KiB PRG/512 KiB CHR, 64-rise A12 IRQ |
@@ -179,7 +179,7 @@ writes, and MMC1 bank switching.
 | Konami VRC7 (85) | 8 KiB PRG, eight 1 KiB CHR banks, shared banked CHR-RAM window, mirroring/WRAM-enable, VRC cycle/scanline IRQ, six-channel two-operator FM audio with the documented VRC7 instrument ROM patches |
 | Irem G-101 (32) | two 8 KiB PRG banks with switchable/fixed pair, eight 1 KiB CHR banks, mirroring/PRG-mode |
 | Taito TC0690 (48) | TC0190-style PRG/CHR banking plus inverted-reload MMC3-style IRQ |
-| Jaleco JF-13 (86) | GNROM-style 32 KiB PRG / 8 KiB CHR latch at `$6000-$6FFF` (speech chip not modelled) |
+| Jaleco JF-13 (86) | GNROM-style 32 KiB PRG / 8 KiB CHR latch at `$6000-$6FFF`; NES 2.0 submapper 1 bootlegs run a software-clocked HC-55516 CVSD decoder over the miscellaneous ROM (`$5000` rate, `$7000` message), submapper 0 boards have no speech data in the dump |
 | TXC 01-22000 (36) | 2-bit latch/inverter PRG select plus an 8 KiB CHR latch at `$4200` |
 | CK-001 4-in-1 (301) | mapper-242 address latch plus the ET-113 512 KiB / 128 KiB chip select; 16 KiB switchable + fixed-bank windows, NROM modes, power-on last 32 KiB page |
 | 09-034A / LE10 (304) | 8 KiB PRG bank 4/5 at `$6000` from `$4027` bit 0, fixed first 32 KiB at `$8000-$FFFF`, direct `/IRQ` from `$4068` bit 0; the two loadable 48 KiB LE08/LF11 images render 2/2 at 120/240, while the SMB2 LE10 dumps carry corrupt 864 KiB headers and fail to load |
@@ -205,8 +205,19 @@ writes, and MMC1 bank switching.
 | Golden Game 235 | write-address latch: 32 KiB page, 16 KiB half, ROM chip, 1/2-screen mirroring |
 | Benshieng BMC-BS-5 (286) | address latches: 8-bit PRG pages (DIP-gated address bit 4), 2 KiB CHR pages, `$C000` mirroring; all 10 images render |
 | MMC5 (5) | PRG modes/CHR banking/IRQ, multiplier, per-slot `$5105` nametable mapping (CIRAM page 0/1, ExRAM, fill), split screen, extended attributes with >256 KiB CHR, two-pulse + PCM audio (write/read DAC modes with the `$5010` IRQ) |
+| Konami Q-Ta (547) | VRC5-style 8 KiB PRG windows, 4 KiB work RAM at `$6000`/`$7000`, cycle IRQ, JIS glyph lookup, and QTRAM: shadow 2 KiB nametables whose tile byte selects CHR-ROM pages or 4 KiB CHR-RAM banks, with the shadow writable through `$D010` |
+| Rinco FSG2 (594) | MMC3 core with outer 256 KiB PRG/CHR banks, 8 KiB PRG-ROM at `$6000`, and a 1024-byte MSM6585 ADPCM FIFO at `$5000` (rate at `$5001`) mixed into the audio stream |
+| UMC UM6578 (405) | eight readable 4 KiB PRG windows, timer IRQ, CPU/PPU DMA (A15-preserving targets); enhanced video: 2/4-bpp background with 32-byte VT03 planar tiles, 16-bit word name tables, 64-entry palette, 2-bpp sprites with `$2008` pattern page, 10 KiB internal plus 32 KiB external VRAM |
 
 NES 2.0 PRG (16 KiB units) and CHR (8 KiB units) sizes are parsed correctly.
+
+The UM6578 enhanced video path is verified against `colortest-sh6578` from
+the SH6578 documentation project: the 16-colour background test, all four
+background palettes and the sprite palette swatches render with the expected
+text and colours. The international `City Patrolman` dump boots and its DMA
+runs, but its screen is not coherent (MAME also marks the game as not
+working), so it is recorded as a title-specific failure rather than a
+missing mapper feature.
 
 ### System bus
 

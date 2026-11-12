@@ -398,7 +398,7 @@ boot screen (MMC2, Sunsoft-4, MMC3-8025, Waixing 195).
 | 24 | 8 | 1 | 9 | 89% |
 | 36 | 6 | 3 | 9 | 67% |
 | 42 | 5 | 4 | 9 | 56% |
-| 86 | 9 | 0 | 9 | 100% |
+| 86 | 9 | 0 | 9 | 100% (submapper 1 speech from the miscellaneous ROM) |
 | 162 | 0 | 9 | 9 | 0% |
 | 226 | 6 | 3 | 9 | 67% |
 | 32 | 4 | 4 | 8 | 50% |
@@ -463,7 +463,7 @@ board loads and boots but does not render, or renders only some images.
 | 446 | Mindkids SMD172B supervisor | implemented (4/4 by 240 frames) | [NES 2.0 Mapper 446](https://www.nesdev.org/wiki/NES_2.0_Mapper_446) |
 | 515 | Family Noraebang (YM2413) | implemented | [NES 2.0 Mapper 515](https://www.nesdev.org/wiki/NES_2.0_Mapper_515) |
 | 525 | Kaiser KS7021A (VRC4) | implemented | [NES 2.0 Mapper 525](https://www.nesdev.org/wiki/NES_2.0_Mapper_525) |
-| 547 | Konami Q-Ta / VRC5 | implemented (QTRAM CHR banking pending) | [NES 2.0 Mapper 547](https://www.nesdev.org/wiki/NES_2.0_Mapper_547) |
+| 547 | Konami Q-Ta / VRC5 | implemented (QTRAM shadow nametables and CHR banking) | [NES 2.0 Mapper 547](https://www.nesdev.org/wiki/NES_2.0_Mapper_547) |
 | 549 | Kaiser KS7016B | implemented (renders at ~40 frames) | [NES 2.0 Mapper 549](https://www.nesdev.org/wiki/NES_2.0_Mapper_549) |
 | 554 | Kaiser KS-7010 | implemented | [NES 2.0 Mapper 554](https://www.nesdev.org/wiki/NES_2.0_Mapper_554) |
 | 555 | Campus Challenge 1991 (NES-EVENT2) | implemented | [NES 2.0 Mapper 555](https://www.nesdev.org/wiki/NES_2.0_Mapper_555) |
@@ -473,7 +473,7 @@ board loads and boots but does not render, or renders only some images.
 | 564 | bd23 data-latch | implemented | [NES 2.0 Mapper 564](https://www.nesdev.org/wiki/NES_2.0_Mapper_564) |
 | 576 | J-2096 address-latch | implemented | [NES 2.0 Mapper 576](https://www.nesdev.org/wiki/NES_2.0_Mapper_576) |
 | 585 | FE-01-1 address-latch | implemented | [NES 2.0 Mapper 585](https://www.nesdev.org/wiki/NES_2.0_Mapper_585) |
-| 594 | Rinco Talkman (MMC3 + FIFO) | implemented (ADPCM audio silent) | [NES 2.0 Mapper 594](https://www.nesdev.org/wiki/NES_2.0_Mapper_594) |
+| 594 | Rinco Talkman (MMC3 + FIFO) | implemented (MSM6585 ADPCM audio) | [NES 2.0 Mapper 594](https://www.nesdev.org/wiki/NES_2.0_Mapper_594) |
 
 ### Tail completion
 

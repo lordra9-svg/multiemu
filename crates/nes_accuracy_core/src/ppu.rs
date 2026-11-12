@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use crate::cart::{
     A12Irq, Aux77, Bandai153, Chr169, Chr512, CpromChr, HybridChr, Mirroring, Mmc5Aux, N163Nt,
-    OekaChr, Vrc7Chr,
+    NtMapping, OekaChr, Qtram, Vrc7Chr,
 };
 use crate::clock::Timing;
 
@@ -145,6 +145,8 @@ pub struct Ppu {
     nt_banks: Option<[u16; 2]>,
     /// Per-quadrant ROM-nametable CHR pages (mapper 559).
     nt_banks4: Option<[u16; 4]>,
+    nt_quads: Option<[NtMapping; 4]>,
+    qtram: Option<Rc<RefCell<Qtram>>>,
     /// PPU dots remaining in the post-reset warm-up window; while non-zero,
     /// writes to `$2000`/`$2001`/`$2005`/`$2006` are ignored (NES model).
     warmup_dots: u32,
@@ -329,7 +331,7 @@ impl Ppu {
             nt_map: None,
             a12: None,
             um6578: false,
-            um_vram: vec![0; 0x2800],
+            um_vram: vec![0; 0x10000],
             um_ctrl: 0,
             um_palette: [0; 64],
             chr169: None,
@@ -347,6 +349,8 @@ impl Ppu {
             nt_rom: Vec::new(),
             nt_banks: None,
             nt_banks4: None,
+            nt_quads: None,
+            qtram: None,
             chr_ram,
             mirroring: if vertical_mirroring {
                 Mirroring::Vertical
@@ -473,6 +477,16 @@ impl Ppu {
     /// Enables per-quadrant ROM nametables (mapper 559).
     pub fn set_rom_nametable_quadrants(&mut self, banks: Option<[u16; 4]>) {
         self.nt_banks4 = banks;
+    }
+
+    /// Installs a mixed CIRAM/CHR-ROM nametable mapping (J.Y. ASIC).
+    pub fn set_nametable_quadrants(&mut self, mapping: Option<[NtMapping; 4]>) {
+        self.nt_quads = mapping;
+    }
+
+    /// Installs the Q-Ta shadow nametable/CHR state.
+    pub fn set_qtram(&mut self, qt: Rc<RefCell<Qtram>>) {
+        self.qtram = Some(qt);
     }
 
     /// Replaces the CHR window with latch-banked MMC2/MMC4 ROM.
@@ -1157,6 +1171,9 @@ impl Ppu {
     }
 
     fn read_nametable(&self, address: u16) -> u8 {
+        if let Some(qt) = &self.qtram {
+            qt.borrow_mut().note_read(0x2000 | (address & 0x0FFF));
+        }
         if let Some(aux) = &self.bandai153 {
             aux.borrow_mut().note_address(address);
         }
@@ -1191,6 +1208,17 @@ impl Ppu {
             if let Some(index) = aux.nametable_index(address) {
                 return self.vram[index];
             }
+        }
+        if let Some(quads) = self.nt_quads {
+            let table = usize::from(address >> 10 & 3);
+            let offset = usize::from(address & 0x3FF);
+            return match quads[table] {
+                NtMapping::Ciram(page) => self.vram[usize::from(page & 1) * 0x400 + offset],
+                NtMapping::Rom(bank) => {
+                    let bank = usize::from(bank) % (self.nt_rom.len() / 0x400).max(1);
+                    self.nt_rom.get(bank * 0x400 + offset).copied().unwrap_or(0)
+                }
+            };
         }
         if let Some(banks) = self.nt_banks4 {
             if !self.nt_rom.is_empty() {
@@ -1249,12 +1277,12 @@ impl Ppu {
 
     fn read_vram(&self, address: u16) -> u8 {
         if self.um6578 {
-            return if address < 0x2800 {
-                self.um_vram[usize::from(address)]
-            } else if (0x3F00..0x3F40).contains(&address) {
+            return if (0x3F00..0x3F40).contains(&address) {
                 self.um_palette[usize::from(address - 0x3F00)]
             } else {
-                0
+                // 10 KiB internal RAM plus the optional 32 KiB external
+                // CHR-RAM share the PPU's 64 KiB address space.
+                self.um_vram.get(usize::from(address)).copied().unwrap_or(0)
             };
         }
         if address < 0x2000 {
@@ -1268,10 +1296,10 @@ impl Ppu {
 
     fn write_vram(&mut self, address: u16, value: u8) {
         if self.um6578 {
-            if address < 0x2800 {
-                self.um_vram[usize::from(address)] = value;
-            } else if (0x3F00..0x3F40).contains(&address) {
+            if (0x3F00..0x3F40).contains(&address) {
                 self.um_palette[usize::from(address - 0x3F00)] = value;
+            } else if let Some(byte) = self.um_vram.get_mut(usize::from(address)) {
+                *byte = value;
             }
             return;
         }
@@ -1349,6 +1377,14 @@ impl Ppu {
                     self.vram[index] = value;
                     return;
                 }
+            }
+            if let Some(quads) = self.nt_quads {
+                let table = usize::from(address >> 10 & 3);
+                if let NtMapping::Ciram(page) = quads[table] {
+                    let offset = usize::from(address & 0x3FF);
+                    self.vram[usize::from(page & 1) * 0x400 + offset] = value;
+                }
+                return;
             }
             // ROM nametables are read-only.
             if self.nt_banks.is_none() && self.nt_banks4.is_none() {
@@ -1853,8 +1889,14 @@ impl Ppu {
             // $2000, which latches the Oeka inner bank bits to 0.
             aux.borrow_mut().note_address(0x2000);
         }
+        if let Some(qt) = &self.qtram {
+            qt.borrow_mut().sprite = true;
+        }
         let mut low = self.chr_byte(address);
         let mut high = self.chr_byte(address + 8);
+        if let Some(qt) = &self.qtram {
+            qt.borrow_mut().sprite = false;
+        }
         self.note_chr_fetch(address);
         self.note_chr_fetch(address + 8);
         if attr & 0x40 != 0 {
@@ -2255,6 +2297,9 @@ impl Ppu {
         let mut frame = vec![0u8; 256 * 240 * 4];
         let backdrop =
             |index: usize| NES_PALETTE[usize::from(self.um_palette[index & 0x3F]) & 0x3F];
+        // Palette entries whose low five bits are all ones are transparent;
+        // the SH6578 draws the universal backdrop instead (MAME's rule).
+        let transparent = |index: usize| self.um_palette[index & 0x3F] & 0x1F == 0x1F;
         if self.mask & 0x08 == 0 {
             let [r, g, b] = backdrop(0);
             for pixel in frame.as_chunks_mut::<4>().0 {
@@ -2265,49 +2310,107 @@ impl Ppu {
         let bg4 = self.um_ctrl & 0x80 != 0;
         let single = self.um_ctrl & 0x01 != 0;
         let scroll = self.t;
-        let start_x = usize::from(scroll & 0x1F) * 8 + usize::from(self.fine_x);
-        let start_y = usize::from((scroll >> 5) & 0x1F) * 8 + usize::from((scroll >> 12) & 0x07);
-        let nt_x = usize::from((scroll >> 10) & 0x01);
-        let nt_y = usize::from((scroll >> 11) & 0x01);
+        let scroll_x = usize::from(scroll & 0x1F);
+        let scroll_y = usize::from((scroll >> 5) & 0x1F);
+        let fine_y = usize::from((scroll >> 12) & 0x07);
+        let base = usize::from((scroll & 0x0C00) << 1);
+        let sprite_base = (usize::from(self.um_ctrl >> 2) & 0x03) << 12;
         for y in 0..240usize {
-            let world_y = y + start_y;
-            let tile_y = (world_y / 8) % 32;
-            let row = world_y % 8;
-            for x in 0..256usize {
-                let world_x = x + start_x;
-                let tile_x = (world_x / 8) % 32;
-                let quadrant = if single {
-                    0
+            let world_y = y + fine_y;
+            let mut line_base = base;
+            if (scroll_y + world_y / 8) & 32 != 0 {
+                line_base ^= 0x1000;
+            }
+            let tile_y = (scroll_y + world_y / 8) & 31;
+            let row = world_y & 7;
+            let mut sprite_colour = [0u8; 256];
+            let mut sprite_front = [false; 256];
+            let mut drawn = 0usize;
+            for index in 0..64usize {
+                if drawn == 8 {
+                    break;
+                }
+                let top = usize::from(self.oam[index * 4]) + 1;
+                if y < top || y >= top + 8 {
+                    continue;
+                }
+                drawn += 1;
+                let attr = self.oam[index * 4 + 2];
+                let sprite_row = if attr & 0x80 != 0 {
+                    7 - (y - top)
                 } else {
-                    ((((world_y / 256) & 1) ^ nt_y) * 2) + (((world_x / 256) & 1) ^ nt_x)
+                    y - top
                 };
-                let base = if single { 0x2000 } else { quadrant * 0x800 };
-                let address = base + (tile_y * 32 + tile_x) * 2;
-                let lo = self.um_vram.get(address).copied().unwrap_or(0);
-                let hi = self.um_vram.get(address + 1).copied().unwrap_or(0);
-                let tile = usize::from(lo) | (usize::from(hi & 0x0F) << 8);
-                let attr = usize::from(hi >> 4);
+                let tile = usize::from(self.oam[index * 4 + 1]);
+                let address = (sprite_base + tile * 16 + sprite_row) & 0x3FFF;
+                // Sprite patterns keep the 2C02 two-plane layout.
+                let low = self.um_vram.get(address).copied().unwrap_or(0);
+                let high = self.um_vram.get(address + 8).copied().unwrap_or(0);
+                let start = usize::from(self.oam[index * 4 + 3]);
+                let front = attr & 0x20 == 0;
+                let palette_base = 0x10 + usize::from(attr & 0x03) * 4;
+                for column in 0..8usize {
+                    let screen_x = start + column;
+                    if screen_x >= 256 {
+                        break;
+                    }
+                    let source = if attr & 0x40 != 0 { 7 - column } else { column };
+                    let shift = 7 - source;
+                    let bit = u16::from((low >> shift) & 1) | (u16::from((high >> shift) & 1) << 1);
+                    if bit == 0 {
+                        continue;
+                    }
+                    if sprite_colour[screen_x] == 0 || (front && !sprite_front[screen_x]) {
+                        sprite_colour[screen_x] = (palette_base + usize::from(bit)) as u8;
+                        sprite_front[screen_x] = front;
+                    }
+                }
+            }
+            for x in 0..256usize {
+                let world_x = x + usize::from(self.fine_x);
+                let tile_column = scroll_x + world_x / 8;
+                let mut index = line_base + (tile_column & 31) * 2;
+                if tile_column & 32 != 0 {
+                    index ^= 0x800;
+                }
+                index += tile_y * 64;
+                if single {
+                    index = (index & 0x7FF) + 0x2000;
+                } else {
+                    index &= 0x1FFF;
+                }
+                let low = self.um_vram.get(index).copied().unwrap_or(0);
+                let high = self.um_vram.get(index + 1).copied().unwrap_or(0);
+                let tile = usize::from(low) | (usize::from(high & 0x0F) << 8);
+                let attribute = usize::from(high >> 4);
                 let shift = 7 - (world_x & 7);
-                let (palette_base, bit) = if bg4 {
+                let (background, background_opaque) = if bg4 {
+                    // VT03 layout: four 8-byte planes, one bit per pixel.
                     let pattern = (tile & !1) << 4;
-                    let row_address = pattern + row * 4;
                     let mut value = 0usize;
                     for plane in 0..4 {
-                        let byte = self.um_vram.get(row_address + plane).copied().unwrap_or(0);
+                        let byte = self
+                            .um_vram
+                            .get(pattern + plane * 8 + row)
+                            .copied()
+                            .unwrap_or(0);
                         value |= usize::from((byte >> shift) & 1) << plane;
                     }
-                    ((attr & 0x03) * 16, value)
+                    ((attribute & 0x03) * 16 + value, value != 0)
                 } else {
                     let pattern = tile << 4;
-                    let row_address = pattern + row * 2;
-                    let low = self.um_vram.get(row_address).copied().unwrap_or(0);
-                    let high = self.um_vram.get(row_address + 1).copied().unwrap_or(0);
-                    (
-                        (attr & 0x0F) * 4,
-                        usize::from((low >> shift) & 1) | (usize::from((high >> shift) & 1) << 1),
-                    )
+                    let low = self.um_vram.get(pattern + row).copied().unwrap_or(0);
+                    let high = self.um_vram.get(pattern + row + 8).copied().unwrap_or(0);
+                    let value =
+                        usize::from((low >> shift) & 1) | (usize::from((high >> shift) & 1) << 1);
+                    ((attribute & 0x0F) * 4 + value, value != 0)
                 };
-                let index = if bit == 0 { 0 } else { palette_base + bit };
+                let index = if sprite_colour[x] != 0 && (sprite_front[x] || !background_opaque) {
+                    usize::from(sprite_colour[x])
+                } else {
+                    background
+                };
+                let index = if transparent(index) { 0 } else { index };
                 let [r, g, b] = backdrop(index);
                 let offset = (y * 256 + x) * 4;
                 frame[offset] = r;
@@ -2461,6 +2564,58 @@ mod tests {
         let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], true, false);
         ppu.end_warmup();
         ppu
+    }
+
+    #[test]
+    fn um6578_renders_4bpp_background_and_sprites() {
+        let mut ppu = ppu();
+        ppu.set_um6578(true);
+        ppu.mask = 0x1E;
+        ppu.ctrl = 0x80;
+        // 4bpp background, single nametable at $2000, sprites at $0000.
+        ppu.um_ctrl = 0x81;
+        ppu.t = 0;
+        ppu.fine_x = 0;
+        ppu.um_palette[0] = 0x0F;
+        ppu.um_palette[16] = 0x0F;
+        ppu.um_palette[17] = 0x30;
+        ppu.um_palette[21] = 0x16;
+        // One even 4bpp tile (tile $010), attribute palette 1.
+        ppu.um_vram[0x2000] = 0x10;
+        ppu.um_vram[0x2001] = 0x10;
+        ppu.um_vram[0x0100] = 0x80;
+        ppu.um_vram[0x0101] = 0x80;
+        // Sprite 0: tile 5, palette 1, front, at x=4/y=1; its row 0 has
+        // one pixel in plane 0.
+        ppu.oam[0] = 0;
+        ppu.oam[1] = 5;
+        ppu.oam[2] = 0x01;
+        ppu.oam[3] = 4;
+        ppu.um_vram[0x0050] = 0x80;
+        let frame = ppu.render_um_frame();
+        let pixel = |x: usize, y: usize| {
+            let offset = (y * 256 + x) * 4;
+            [frame[offset], frame[offset + 1], frame[offset + 2]]
+        };
+        assert_eq!(pixel(0, 0), NES_PALETTE[0x30]);
+        assert_eq!(pixel(4, 1), NES_PALETTE[0x16]);
+
+        // A behind-background sprite yields to an opaque background pixel
+        // but still draws where the background is transparent.
+        ppu.oam[2] = 0x21;
+        ppu.oam[3] = 0;
+        let frame = ppu.render_um_frame();
+        let offset = 256 * 4;
+        assert_eq!(
+            &frame[offset..offset + 3],
+            &NES_PALETTE[0x30],
+            "a behind-background sprite yields to an opaque background pixel"
+        );
+        // Move the sprite over a transparent background pixel: it draws.
+        ppu.oam[3] = 4;
+        let frame = ppu.render_um_frame();
+        let offset = (256 + 4) * 4;
+        assert_eq!(&frame[offset..offset + 3], &NES_PALETTE[0x16]);
     }
 
     #[test]

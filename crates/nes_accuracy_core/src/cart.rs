@@ -7,8 +7,18 @@
 //! (mapper 0) and MMC1 (mapper 1). Further mappers slot into [`Mapper`].
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fmt;
 use std::rc::Rc;
+
+/// Where one nametable quadrant resolves in enhanced-mapper video modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NtMapping {
+    /// Console CIRAM page (0 or 1).
+    Ciram(u8),
+    /// CHR-ROM 1 KiB page.
+    Rom(u16),
+}
 
 /// Nametable mirroring requested by the cartridge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -642,6 +652,9 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Supplies the NES 2.0 miscellaneous ROM area (mapper 86 speech data).
+    fn set_misc_rom(&mut self, _rom: Vec<u8>) {}
+
     /// Observes every CPU bus address (mapper 355's protection MCU).
     fn set_cpu_address(&mut self, _address: u16) {}
 
@@ -685,6 +698,11 @@ pub trait Mapper: fmt::Debug {
         None
     }
 
+    /// Per-quadrant nametable mapping that may mix CIRAM and CHR-ROM.
+    fn nametable_quadrants(&self) -> Option<[NtMapping; 4]> {
+        None
+    }
+
     /// Shared hybrid CHR state for mappers that mix ROM and RAM pages.
     fn hybrid_chr(&self) -> Option<Rc<RefCell<HybridChr>>> {
         None
@@ -709,6 +727,11 @@ pub trait Mapper: fmt::Debug {
 
     /// Shared Namco 163 nametable state for the PPU.
     fn n163_nt(&self) -> Option<Rc<RefCell<N163Nt>>> {
+        None
+    }
+
+    /// Shared Q-Ta nametable/CHR state for the PPU.
+    fn qtram(&self) -> Option<Rc<RefCell<Qtram>>> {
         None
     }
 
@@ -884,7 +907,7 @@ impl Cartridge {
         };
         let misc_rom = bytes[chr_end..].to_vec();
         let prg_ram = vec![0; header.prg_ram_size.max(0x2000)];
-        let mapper: Box<dyn Mapper> = match header.mapper {
+        let mut mapper: Box<dyn Mapper> = match header.mapper {
             0 => Box::new(Nrom::new(prg_rom, chr, header)),
             1 => Box::new(Mmc1::new(prg_rom, chr, prg_ram, header)),
             2 => Box::new(UxRom::new(prg_rom, chr, header)),
@@ -1210,6 +1233,9 @@ impl Cartridge {
             26 => Box::new(Vrc6::new(prg_rom, chr, prg_ram, header, 26)),
             other => return Err(CartError::UnsupportedMapper(other)),
         };
+        if bytes.len() > chr_end {
+            mapper.set_misc_rom(bytes[chr_end..].to_vec());
+        }
         Ok(Self {
             chr_is_ram,
             mapper,
@@ -1314,6 +1340,12 @@ impl Cartridge {
     #[must_use]
     pub fn n163_nt(&self) -> Option<Rc<RefCell<N163Nt>>> {
         self.mapper.n163_nt()
+    }
+
+    /// Shared Q-Ta nametable/CHR state for the PPU.
+    #[must_use]
+    pub fn qtram(&self) -> Option<Rc<RefCell<Qtram>>> {
+        self.mapper.qtram()
     }
 
     /// Whether a CPU write to `address` changes the CHR mapping.
@@ -1438,6 +1470,12 @@ impl Cartridge {
     #[must_use]
     pub fn rom_nametable_quadrants(&self) -> Option<[u16; 4]> {
         self.mapper.rom_nametable_quadrants()
+    }
+
+    /// Per-quadrant nametable mapping, including mixed CIRAM/CHR-ROM.
+    #[must_use]
+    pub fn nametable_quadrants(&self) -> Option<[NtMapping; 4]> {
+        self.mapper.nametable_quadrants()
     }
 
     /// Whether the mapper drives PRG-ROM at `$6000-$7FFF`.
@@ -10928,6 +10966,57 @@ impl Mapper for LatchAddr585 {
     }
 }
 
+/// Q-Ta CHR banking state shared with the PPU.
+///
+/// The name table byte at the current fetch position (`qt`) selects either a
+/// CHR-ROM page (bit 6) or a 4 KiB CHR-RAM bank, and the mapper keeps a
+/// private 2 KiB shadow name table that the game writes instead of CIRAM.
+#[derive(Debug)]
+pub struct Qtram {
+    /// Private shadow name table (`$D010` bit 0 set routes writes here).
+    pub ram: [u8; 0x800],
+    /// Last tile byte read from the shadow table.
+    pub qt: u8,
+    /// Last nametable offset fetched (sprite-fetch heuristic).
+    pub last_offset: u16,
+    /// Whether the current pattern fetch belongs to a sprite.
+    pub sprite: bool,
+    /// `$D010` bit 0: name table writes go to [`Qtram::ram`].
+    pub write_exram: bool,
+    /// `$D010` bit 1 selects horizontal pairing of the shadow pages.
+    pub horizontal: bool,
+}
+
+impl Qtram {
+    fn new() -> Self {
+        Self {
+            ram: [0; 0x800],
+            qt: 0,
+            last_offset: 0,
+            sprite: false,
+            write_exram: false,
+            horizontal: false,
+        }
+    }
+
+    /// Records a name table fetch and latches the tile byte for CHR banking.
+    pub fn note_read(&mut self, address: u16) {
+        let offset = address & 0x3FF;
+        if offset < 0x3C0 {
+            // Vertical/horizontal selection is applied by the mapper's
+            // mirroring mode: the 1 KiB quadrant index is enough here.
+            let quadrant = usize::from(address >> 10 & 0x03);
+            let page = if self.horizontal {
+                quadrant >> 1
+            } else {
+                quadrant & 1
+            };
+            self.qt = self.ram[page * 0x400 + usize::from(offset)];
+        }
+        self.last_offset = offset;
+    }
+}
+
 /// Konami Q-Ta educational computer (mapper 547): VRC5-style PRG/CHR
 /// windows, 4 KiB work RAM at `$6000`/`$7000`, 16 registers at
 /// `$D000-$DFFF`, a CPU-cycle IRQ counter and the JIS glyph lookup used by
@@ -10938,6 +11027,7 @@ pub struct Mapper547 {
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
     reg: [u8; 16],
+    qt: Rc<RefCell<Qtram>>,
     irq_counter: u16,
     irq_pending: bool,
 }
@@ -10950,6 +11040,7 @@ impl Mapper547 {
             chr,
             prg_ram,
             reg: [0; 16],
+            qt: Rc::new(RefCell::new(Qtram::new())),
             irq_counter: 0,
             irq_pending: false,
         }
@@ -11040,6 +11131,11 @@ impl Mapper for Mapper547 {
             0xD000..=0xDFFF => {
                 let index = usize::from((address >> 8) & 0x0F);
                 self.reg[index] = value;
+                if index == 10 {
+                    let mut qt = self.qt.borrow_mut();
+                    qt.write_exram = value & 0x01 != 0;
+                    qt.horizontal = value & 0x02 != 0;
+                }
                 match index {
                     8 => {
                         if self.reg[9] & 1 != 0 {
@@ -11064,6 +11160,35 @@ impl Mapper for Mapper547 {
     }
 
     fn chr_read(&self, address: u16) -> u8 {
+        let qt = self.qt.borrow();
+        if qt.qt & 0x40 != 0 {
+            if address & 0x08 != 0 {
+                return if qt.qt & 0x80 != 0 { 0xFF } else { 0x00 };
+            }
+            if self.chr.len() == 128 * 1024 {
+                // The 128 KiB Q-Ta CHR-ROM dump has A0/A4 swapped and is
+                // otherwise halved.
+                let mut full = (u32::from(qt.qt & 0x3F) << 12)
+                    | (u32::from(address >> 10 & 0x03) << 10)
+                    | u32::from(address & 0x3FF);
+                full = ((full & 0x000_0007) << 1)
+                    | ((full & 0x000_0010) >> 4)
+                    | ((full & 0x003_FFE0) >> 1);
+                return self.chr.get(full as usize).copied().unwrap_or(0);
+            }
+            let full = (usize::from(qt.qt & 0x3F) << 12)
+                | (usize::from(address >> 10 & 0x03) << 10)
+                | usize::from(address & 0x3FF);
+            return self.chr.get(full).copied().unwrap_or(0);
+        }
+        if !qt.sprite {
+            return self
+                .chr
+                .get((usize::from(qt.qt & 1) << 12) | usize::from(address & 0x0FFF))
+                .copied()
+                .unwrap_or(0);
+        }
+        drop(qt);
         let bank = if address < 0x1000 {
             usize::from(self.reg[5] & 1)
         } else {
@@ -11103,6 +11228,10 @@ impl Mapper for Mapper547 {
         547
     }
 
+    fn qtram(&self) -> Option<Rc<RefCell<Qtram>>> {
+        Some(Rc::clone(&self.qt))
+    }
+
     fn prg_ram(&self) -> &[u8] {
         &self.prg_ram
     }
@@ -11135,11 +11264,130 @@ impl Mapper for Mapper547 {
 /// PRG/CHR bank (`$B000`/`$B001`), 8 KiB PRG-ROM at `$6000` and the MSM6585
 /// ADPCM FIFO at `$5000`. The FIFO status read reports "not half full" so the
 /// CPU can keep feeding samples; audio generation itself is not modelled.
+/// MSM6585 step deltas: 49 step sizes x 16 nibbles.
+const MSM6585_DIFF: [i16; 49 * 16] = [
+    2, 6, 10, 14, 18, 22, 26, 30, -2, -6, -10, -14, -18, -22, -26, -30, 2, 6, 10, 14, 19, 23, 27,
+    31, -2, -6, -10, -14, -19, -23, -27, -31, 2, 6, 11, 15, 21, 25, 30, 34, -2, -6, -11, -15, -21,
+    -25, -30, -34, 2, 7, 12, 17, 23, 28, 33, 38, -2, -7, -12, -17, -23, -28, -33, -38, 2, 7, 13,
+    18, 25, 30, 36, 41, -2, -7, -13, -18, -25, -30, -36, -41, 3, 9, 15, 21, 28, 34, 40, 46, -3, -9,
+    -15, -21, -28, -34, -40, -46, 3, 10, 17, 24, 31, 38, 45, 52, -3, -10, -17, -24, -31, -38, -45,
+    -52, 3, 10, 18, 25, 34, 41, 49, 56, -3, -10, -18, -25, -34, -41, -49, -56, 4, 12, 21, 29, 38,
+    46, 55, 63, -4, -12, -21, -29, -38, -46, -55, -63, 4, 13, 22, 31, 41, 50, 59, 68, -4, -13, -22,
+    -31, -41, -50, -59, -68, 5, 15, 25, 35, 46, 56, 66, 76, -5, -15, -25, -35, -46, -56, -66, -76,
+    5, 16, 27, 38, 50, 61, 72, 83, -5, -16, -27, -38, -50, -61, -72, -83, 6, 18, 31, 43, 56, 68,
+    81, 93, -6, -18, -31, -43, -56, -68, -81, -93, 6, 19, 33, 46, 61, 74, 88, 101, -6, -19, -33,
+    -46, -61, -74, -88, -101, 7, 22, 37, 52, 67, 82, 97, 112, -7, -22, -37, -52, -67, -82, -97,
+    -112, 8, 24, 41, 57, 74, 90, 107, 123, -8, -24, -41, -57, -74, -90, -107, -123, 9, 27, 45, 63,
+    82, 100, 118, 136, -9, -27, -45, -63, -82, -100, -118, -136, 10, 30, 50, 70, 90, 110, 130, 150,
+    -10, -30, -50, -70, -90, -110, -130, -150, 11, 33, 55, 77, 99, 121, 143, 165, -11, -33, -55,
+    -77, -99, -121, -143, -165, 12, 36, 60, 84, 109, 133, 157, 181, -12, -36, -60, -84, -109, -133,
+    -157, -181, 13, 39, 66, 92, 120, 146, 173, 199, -13, -39, -66, -92, -120, -146, -173, -199, 14,
+    43, 73, 102, 132, 161, 191, 220, -14, -43, -73, -102, -132, -161, -191, -220, 16, 48, 81, 113,
+    146, 178, 211, 243, -16, -48, -81, -113, -146, -178, -211, -243, 17, 52, 88, 123, 160, 195,
+    231, 266, -17, -52, -88, -123, -160, -195, -231, -266, 19, 58, 97, 136, 176, 215, 254, 293,
+    -19, -58, -97, -136, -176, -215, -254, -293, 21, 64, 107, 150, 194, 237, 280, 323, -21, -64,
+    -107, -150, -194, -237, -280, -323, 23, 70, 118, 165, 213, 260, 308, 355, -23, -70, -118, -165,
+    -213, -260, -308, -355, 26, 78, 130, 182, 235, 287, 339, 391, -26, -78, -130, -182, -235, -287,
+    -339, -391, 28, 85, 143, 200, 258, 315, 373, 430, -28, -85, -143, -200, -258, -315, -373, -430,
+    31, 94, 157, 220, 284, 347, 410, 473, -31, -94, -157, -220, -284, -347, -410, -473, 34, 103,
+    173, 242, 313, 382, 452, 521, -34, -103, -173, -242, -313, -382, -452, -521, 38, 114, 191, 267,
+    345, 421, 498, 574, -38, -114, -191, -267, -345, -421, -498, -574, 42, 126, 210, 294, 379, 463,
+    547, 631, -42, -126, -210, -294, -379, -463, -547, -631, 46, 138, 231, 323, 417, 509, 602, 694,
+    -46, -138, -231, -323, -417, -509, -602, -694, 51, 153, 255, 357, 459, 561, 663, 765, -51,
+    -153, -255, -357, -459, -561, -663, -765, 56, 168, 280, 392, 505, 617, 729, 841, -56, -168,
+    -280, -392, -505, -617, -729, -841, 61, 184, 308, 431, 555, 678, 802, 925, -61, -184, -308,
+    -431, -555, -678, -802, -925, 68, 204, 340, 476, 612, 748, 884, 1020, -68, -204, -340, -476,
+    -612, -748, -884, -1020, 74, 223, 373, 522, 672, 821, 971, 1120, -74, -223, -373, -522, -672,
+    -821, -971, -1120, 82, 246, 411, 575, 740, 904, 1069, 1233, -82, -246, -411, -575, -740, -904,
+    -1069, -1233, 90, 271, 452, 633, 814, 995, 1176, 1357, -90, -271, -452, -633, -814, -995,
+    -1176, -1357, 99, 298, 497, 696, 895, 1094, 1293, 1492, -99, -298, -497, -696, -895, -1094,
+    -1293, -1492, 109, 328, 547, 766, 985, 1204, 1423, 1642, -109, -328, -547, -766, -985, -1204,
+    -1423, -1642, 120, 360, 601, 841, 1083, 1323, 1564, 1804, -120, -360, -601, -841, -1083, -1323,
+    -1564, -1804, 132, 397, 662, 927, 1192, 1457, 1722, 1987, -132, -397, -662, -927, -1192, -1457,
+    -1722, -1987, 145, 436, 728, 1019, 1311, 1602, 1894, 2185, -145, -436, -728, -1019, -1311,
+    -1602, -1894, -2185, 160, 480, 801, 1121, 1442, 1762, 2083, 2403, -160, -480, -801, -1121,
+    -1442, -1762, -2083, -2403, 176, 528, 881, 1233, 1587, 1939, 2292, 2644, -176, -528, -881,
+    -1233, -1587, -1939, -2292, -2644, 194, 582, 970, 1358, 1746, 2134, 2522, 2910, -194, -582,
+    -970, -1358, -1746, -2134, -2522, -2910,
+];
+const MSM6585_INDEX_SHIFT: [i8; 8] = [-1, -1, -1, -1, 2, 4, 6, 8];
+
+/// OKI MSM6585 ADPCM decoder used by the Rinco FSG2 board.
+#[derive(Debug)]
+struct Msm6585 {
+    which_nibble: bool,
+    input: u8,
+    signal: i32,
+    count: i32,
+    rate: i32,
+    step: i32,
+    low: f32,
+    lower: f32,
+}
+
+impl Msm6585 {
+    const HOST_CLOCK: i32 = 1_789_773;
+
+    fn new() -> Self {
+        Self {
+            which_nibble: false,
+            input: 0,
+            signal: 0,
+            count: 0,
+            rate: 4000,
+            step: 0,
+            low: 0.0,
+            lower: 0.0,
+        }
+    }
+
+    fn set_rate(&mut self, value: u8) {
+        // `$5001` bits 7-6 select 4/8/16/32 kHz.
+        self.rate = 4000 << (value >> 6);
+        self.count = 0;
+    }
+
+    /// Decodes one host clock; consumes a byte from the FIFO every two
+    /// nibbles.
+    fn clock(&mut self, fifo: &mut VecDeque<u8>) {
+        self.count += self.rate;
+        while self.count >= Self::HOST_CLOCK {
+            self.count -= Self::HOST_CLOCK;
+            let nibble = if self.which_nibble {
+                self.input & 0x0F
+            } else {
+                self.input = fifo.pop_front().unwrap_or(0);
+                self.input >> 4
+            };
+            self.which_nibble = !self.which_nibble;
+            self.signal += i32::from(MSM6585_DIFF[self.step as usize * 16 + usize::from(nibble)]);
+            self.signal = self.signal.clamp(-2048, 2047);
+            self.step += i32::from(MSM6585_INDEX_SHIFT[usize::from(nibble & 0x07)]);
+            self.step = self.step.clamp(0, 48);
+        }
+    }
+
+    /// Two cascaded one-pole filters at 40% of the sample rate approximate the
+    /// chip's reconstruction filter.
+    fn output(&mut self) -> f32 {
+        let cutoff = (self.rate as f32 * 0.4).clamp(200.0, 16_000.0);
+        let alpha = 1.0 - (-std::f32::consts::TAU * cutoff / Self::HOST_CLOCK as f32).exp();
+        self.low += alpha * (self.signal as f32 * 16.0 - self.low);
+        self.lower += alpha * (self.low - self.lower);
+        self.lower / 65_536.0
+    }
+}
+
+/// Rinco FSG2 / Talkman (mapper 594): an MMC3 core with an outer 256 KiB
+/// PRG/CHR bank, 8 KiB PRG-ROM at `$6000`, and an MSM6585 ADPCM FIFO at
+/// `$5000`/`$5001`.
 #[derive(Debug)]
 pub struct Mapper594 {
     inner: Mmc3,
     reg: [u8; 4],
-    fifo: Vec<u8>,
+    fifo: VecDeque<u8>,
+    adpcm: Msm6585,
+    output: f32,
     prg_ram: Vec<u8>,
 }
 
@@ -11149,7 +11397,9 @@ impl Mapper594 {
         Self {
             inner: Mmc3::new_as(prg, chr, header, 594),
             reg: [0; 4],
-            fifo: Vec::with_capacity(1024),
+            fifo: VecDeque::with_capacity(1024),
+            adpcm: Msm6585::new(),
+            output: 0.0,
             prg_ram,
         }
     }
@@ -11182,7 +11432,13 @@ impl Mapper594 {
 impl Mapper for Mapper594 {
     fn prg_read(&self, address: u16) -> u8 {
         match address {
-            0x5000..=0x5FFF => 0x40,
+            0x5000..=0x5FFF => {
+                if self.fifo.len() >= 512 {
+                    0x00
+                } else {
+                    0x40
+                }
+            }
             0x6000..=0x7FFF => {
                 let banks = (self.inner.prg.len() / 0x2000).max(1);
                 let bank = (usize::from(self.reg[0]) | self.prg_or()) % banks;
@@ -11210,12 +11466,13 @@ impl Mapper for Mapper594 {
         match address {
             0x5000..=0x5FFF => {
                 if address & 1 != 0 {
+                    self.adpcm.set_rate(value);
                     self.fifo.clear();
                 } else {
                     if self.fifo.len() >= 1024 {
-                        self.fifo.remove(0);
+                        self.fifo.pop_front();
                     }
-                    self.fifo.push(value);
+                    self.fifo.push_back(value);
                 }
             }
             0x9000..=0x9FFF => self.reg[usize::from(address & 1)] = value,
@@ -11287,6 +11544,15 @@ impl Mapper for Mapper594 {
 
     fn acknowledge_irq(&mut self) {
         self.inner.acknowledge_irq();
+    }
+
+    fn clock_cpu(&mut self) {
+        self.adpcm.clock(&mut self.fifo);
+        self.output = self.adpcm.output();
+    }
+
+    fn audio_mix(&self) -> f32 {
+        self.output
     }
 }
 
@@ -12318,7 +12584,7 @@ impl Mapper for Um6578 {
             to_ppu: self.dma_ctrl & 0x20 == 0,
             source_rom,
             source,
-            target: u16::from(self.dma_dst_lsb) | (u16::from(self.dma_dst_msb & 0x7F) << 8),
+            target: u16::from(self.dma_dst_lsb) | (u16::from(self.dma_dst_msb) << 8),
             len: (u16::from(self.dma_len_msb & 0x7F) << 8) | u16::from(self.dma_len_lsb),
         })
     }
@@ -25469,6 +25735,7 @@ pub struct JyAsic {
     chr_low: [u8; 8],
     chr_high: [u8; 8],
     nt_banks: [u8; 4],
+    nt_high: [u8; 4],
     mode: u8,
     nt_arrange: u8,
     ppu_conf: u8,
@@ -25503,6 +25770,7 @@ impl JyAsic {
             chr_low: [0; 8],
             chr_high: [0; 8],
             nt_banks: [0; 4],
+            nt_high: [0; 4],
             mode: 0,
             nt_arrange: 0,
             ppu_conf: 0,
@@ -25706,11 +25974,6 @@ impl Mapper for JyAsic {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        if std::env::var_os("JYDBG").is_some()
-            && matches!(address, 0x8000..=0x8007 | 0x9000..=0x9007 | 0xA000..=0xA007 | 0xC000..=0xC003 | 0xD000..=0xD003)
-        {
-            eprintln!("{address:04X}={value:02X}");
-        }
         match address & 0xF007 {
             0x5000..=0x57FF => {}
             0x5800..=0x5801 => {
@@ -25740,7 +26003,14 @@ impl Mapper for JyAsic {
             }
             0x9000..=0x9007 => self.chr_low[usize::from(address & 0x07)] = value,
             0xA000..=0xA007 => self.chr_high[usize::from(address & 0x07)] = value,
-            0xB000..=0xB003 => self.nt_banks[usize::from(address & 0x03)] = value,
+            0xB000..=0xB007 => {
+                let index = usize::from(address & 0x03);
+                if address & 0x04 == 0 {
+                    self.nt_banks[index] = value;
+                } else {
+                    self.nt_high[index] = value;
+                }
+            }
             0xC000 => {
                 if value & 0x01 != 0 {
                     self.irq_enable = true;
@@ -25758,7 +26028,7 @@ impl Mapper for JyAsic {
             0xC003 => self.irq_enable = true,
             0xD000 => self.mode = value,
             0xD001 => {
-                self.nt_arrange = value & 0x03;
+                self.nt_arrange = value;
                 // The ASIC's MM encoding: 0 = vertical, 1 = horizontal.
                 self.mirroring = match value & 0x03 {
                     0 => Mirroring::Vertical,
@@ -25822,6 +26092,50 @@ impl Mapper for JyAsic {
 
     fn prg_ram(&self) -> &[u8] {
         &self.prg_ram
+    }
+
+    fn has_rom_nametables(&self) -> bool {
+        !self.chr.is_empty()
+    }
+
+    fn chr_rom(&self) -> Option<&[u8]> {
+        if self.chr.is_empty() {
+            None
+        } else {
+            Some(&self.chr)
+        }
+    }
+
+    /// `$B000-$B007` select each nametable quadrant: a CHR-ROM 1 KiB page
+    /// when `$D000` bit 5 enables VROM and the quadrant's selection matches
+    /// bit 7 of `$D002`, otherwise a CIRAM page.
+    fn nametable_quadrants(&self) -> Option<[NtMapping; 4]> {
+        if self.mode & 0x20 == 0 {
+            // Extended mirroring (`$D001` bit 3) selects CIRAM pages too.
+            return (self.nt_arrange & 0x08 != 0)
+                .then(|| self.nt_banks.map(|value| NtMapping::Ciram(value & 0x01)));
+        }
+        let (and, or) = if self.outer & 0x20 != 0 {
+            (0x1FFu16, u16::from(self.outer) << 6 & 0x600)
+        } else {
+            (
+                0x0FFu16,
+                (u16::from(self.outer) << 8 & 0x100) | (u16::from(self.outer) << 6 & 0x600),
+            )
+        };
+        let vrom_bit = self.ppu_conf & 0x80 != 0;
+        let everywhere = self.mode & 0x40 != 0;
+        let mut mapping = [NtMapping::Ciram(0); 4];
+        for (slot, target) in mapping.iter_mut().enumerate() {
+            let value = u16::from(self.nt_banks[slot]) | (u16::from(self.nt_high[slot]) << 8);
+            let vrom_here = (value & 0x80 != 0) ^ vrom_bit || everywhere;
+            *target = if vrom_here && !self.chr.is_empty() {
+                NtMapping::Rom((value & and) | or)
+            } else {
+                NtMapping::Ciram((value & 0x01) as u8)
+            };
+        }
+        Some(mapping)
     }
 
     fn irq_line(&self) -> bool {
@@ -32107,14 +32421,126 @@ impl Mapper for Irem32 {
     }
 }
 
+/// Harris HC-55516 CVSD speech decoder (software-clocked variant).
+#[derive(Debug)]
+struct Hc55516 {
+    shiftreg: u8,
+    digit: u8,
+    last_clock: bool,
+    curr_sample: i16,
+    next_sample: i16,
+    update_count: u32,
+    filter: f64,
+    integrator: f64,
+    charge: f64,
+    decay: f64,
+    leak: f64,
+}
+
+impl Hc55516 {
+    const SAMPLE_RATE: u32 = 1_789_772;
+    const FILTER_MIN: f64 = 0.0416;
+    const FILTER_MAX: f64 = 1.0954;
+    const SAMPLE_GAIN: f64 = 10_000.0;
+
+    fn new() -> Self {
+        Self {
+            shiftreg: 0,
+            digit: 0,
+            last_clock: false,
+            curr_sample: 0,
+            next_sample: 0,
+            update_count: 0,
+            filter: 0.0,
+            integrator: 0.0,
+            charge: (-1.0f64).exp().powf(1.0 / (0.004 * 16_000.0)),
+            decay: (-1.0f64).exp().powf(1.0 / (0.004 * 16_000.0)),
+            leak: (-1.0f64).exp().powf(1.0 / (0.001 * 16_000.0)),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.shiftreg = 0;
+        self.digit = 0;
+        self.last_clock = false;
+        self.curr_sample = 0;
+        self.next_sample = 0;
+        self.update_count = 0;
+        self.filter = 0.0;
+        self.integrator = 0.0;
+    }
+
+    /// Clocks one CVSD bit through the decoder (rising edge).
+    fn clock_bit(&mut self, digit: u8) {
+        self.digit = digit & 1;
+        self.last_clock = true;
+        self.shiftreg = (self.shiftreg << 1) | self.digit;
+        if self.digit != 0 {
+            self.integrator += self.filter;
+        } else {
+            self.integrator -= self.filter;
+        }
+        self.integrator *= self.leak;
+        if self.shiftreg & 0x07 == 0 || self.shiftreg & 0x07 == 0x07 {
+            self.filter = Self::FILTER_MAX - (Self::FILTER_MAX - self.filter) * self.charge;
+            self.filter = self.filter.min(Self::FILTER_MAX);
+        } else {
+            self.filter *= self.decay;
+            self.filter = self.filter.max(Self::FILTER_MIN);
+        }
+        let temp = self.integrator * Self::SAMPLE_GAIN;
+        let compressed = if temp < 0.0 {
+            temp / (-temp * (1.0 / 32768.0) + 1.0)
+        } else {
+            temp / (temp * (1.0 / 32768.0) + 1.0)
+        };
+        self.next_sample = compressed as i16;
+        // The rising edge was the active transition; the trailing low edge
+        // does not process another digit.
+        self.last_clock = false;
+    }
+
+    /// Fills `output` with `samples` interpolated values up to the last digit.
+    fn stream_update(&mut self, output: &mut [i16], samples: usize) {
+        if samples == 0 {
+            return;
+        }
+        self.update_count = self.update_count.saturating_add(samples as u32);
+        if self.update_count > Self::SAMPLE_RATE / 32 {
+            self.update_count = Self::SAMPLE_RATE;
+            self.next_sample = 0;
+        }
+        let sample = i32::from(self.curr_sample);
+        let slope = (i32::from(self.next_sample) - sample) / samples as i32;
+        self.curr_sample = self.next_sample;
+        let mut value = sample;
+        for slot in output.iter_mut().take(samples) {
+            *slot = value as i16;
+            value += slope;
+        }
+    }
+}
+
 /// Jaleco JF-13 (mapper 86): GNROM-style 32 KiB PRG / 8 KiB CHR latch at
-/// `$6000-$6FFF` (audio at `$7000-$7FFF` is not modelled).
+/// `$6000-$6FFF`. NES 2.0 submapper 1 is the bootleg JF-13 board whose
+/// `$7000` write starts a CVSD message from the miscellaneous ROM, clocked
+/// at `$5000` bit 7; submapper 0 boards have no on-cartridge speech data.
 #[derive(Debug)]
 pub struct Jf13 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     bank: u8,
     mirroring: Mirroring,
+    submapper: u8,
+    misc: Vec<u8>,
+    speech: u8,
+    speech_rate: u8,
+    sample: u32,
+    count: u32,
+    playing: bool,
+    chip: Hc55516,
+    output: [i16; 176],
+    audio: f32,
 }
 
 impl Jf13 {
@@ -32124,7 +32550,49 @@ impl Jf13 {
             chr,
             bank: 0,
             mirroring: header.mirroring,
+            submapper: header.submapper,
+            misc: Vec::new(),
+            speech: 0,
+            speech_rate: 0,
+            sample: 0,
+            count: 0,
+            playing: false,
+            chip: Hc55516::new(),
+            output: [0; 176],
+            audio: 0.0,
         }
+    }
+
+    fn bit_period(&self) -> u32 {
+        if self.speech_rate & 0x80 != 0 {
+            176
+        } else {
+            88
+        }
+    }
+
+    fn clock_audio(&mut self) {
+        let period = self.bit_period();
+        if self.playing && !self.misc.is_empty() && self.count.is_multiple_of(period) {
+            let message = u32::from(self.speech & 0x0F);
+            let block = (message << 11) & 0x7800;
+            let index = (block | (self.sample >> 3)) as usize;
+            let byte = self.misc.get(index).copied().unwrap_or(0);
+            self.chip.clock_bit(byte >> (!self.sample & 7));
+            let mut buffer = self.output;
+            self.chip.stream_update(&mut buffer, period as usize);
+            self.output = buffer;
+            self.sample = self.sample.wrapping_add(1);
+            if self.sample & 0x4000 != 0 {
+                self.playing = false;
+            }
+        }
+        self.audio = if self.playing {
+            f32::from(self.output[(self.count % period) as usize]) / 65_536.0
+        } else {
+            0.0
+        };
+        self.count = self.count.wrapping_add(1);
     }
 }
 
@@ -32139,8 +32607,21 @@ impl Mapper for Jf13 {
     }
 
     fn prg_write(&mut self, address: u16, value: u8) {
-        if (0x6000..=0x6FFF).contains(&address) {
-            self.bank = value;
+        match address {
+            0x5000..=0x5FFF => self.speech_rate = value,
+            0x6000..=0x6FFF => self.bank = value,
+            0x7000..=0x7FFF => {
+                self.speech = value;
+                if value & 0x10 == 0 {
+                    self.chip.reset();
+                    self.sample = 0;
+                    self.playing = !self.misc.is_empty() && self.submapper == 1;
+                }
+                if value & 0x20 != 0 {
+                    self.playing = false;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -32165,6 +32646,18 @@ impl Mapper for Jf13 {
 
     fn number(&self) -> u16 {
         86
+    }
+
+    fn set_misc_rom(&mut self, rom: Vec<u8>) {
+        self.misc = rom;
+    }
+
+    fn clock_cpu(&mut self) {
+        self.clock_audio();
+    }
+
+    fn audio_mix(&self) -> f32 {
+        self.audio
     }
 }
 
@@ -34419,6 +34912,45 @@ mod tests {
     }
 
     #[test]
+    fn jy_asic_mixes_chr_rom_and_ciram_nametables() {
+        let rom = synth_banked(90, 512, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert!(cart.has_rom_nametables());
+        // VROM nametables on, 256 KiB CHR, outer bank 0.
+        cart.cpu_write(0xD000, 0x20);
+        cart.cpu_write(0xD001, 0x00);
+        cart.cpu_write(0xD002, 0x00);
+        cart.cpu_write(0xB000, 0x8D); // ROM page $8D
+        cart.cpu_write(0xB001, 0x01); // CIRAM page 1
+        cart.cpu_write(0xB002, 0x02); // CIRAM page 0
+        cart.cpu_write(0xB003, 0x83); // ROM page $83
+        let mapping = cart.nametable_quadrants().expect("mapping");
+        assert_eq!(
+            mapping,
+            [
+                NtMapping::Rom(0x8D),
+                NtMapping::Ciram(1),
+                NtMapping::Ciram(0),
+                NtMapping::Rom(0x83)
+            ]
+        );
+        // Turning VROM off returns to CIRAM selectable pages only when
+        // `$D001` bit 3 enables extended mirroring.
+        cart.cpu_write(0xD000, 0x00);
+        assert!(cart.nametable_quadrants().is_none());
+        cart.cpu_write(0xD001, 0x09);
+        assert_eq!(
+            cart.nametable_quadrants(),
+            Some([
+                NtMapping::Ciram(1),
+                NtMapping::Ciram(1),
+                NtMapping::Ciram(0),
+                NtMapping::Ciram(1)
+            ])
+        );
+    }
+
+    #[test]
     fn jy_clone_banks_and_irq() {
         let rom = synth_banked(91, 512, 32);
         let mut cart = Cartridge::from_ines(&rom).expect("cart");
@@ -36069,6 +36601,47 @@ mod tests {
     }
 
     #[test]
+    fn mapper547_qtram_selects_chr_rom_ram_and_shadow_nametables() {
+        let rom = synth_banked(547, 640, 128);
+        let cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 547);
+        let qt = cart.qtram().expect("qtram");
+        let chr_base = 16 + 640 * 1024;
+        {
+            let mut state = qt.borrow_mut();
+            // Tile byte $41: CHR-ROM page 1, low half filled with $00.
+            state.qt = 0x41;
+            state.sprite = false;
+        }
+        // 128 KiB CHR address swizzle: page 1/offset 0 -> byte $800.
+        assert_eq!(cart.ppu_read(0x0000), rom[chr_base + 0x800]);
+        assert_eq!(cart.ppu_read(0x0008), 0x00);
+        {
+            let mut state = qt.borrow_mut();
+            state.qt = 0xC1;
+        }
+        assert_eq!(cart.ppu_read(0x0008), 0xFF);
+        {
+            let mut state = qt.borrow_mut();
+            // No CHR-ROM bit: background fetches use 4 KiB CHR-RAM bank 1,
+            // sprite fetches keep the normal $D005-banked window.
+            state.qt = 0x01;
+            state.sprite = false;
+        }
+        assert_eq!(cart.ppu_read(0x0000), rom[chr_base + 0x1000]);
+        qt.borrow_mut().sprite = true;
+        assert_eq!(cart.ppu_read(0x0000), rom[chr_base]);
+        // The PPU latches `qt` from the shadow name table.
+        {
+            let mut state = qt.borrow_mut();
+            state.ram[0] = 0x55;
+            state.horizontal = false;
+        }
+        qt.borrow_mut().note_read(0x2000);
+        assert_eq!(qt.borrow().qt, 0x55);
+    }
+
+    #[test]
     fn mapper547_prg_chr_wram_and_irq() {
         // 640 KiB PRG (80 x 8 KiB), 128 KiB CHR.
         let rom = synth_banked(547, 640, 128);
@@ -36090,12 +36663,16 @@ mod tests {
         assert_eq!(cart.cpu_read(0x6000), 0x00);
         cart.cpu_write(0x7000, 0x11);
         assert_eq!(cart.cpu_read(0x7000), 0x11);
-        // $D500 selects the 4 KiB CHR-RAM bank (the high window is fixed at 1).
+        // Background CHR now comes from the Q-Ta shadow name table byte;
+        // $D500 still supplies the sprite window.
         cart.cpu_write(0xD500, 0x01);
+        let qt = cart.qtram().expect("qtram");
+        qt.borrow_mut().qt = 0x01;
         let chr = 16 + 640 * 1024;
         assert_eq!(cart.ppu_read(0x0000), rom[chr + 0x1000]);
         assert_eq!(cart.ppu_read(0x1000), rom[chr + 0x1000]);
         cart.cpu_write(0xD500, 0x00);
+        qt.borrow_mut().qt = 0x00;
         assert_eq!(cart.ppu_read(0x0000), rom[chr]);
         // $DA00 bit 1 selects horizontal mirroring.
         assert_eq!(cart.mirroring(), Mirroring::Vertical);
@@ -36145,6 +36722,52 @@ mod tests {
         // Mirroring from the MMC3 register.
         cart.cpu_write(0xA000, 1);
         assert_eq!(cart.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn rinco_msm6585_decodes_fifo_audio() {
+        let rom = synth_banked(594, 1024, 256);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x5001, 0); // 4 kHz
+        for _ in 0..512 {
+            cart.cpu_write(0x5000, 0xA5);
+        }
+        assert_eq!(
+            cart.cpu_read_io(0x5000),
+            0x00,
+            "half-full FIFO must stop the CPU feeding samples"
+        );
+        let mut peak = 0.0f32;
+        for _ in 0..200_000 {
+            cart.clock_cpu();
+            peak = peak.max(cart.audio_mix().abs());
+        }
+        assert!(peak > 0.01, "MSM6585 produced no audio (peak {peak})");
+        assert!(cart.audio_mix().is_finite());
+    }
+
+    #[test]
+    fn jf13_bootleg_speech_uses_the_miscellaneous_rom() {
+        let mut rom = synth_banked(86, 128, 64);
+        // NES 2.0 header, submapper 1 (bootleg JF-13 with speech data).
+        rom[7] = (rom[7] & 0xF0) | 0x08;
+        rom[8] = 0x10;
+        // 32 KiB of CVSD bitstream after the CHR area.
+        let mut speech = vec![0u8; 32 * 1024];
+        for (index, byte) in speech.iter_mut().enumerate() {
+            *byte = if index % 3 == 0 { 0xA5 } else { 0x5A };
+        }
+        rom.extend_from_slice(&speech);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.cpu_write(0x5000, 0x00); // 88-cycle bit period
+        cart.cpu_write(0x7000, 0x00); // start message 0
+        let mut peak = 0.0f32;
+        for _ in 0..200_000 {
+            cart.clock_cpu();
+            peak = peak.max(cart.audio_mix().abs());
+        }
+        assert!(peak > 0.001, "CVSD speech stayed silent (peak {peak})");
+        assert!(cart.audio_mix().is_finite());
     }
 
     #[test]
