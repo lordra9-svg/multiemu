@@ -2327,10 +2327,11 @@ mod tests {
                 continue;
             };
             let Ok(saved) = system.save_state() else {
-                // Mapper 446 wraps a trait object and reports this explicitly.
                 continue;
             };
-            system.load_state(&saved).expect("load");
+            system
+                .load_state(&saved)
+                .unwrap_or_else(|err| panic!("mapper {mapper} load error: {err}"));
             // The PPU keeps a cached CHR window, so a byte-for-byte re-save can
             // differ; survival of the load is the contract here. Functional
             // equality is covered by the common-mapper test above.

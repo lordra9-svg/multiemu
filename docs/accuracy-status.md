@@ -1708,9 +1708,9 @@ carry a ROM fingerprint, the mapper state and the CPU/PPU/APU/system state
 files are core-tagged (`<rom>.<core>.slotN.state`) so a state from another
 implementation cannot be loaded by accident.
 
-All 244 concrete mapper implementations serialize and restore; mapper 446
-(`Supervisor446`) wraps a trait object and reports an explicit unsupported
-state rather than silently producing a bad one. A state from a commercial
+All 245 mapper implementations serialize and restore, including the mapper
+446 supervisor, whose inner board is tagged and restored through the same
+contract. A state from a commercial
 MMC5 title is about 1.1 MB because mapper serialization currently includes the
 ROM copy; skipping immutable ROM in the state is a later size optimization.
 

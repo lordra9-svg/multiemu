@@ -575,8 +575,8 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 
 /// Serialization contract for a mapper's mutable state.
 ///
-/// Implemented for every concrete board (generated below); boards that wrap a
-/// trait object (`Supervisor446`) report an explicit unsupported error.
+/// Implemented for every concrete board (generated below). The mapper 446
+/// supervisor tags and delegates to its inner board.
 pub trait MapperState {
     /// Appends this mapper's state.
     fn save_state(&self, out: &mut Vec<u8>) -> Result<(), String>;
@@ -7654,6 +7654,28 @@ impl Mapper for Inner446 {
 /// submapper (SKROM for 0, H3001 for 3), so the supervisor delegates to that
 /// core and layers `$5001-$5006` outer-bank, mask, flag and CHR-RAM
 /// registers around it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Supervisor446State {
+    prg: Vec<u8>,
+    chr: Vec<u8>,
+    prg_ram: Vec<u8>,
+    ram: Vec<u8>,
+    header: Header,
+    aux: Chr512,
+    submapper: u8,
+    select: u8,
+    outer_lo: u8,
+    outer_hi: u8,
+    mask: u8,
+    flags: u8,
+    protect: bool,
+    outer_chr: u8,
+    latch6000: bool,
+    inner_mapper: u16,
+    inner_bytes: Vec<u8>,
+}
+
+/// Mindkids SMD172B supervisor (mapper 446).
 #[derive(Debug)]
 pub struct Supervisor446 {
     prg: Vec<u8>,
@@ -7673,6 +7695,8 @@ pub struct Supervisor446 {
     outer_chr: u8,
     /// Fused 189 maps its 32 KiB bank latch at `$6000`.
     latch6000: bool,
+    /// Mapper number of the current inner board (state tag).
+    inner_mapper: u16,
 }
 
 impl Supervisor446 {
@@ -7708,6 +7732,7 @@ impl Supervisor446 {
             protect: false,
             outer_chr: 0,
             latch6000: false,
+            inner_mapper: if header.submapper >= 3 { 65 } else { 1 },
         }
     }
 
@@ -7857,6 +7882,7 @@ impl Supervisor446 {
             _ => direct(id),
         };
         self.latch6000 = mapper == Some(189);
+        self.inner_mapper = mapper.unwrap_or(1);
         self.inner = match mapper {
             // MMC1-family selections need the supervisor's outer/mask
             // applied to the MMC1 page, which the Skrom path does.
@@ -16783,7 +16809,7 @@ impl A12Irq {
 
 /// Shared CHR state for mapper 512: 128 KiB CHR-ROM plus a switchable 8 KiB
 /// CHR-RAM window used by the Chinese-character mode.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Chr512 {
     rom: Vec<u8>,
     ram: Vec<u8>,
@@ -41962,19 +41988,90 @@ mapper_states!(
 );
 
 impl MapperState for Supervisor446 {
-    fn save_state(&self, _out: &mut Vec<u8>) -> Result<(), String> {
-        Err("mapper 446 save states are not implemented".into())
+    fn save_state(&self, out: &mut Vec<u8>) -> Result<(), String> {
+        let mut inner_bytes = Vec::new();
+        match &self.inner {
+            Inner446::Skrom(inner) => inner.save_state(&mut inner_bytes)?,
+            Inner446::Board(inner) => inner.save_state(&mut inner_bytes)?,
+        }
+        let state = Supervisor446State {
+            prg: self.prg.clone(),
+            chr: self.chr.clone(),
+            prg_ram: self.prg_ram.clone(),
+            ram: self.ram.clone(),
+            header: self.header,
+            aux: (*self.aux.borrow()).clone(),
+            submapper: self.submapper,
+            select: self.select,
+            outer_lo: self.outer_lo,
+            outer_hi: self.outer_hi,
+            mask: self.mask,
+            flags: self.flags,
+            protect: self.protect,
+            outer_chr: self.outer_chr,
+            latch6000: self.latch6000,
+            inner_mapper: self.inner_mapper,
+            inner_bytes,
+        };
+        let bytes = bincode::serialize(&state).map_err(|err| err.to_string())?;
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&bytes);
+        Ok(())
     }
-    fn load_state(&mut self, _data: &[u8]) -> Result<(), String> {
-        Err("mapper 446 save states are not implemented".into())
+
+    fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
+        let state: Supervisor446State =
+            bincode::deserialize(data).map_err(|err| err.to_string())?;
+        self.prg = state.prg;
+        self.chr = state.chr;
+        self.prg_ram = state.prg_ram;
+        self.ram = state.ram;
+        self.header = state.header;
+        self.aux = Rc::new(RefCell::new(state.aux));
+        self.submapper = state.submapper;
+        self.select = state.select;
+        self.outer_lo = state.outer_lo;
+        self.outer_hi = state.outer_hi;
+        self.mask = state.mask;
+        self.flags = state.flags;
+        self.protect = state.protect;
+        self.outer_chr = state.outer_chr;
+        self.latch6000 = state.latch6000;
+        self.inner_mapper = state.inner_mapper;
+        self.inner = if state.inner_mapper == 1 {
+            Inner446::Skrom(Mmc1::new(
+                self.prg.clone(),
+                Vec::new(),
+                self.prg_ram.clone(),
+                self.header,
+            ))
+        } else {
+            Inner446::Board(
+                self.make_board(state.inner_mapper)
+                    .ok_or("mapper 446 state selects an unsupported inner board")?,
+            )
+        };
+        let inner_data = state
+            .inner_bytes
+            .get(4..)
+            .ok_or("truncated mapper 446 inner state")?;
+        self.inner.load_state(inner_data)?;
+        self.sync_chr();
+        Ok(())
     }
 }
 
 impl MapperState for Inner446 {
-    fn save_state(&self, _out: &mut Vec<u8>) -> Result<(), String> {
-        Err("mapper 446 save states are not implemented".into())
+    fn save_state(&self, out: &mut Vec<u8>) -> Result<(), String> {
+        match self {
+            Self::Skrom(inner) => inner.save_state(out),
+            Self::Board(inner) => inner.save_state(out),
+        }
     }
-    fn load_state(&mut self, _data: &[u8]) -> Result<(), String> {
-        Err("mapper 446 save states are not implemented".into())
+    fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
+        match self {
+            Self::Skrom(inner) => inner.load_state(data),
+            Self::Board(inner) => inner.load_state(data),
+        }
     }
 }
