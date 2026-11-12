@@ -16,9 +16,10 @@ system-agnostic interface, and the reference-parity core is
 ## Status
 
 The shell is at **M1**. It boots a NES ROM headlessly or in a desktop window,
-runs frames at 60 fps, produces RGBA video and f32 audio, accepts keyboard
-input, round-trips save states, and verifies determinism. Audio playback and
-gamepad support are the next product increments.
+runs frames at 60 fps, produces RGBA video and f32 audio, plays audio through
+cpal, accepts keyboard and SDL3 gamepad input, records WAV/PNG/GIF, round-trips
+save states, and verifies determinism. The same UI is being prepared for
+Windows, macOS, Linux, iOS and Android (explicit touch controls are included).
 
 The accuracy core is at milestone **A5** (accuracy gate):
 
@@ -87,6 +88,8 @@ UX: a game library as the home screen, menu bar, toolbar, player viewport,
 status bar, and one settings window with a category rail. See
 `docs/frontend.md` for the blueprint and the GPL boundary.
 
+Gamepads are hot-plugged through SDL3; bindings, auto-fire, dead zone,
+per-game profiles and keyboard shortcuts are configurable in Settings.
 Keyboard: arrows = D-pad, X = A, Z = B, Enter = Start, Shift = Select,
 Space = pause, F5/F8 = save/load state, F11 = fullscreen.
 

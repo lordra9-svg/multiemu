@@ -18,3 +18,10 @@ unko-rom = { path = "../unko-rom" }
 eframe = "0.31.1"
 egui = "0.31.1"
 rfd = "0.17.2"
+sdl3 = { version = "0.22.1", features = ["build-from-source"] }
+cpal = "0.18.2"
+rtrb = "0.3.2"
+hound = "3.5.1"
+png = "0.18.0"
+gif = "0.14.2"
+directories = "6.0.0"

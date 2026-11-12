@@ -8,7 +8,9 @@ use unko_core::{
     Core, InputState, LoadOptions, PortDevice, Region, Registry, SystemId, VideoFilter,
 };
 
+use crate::audio::AudioOutput;
 use crate::library::GameEntry;
+use crate::recording::{RecordModes, Recorder};
 use crate::settings::Settings;
 
 /// Maximum frames emulated in one UI update. When the desktop stalls the
@@ -90,6 +92,9 @@ pub struct Player {
     pacer: FramePacer,
     next_repaint: Duration,
     sample_rate: f32,
+    gamepad: [InputState; 4],
+    touch: InputState,
+    recorder: Recorder,
 }
 
 impl Player {
@@ -146,11 +151,14 @@ impl Player {
             pacer: FramePacer::new(Instant::now()),
             next_repaint: Duration::ZERO,
             sample_rate: settings.sample_rate,
+            gamepad: [InputState::empty(); 4],
+            touch: InputState::empty(),
+            recorder: Recorder::default(),
         })
     }
 
     /// Advances emulation (bounded catch-up) and refreshes the texture.
-    pub fn step(&mut self, ctx: &egui::Context) {
+    pub fn step(&mut self, ctx: &egui::Context, mut audio: Option<&mut AudioOutput>) {
         self.apply_input(ctx);
         if self.paused {
             self.next_repaint = Duration::from_millis(250);
@@ -172,6 +180,17 @@ impl Player {
             }
             self.frames += 1;
             done += 1;
+            if let Some(out) = audio.as_deref_mut() {
+                out.push(self.core.audio().samples);
+            }
+            self.recorder.push_audio(self.core.audio().samples);
+            let video = self.core.video();
+            self.recorder.push_frame(
+                video.data,
+                video.width as usize,
+                video.height as usize,
+                video.stride,
+            );
         }
 
         if done > 0 {
@@ -198,7 +217,7 @@ impl Player {
     }
 
     fn apply_input(&mut self, ctx: &egui::Context) {
-        let input = ctx.input(|i| {
+        let keyboard = ctx.input(|i| {
             let mut state = InputState::empty();
             state = state.with(InputState::UP, i.key_down(egui::Key::ArrowUp));
             state = state.with(InputState::DOWN, i.key_down(egui::Key::ArrowDown));
@@ -210,7 +229,24 @@ impl Player {
             state = state.with(InputState::SELECT, i.modifiers.shift);
             state
         });
-        self.core.set_input(0, input);
+        let first =
+            InputState::from_bits(keyboard.bits() | self.gamepad[0].bits() | self.touch.bits());
+        self.core.set_input(0, first);
+        for port in 1..4 {
+            self.core.set_input(port, self.gamepad[port]);
+        }
+    }
+
+    /// Sets the gamepad state for one controller port.
+    pub fn set_gamepad(&mut self, port: usize, state: InputState) {
+        if let Some(slot) = self.gamepad.get_mut(port) {
+            *slot = state;
+        }
+    }
+
+    /// Sets the touch overlay state (merged into port 1).
+    pub fn set_touch(&mut self, state: InputState) {
+        self.touch = state;
     }
 
     fn upload(&mut self, ctx: &egui::Context) {
@@ -400,6 +436,7 @@ impl Player {
 
     /// Persists SRAM and a state, then drops the machine.
     pub fn shutdown(&mut self) {
+        self.recorder.stop();
         let sram = self.core.sram().to_vec();
         if !sram.is_empty() {
             let _ = fs::write(self.save_dir.join(format!("{}.sav", self.stem)), sram);
@@ -408,6 +445,41 @@ impl Player {
         if self.core.save_state(&mut state).is_ok() {
             let _ = fs::write(self.state_path(self.slot), state);
         }
+    }
+
+    /// Starts a capture in the save folder's `recordings` directory.
+    pub fn start_recording(&mut self, modes: RecordModes) -> Result<String, String> {
+        if !modes.any() {
+            return Err("no recording mode selected".into());
+        }
+        let (width, height) = self.resolution();
+        self.recorder.start(
+            modes,
+            &self.save_dir.join("recordings"),
+            self.sample_rate,
+            width,
+            height,
+            60.0,
+        )
+    }
+
+    /// Stops the active capture.
+    pub fn stop_recording(&mut self) -> bool {
+        let active = self.recorder.is_active();
+        self.recorder.stop();
+        active
+    }
+
+    /// Frames captured so far.
+    #[must_use]
+    pub fn recording_frames(&self) -> u64 {
+        self.recorder.frames()
+    }
+
+    /// Whether a capture is running.
+    #[must_use]
+    pub fn recording(&self) -> bool {
+        self.recorder.is_active()
     }
 
     /// Path for a state slot.

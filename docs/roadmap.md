@@ -108,8 +108,10 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] Native file dialog (`rfd`) for the ROM/save folders, integer scaling and
       a nearest/linear texture-filter option; the composite/NTSC display filter
       is offered through the core (`VideoFilter::Composite`).
-- [ ] Gamepad support (gilrs/SDL), rebinding UI, hot-plug, four players.
-- [ ] Audio device via `cpal`; ring buffer; sample-rate resampling; underrun policy.
+- [x] Gamepad support (SDL3), rebinding UI, hot-plug, four players.
+- [x] Audio device via `cpal`; ring buffer; sample-rate resampling; underrun policy.
+- [x] Local capture: WAV, PNG sequence and GIF.
+- [x] Input display, touch controller, auto-fire and per-game gamepad profiles.
 - [x] SRAM persistence keyed by ROM content hash; save-state slots with
       thumbnails.
   - [x] Core exposes `sram()` / `load_sram`; the app writes `saves/<stem>.sav`.

@@ -100,8 +100,16 @@ Key interaction rules worth keeping:
   durations prevent fractional-frame drift, so a long session cannot start
   emitting double frames. Pausing drops the UI cadence to 4 Hz, and an
   unpause/load resets the clock so the first frame is presented immediately.
-- Input: keyboard map is arrows + Z/X/A/S + Enter/Shift, shown in Controllers.
+- Input: keyboard map is arrows + Z/X/A/S + Enter/Shift; SDL3 gamepads are
+  hot-plugged, remappable, support analog-stick D-pad input, auto-fire and
+  per-game profiles. The input display and an on-screen touch controller are
+  available for mobile and can be previewed on desktop.
+- Audio: cpal output with a lock-free ring buffer, device-rate resampling,
+  volume/mute and underrun statistics. The stream is opened once at startup
+  and fed one mono sample per emulated frame.
+- Recording: WAV audio, numbered PNG frames and animated GIF, written under
+  `saves/recordings`; all encoders are pure Rust and work on every target.
 - State/SRAM: `saves/<rom>.state` and `saves/<rom>.sav`; the core never touches
   the filesystem.
-- Audio playback is the next frontend increment; the core already produces f32
-  samples and the Audio page carries the settings.
+- Audio playback is active through cpal; the Audio page reports the actual
+  device rate, channel count, underruns and dropped samples.

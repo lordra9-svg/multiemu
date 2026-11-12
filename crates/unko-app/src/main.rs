@@ -4,8 +4,11 @@
 #![warn(missing_docs)]
 
 mod app;
+mod audio;
+mod gamepad;
 mod library;
 mod player;
+mod recording;
 mod settings;
 
 use std::path::PathBuf;

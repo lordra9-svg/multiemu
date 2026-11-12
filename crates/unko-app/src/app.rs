@@ -5,15 +5,21 @@
 //! category rail. See `docs/frontend.md` for the mapping and the licensing
 //! boundary (Dolphin is GPL; this is an original MIT implementation of the UX).
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, Vec2};
 use unko_core::{Region, VideoFilter};
 
+use crate::audio::AudioOutput;
+use crate::gamepad::{
+    button_name, mapping_from_text, mapping_to_text, Gamepads, NesButton, PadMapping,
+};
 use crate::library::{self, GameEntry};
 use crate::player::{self, Player};
-use crate::settings::{Settings, Theme};
+use crate::recording::RecordModes;
+use crate::settings::{HotkeyAction, Settings, Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -70,6 +76,13 @@ pub struct App {
     status_until: Option<Instant>,
     pending_play: Option<GameEntry>,
     window_title: String,
+    gamepads: Option<Gamepads>,
+    input_states: [unko_core::InputState; 4],
+    gamepad_error: Option<String>,
+    audio: Option<AudioOutput>,
+    audio_error: Option<String>,
+    hotkey_capture: Option<HotkeyAction>,
+    active_mapping: PadMapping,
 }
 
 /// Command-line overrides.
@@ -100,6 +113,19 @@ impl App {
             format!("{} ROMs in {}", library.len(), settings.rom_dir.display())
         };
         let pending_play = args.rom.as_deref().and_then(resolve_first);
+        let (gamepads, gamepad_error) = match Gamepads::new() {
+            Ok(gamepads) => (Some(gamepads), None),
+            Err(err) => (None, Some(err)),
+        };
+        let (audio, audio_error) = match AudioOutput::new(settings.sample_rate) {
+            Ok(audio) => (Some(audio), None),
+            Err(err) => (None, Some(err)),
+        };
+        if let Some(audio) = &audio {
+            audio.set_volume(settings.volume);
+            audio.set_muted(settings.muted);
+        }
+        let active_mapping = settings.pad_mapping;
         let mut app = Self {
             settings,
             library,
@@ -116,6 +142,13 @@ impl App {
             status_until: None,
             pending_play,
             window_title: "Unko".into(),
+            gamepads,
+            input_states: [unko_core::InputState::empty(); 4],
+            gamepad_error,
+            audio,
+            audio_error,
+            hotkey_capture: None,
+            active_mapping,
         };
         app.status_until = Some(Instant::now() + Duration::from_secs(6));
         if args.settings {
@@ -161,8 +194,23 @@ impl App {
     }
 
     fn start_entry(&mut self, entry: GameEntry) {
-        match Player::start(&entry, &self.settings) {
+        let mut settings = self.settings.clone();
+        if let Some(audio) = &self.audio {
+            settings.sample_rate = audio.sample_rate();
+        }
+        match Player::start(&entry, &settings) {
             Ok(player) => {
+                self.active_mapping = if self.settings.per_game_input {
+                    let path = self
+                        .settings
+                        .save_dir
+                        .join(format!("{}.pad", entry.save_stem()));
+                    fs::read_to_string(path)
+                        .map(|text| mapping_from_text(&text))
+                        .unwrap_or(self.settings.pad_mapping)
+                } else {
+                    self.settings.pad_mapping
+                };
                 self.set_status(format!("Loaded {} — {}", entry.title, player.core_label()));
                 self.player = Some(player);
             }
@@ -170,7 +218,23 @@ impl App {
         }
     }
 
+    fn start_recording(&mut self, modes: RecordModes) {
+        let Some(player) = &mut self.player else {
+            return;
+        };
+        match player.start_recording(modes) {
+            Ok(paths) => self.set_status(format!("Recording to {paths}")),
+            Err(err) => self.set_status(format!("Recording failed: {err}")),
+        }
+    }
+
     fn stop_game(&mut self) {
+        if self.settings.per_game_input {
+            if let Some(player) = &self.player {
+                let path = self.settings.save_dir.join(format!("{}.pad", player.stem));
+                let _ = fs::write(path, mapping_to_text(self.active_mapping));
+            }
+        }
         if let Some(mut player) = self.player.take() {
             player.shutdown();
             self.set_status(format!("Stopped {}", player.title));
@@ -180,7 +244,18 @@ impl App {
     fn apply_settings(&mut self, ctx: &egui::Context, old: &Settings) {
         if let Some(player) = &mut self.player {
             player.set_filter(self.settings.filter);
-            player.set_sample_rate(self.settings.sample_rate);
+            let rate = self
+                .audio
+                .as_ref()
+                .map_or(self.settings.sample_rate, |audio| audio.sample_rate());
+            player.set_sample_rate(rate);
+        }
+        if self.settings.pad_mapping != old.pad_mapping {
+            self.active_mapping = self.settings.pad_mapping;
+        }
+        if let Some(audio) = &self.audio {
+            audio.set_volume(self.settings.volume);
+            audio.set_muted(self.settings.muted);
         }
         apply_theme(ctx, self.settings.theme);
         if self.settings.rom_dir != old.rom_dir {
@@ -190,15 +265,39 @@ impl App {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        if let Some(action) = self.hotkey_capture {
+            let key = ctx.input(|i| {
+                i.events.iter().find_map(|event| {
+                    if let egui::Event::Key {
+                        key, pressed: true, ..
+                    } = event
+                    {
+                        Some(*key)
+                    } else {
+                        None
+                    }
+                })
+            });
+            if let Some(key) = key {
+                self.settings.hotkeys.set(action, key);
+                self.hotkey_capture = None;
+                let _ = self.settings.save(&Settings::path());
+                self.set_status(format!("{} → {}", action.label(), key.name()));
+            }
+            return;
+        }
         if ctx.wants_keyboard_input() {
             return;
         }
-        let (save, load, fullscreen, pause) = ctx.input(|i| {
+        let keys = self.settings.hotkeys;
+        let (save, load, fullscreen, pause, screenshot, reset) = ctx.input(|i| {
             (
-                i.key_pressed(egui::Key::F5),
-                i.key_pressed(egui::Key::F8),
-                i.key_pressed(egui::Key::F11),
-                i.key_pressed(egui::Key::Space),
+                i.key_pressed(keys.save),
+                i.key_pressed(keys.load),
+                i.key_pressed(keys.fullscreen),
+                i.key_pressed(keys.pause),
+                i.key_pressed(keys.screenshot),
+                i.key_pressed(keys.reset),
             )
         });
         if fullscreen {
@@ -214,6 +313,12 @@ impl App {
             }
             if pause {
                 player.toggle_pause();
+            }
+            if screenshot {
+                player.screenshot();
+            }
+            if reset {
+                player.reset();
             }
         }
     }
@@ -389,6 +494,73 @@ impl App {
                         }
                     }
                     ui.separator();
+                    ui.menu_button("Recording", |ui| {
+                        let has_game = self.player.is_some();
+                        let recording = self.player.as_ref().is_some_and(|p| p.recording());
+                        if ui
+                            .add_enabled(has_game && !recording, egui::Button::new("Record WAV"))
+                            .clicked()
+                        {
+                            self.start_recording(RecordModes {
+                                wav: true,
+                                png: false,
+                                gif: false,
+                            });
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                has_game && !recording,
+                                egui::Button::new("Record PNG frames"),
+                            )
+                            .clicked()
+                        {
+                            self.start_recording(RecordModes {
+                                wav: false,
+                                png: true,
+                                gif: false,
+                            });
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(has_game && !recording, egui::Button::new("Record GIF"))
+                            .clicked()
+                        {
+                            self.start_recording(RecordModes {
+                                wav: false,
+                                png: false,
+                                gif: true,
+                            });
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                has_game && !recording,
+                                egui::Button::new("Record WAV + PNG + GIF"),
+                            )
+                            .clicked()
+                        {
+                            self.start_recording(RecordModes {
+                                wav: true,
+                                png: true,
+                                gif: true,
+                            });
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui
+                            .add_enabled(recording, egui::Button::new("Stop recording"))
+                            .clicked()
+                        {
+                            if let Some(player) = &mut self.player {
+                                let frames = player.recording_frames();
+                                player.stop_recording();
+                                self.set_status(format!("Recording stopped after {frames} frames"));
+                            }
+                            ui.close_menu();
+                        }
+                    });
+                    ui.separator();
                     if ui.button("Settings...").clicked() {
                         self.settings_open = true;
                         ui.close_menu();
@@ -501,6 +673,13 @@ impl App {
                         ui.label(format!("slot {}", player.slot));
                         ui.separator();
                         ui.label(format!("{:.0} Hz", player.sample_rate()));
+                        if player.recording() {
+                            ui.separator();
+                            ui.label(
+                                RichText::new(format!("REC {}", player.recording_frames()))
+                                    .color(Color32::from_rgb(0xE0, 0x60, 0x60)),
+                            );
+                        }
                     }
                     None => {
                         ui.label("No game loaded");
@@ -777,6 +956,9 @@ impl App {
             .selected
             .and_then(|index| self.library.get(index))
             .cloned();
+        let mut gamepads = self.gamepads.take();
+        let gamepad_error = self.gamepad_error.clone();
+        let mut hotkey_capture = self.hotkey_capture.take();
 
         egui::Window::new("Settings")
             .open(&mut open)
@@ -800,8 +982,19 @@ impl App {
                             Tab::General => general_tab(ui, &mut settings, ctx),
                             Tab::Interface => interface_tab(ui, &mut settings),
                             Tab::Graphics => graphics_tab(ui, &mut settings),
-                            Tab::Audio => audio_tab(ui, &mut settings),
-                            Tab::Controllers => controllers_tab(ui, &mut settings),
+                            Tab::Audio => audio_tab(
+                                ui,
+                                &mut settings,
+                                self.audio.as_ref(),
+                                self.audio_error.as_deref(),
+                            ),
+                            Tab::Controllers => controllers_tab(
+                                ui,
+                                &mut settings,
+                                gamepads.as_mut(),
+                                gamepad_error.as_deref(),
+                                &mut hotkey_capture,
+                            ),
                             Tab::Paths => paths_tab(ui, &mut settings),
                             Tab::Nes => nes_tab(ui, &mut settings, selected_entry.as_ref()),
                             Tab::Advanced => advanced_tab(ui),
@@ -810,6 +1003,8 @@ impl App {
                 });
             });
 
+        self.gamepads = gamepads;
+        self.hotkey_capture = hotkey_capture;
         self.settings_open = open;
         self.tab = tab;
         if settings != self.settings {
@@ -890,8 +1085,24 @@ impl eframe::App for App {
             self.status_bar(ctx);
         }
 
+        if self.settings.gamepad_enabled {
+            if let Some(gamepads) = &mut self.gamepads {
+                self.input_states = gamepads.poll(
+                    self.active_mapping,
+                    self.settings.pad_deadzone,
+                    self.settings.turbo_enabled,
+                    self.settings.turbo_hz,
+                );
+            }
+        } else {
+            self.input_states = [unko_core::InputState::empty(); 4];
+        }
+        let audio = self.audio.as_mut();
         if let Some(player) = &mut self.player {
-            player.step(ctx);
+            for (port, state) in self.input_states.iter().enumerate() {
+                player.set_gamepad(port, *state);
+            }
+            player.step(ctx, audio);
         }
 
         if let Some(player) = &mut self.player {
@@ -903,13 +1114,19 @@ impl eframe::App for App {
                     unko_core::PortDevice::Gamepad
                 },
             );
-            viewport(
+            let touch = viewport(
                 ctx,
                 player,
-                self.settings.integer_scale,
-                self.settings.linear_filter,
-                self.settings.zapper_port2,
+                &ViewportOptions {
+                    integer_scale: self.settings.integer_scale,
+                    linear_filter: self.settings.linear_filter,
+                    zapper: self.settings.zapper_port2,
+                    input: self.input_states,
+                    show_input: self.settings.show_input_display,
+                    show_touch: self.settings.show_touch_controls,
+                },
             );
+            player.set_touch(touch);
         } else {
             self.library(ctx);
         }
@@ -992,13 +1209,29 @@ fn fit_aspect(available: Rect, aspect: f32) -> Rect {
     Rect::from_center_size(available.center(), Vec2::new(width, height))
 }
 
-fn viewport(
-    ctx: &egui::Context,
-    player: &mut Player,
+struct ViewportOptions {
     integer_scale: bool,
     linear_filter: bool,
     zapper: bool,
-) {
+    input: [unko_core::InputState; 4],
+    show_input: bool,
+    show_touch: bool,
+}
+
+fn viewport(
+    ctx: &egui::Context,
+    player: &mut Player,
+    options: &ViewportOptions,
+) -> unko_core::InputState {
+    let ViewportOptions {
+        integer_scale,
+        linear_filter,
+        zapper,
+        input,
+        show_input,
+        show_touch,
+    } = *options;
+    let mut touch = unko_core::InputState::empty();
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.fill(Color32::BLACK))
         .show(ctx, |ui| {
@@ -1076,7 +1309,113 @@ fn viewport(
                     Color32::from_gray(200),
                 );
             }
+
+            if show_input {
+                let text = format!(
+                    "P1 {}   P2 {}",
+                    input_label(input[0]),
+                    input_label(input[1])
+                );
+                let galley =
+                    ui.painter()
+                        .layout_no_wrap(text, FontId::monospace(13.0), Color32::WHITE);
+                let pos = target.left_top() + Vec2::new(10.0, 10.0);
+                let bg = Rect::from_min_size(pos, galley.size() + Vec2::new(12.0, 8.0));
+                ui.painter().rect_filled(
+                    bg,
+                    egui::CornerRadius::same(4),
+                    Color32::from_black_alpha(160),
+                );
+                ui.painter()
+                    .galley(pos + Vec2::new(6.0, 4.0), galley, Color32::WHITE);
+            }
+
+            if show_touch {
+                let pointer = ctx.pointer_latest_pos();
+                let down = ctx.input(|i| i.pointer.primary_down());
+                for (button, rect, label) in touch_buttons(target) {
+                    let pressed = down && pointer.is_some_and(|pos| rect.contains(pos));
+                    if pressed {
+                        touch = touch.with(button, true);
+                    }
+                    ui.painter().rect_filled(
+                        rect,
+                        egui::CornerRadius::same(8),
+                        if pressed {
+                            Color32::from_white_alpha(150)
+                        } else {
+                            Color32::from_white_alpha(55)
+                        },
+                    );
+                    ui.painter().text(
+                        rect.center(),
+                        Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                }
+            }
         });
+    touch
+}
+
+fn input_label(state: unko_core::InputState) -> String {
+    let mut parts = Vec::new();
+    for (bit, label) in [
+        (unko_core::InputState::UP, "↑"),
+        (unko_core::InputState::DOWN, "↓"),
+        (unko_core::InputState::LEFT, "←"),
+        (unko_core::InputState::RIGHT, "→"),
+        (unko_core::InputState::A, "A"),
+        (unko_core::InputState::B, "B"),
+        (unko_core::InputState::START, "Start"),
+        (unko_core::InputState::SELECT, "Select"),
+    ] {
+        if state.bits() & bit != 0 {
+            parts.push(label);
+        }
+    }
+    if parts.is_empty() {
+        "—".into()
+    } else {
+        parts.join(" ")
+    }
+}
+
+fn touch_buttons(target: Rect) -> [(u16, Rect, &'static str); 8] {
+    let cell = (target.width().min(target.height()) * 0.075).clamp(28.0, 54.0);
+    let pad = target.left_bottom() + Vec2::new(cell * 1.4, -cell * 2.8);
+    let dpad = |dx: f32, dy: f32| {
+        Rect::from_center_size(pad + Vec2::new(dx * cell, dy * cell), Vec2::splat(cell))
+    };
+    let right = target.right_bottom();
+    let a = Rect::from_center_size(
+        right + Vec2::new(-cell * 2.2, -cell * 2.4),
+        Vec2::splat(cell),
+    );
+    let b = Rect::from_center_size(
+        right + Vec2::new(-cell * 3.5, -cell * 1.5),
+        Vec2::splat(cell),
+    );
+    let start = Rect::from_center_size(
+        right + Vec2::new(-cell * 1.0, -cell * 0.5),
+        Vec2::new(cell * 1.6, cell * 0.7),
+    );
+    let select = Rect::from_center_size(
+        right + Vec2::new(-cell * 3.0, -cell * 0.5),
+        Vec2::new(cell * 1.6, cell * 0.7),
+    );
+    [
+        (unko_core::InputState::UP, dpad(0.0, -1.0), "↑"),
+        (unko_core::InputState::DOWN, dpad(0.0, 1.0), "↓"),
+        (unko_core::InputState::LEFT, dpad(-1.0, 0.0), "←"),
+        (unko_core::InputState::RIGHT, dpad(1.0, 0.0), "→"),
+        (unko_core::InputState::A, a, "A"),
+        (unko_core::InputState::B, b, "B"),
+        (unko_core::InputState::START, start, "Start"),
+        (unko_core::InputState::SELECT, select, "Select"),
+    ]
 }
 
 fn general_tab(ui: &mut egui::Ui, settings: &mut Settings, _ctx: &egui::Context) {
@@ -1132,7 +1471,12 @@ fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     );
 }
 
-fn audio_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+fn audio_tab(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    audio: Option<&AudioOutput>,
+    audio_error: Option<&str>,
+) {
     ui.heading("Audio");
     ui.add_space(8.0);
     egui::ComboBox::from_label("Sample rate")
@@ -1145,17 +1489,182 @@ fn audio_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add(egui::Slider::new(&mut settings.volume, 0.0..=1.0).text("Volume"));
     ui.checkbox(&mut settings.muted, "Mute");
     ui.add_space(8.0);
-    ui.label(
-        RichText::new(
-            "The core produces f32 samples today; device playback is the next frontend step.",
-        )
-        .weak()
-        .small(),
-    );
+    match audio {
+        Some(audio) => {
+            ui.label(
+                RichText::new(format!(
+                    "Output: {:.0} Hz, {} channel(s), {} underruns, {} dropped samples",
+                    audio.sample_rate(),
+                    audio.channels(),
+                    audio.underruns(),
+                    audio.dropped()
+                ))
+                .weak()
+                .small(),
+            );
+            ui.label(
+                RichText::new(
+                    "If the device does not support the selected rate, the device rate is used and the core resamples.",
+                )
+                .weak()
+                .small(),
+            );
+        }
+        None => {
+            ui.colored_label(
+                Color32::from_rgb(0xE0, 0x80, 0x60),
+                format!(
+                    "No audio output: {}",
+                    audio_error.unwrap_or("device unavailable")
+                ),
+            );
+        }
+    }
 }
 
-fn controllers_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+fn controllers_tab(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    gamepads: Option<&mut Gamepads>,
+    gamepad_error: Option<&str>,
+    hotkey_capture: &mut Option<HotkeyAction>,
+) {
     ui.heading("Controllers");
+    ui.add_space(8.0);
+    if let Some(err) = gamepad_error {
+        ui.colored_label(
+            Color32::from_rgb(0xE0, 0x80, 0x60),
+            format!("SDL3 gamepad unavailable: {err}"),
+        );
+        ui.label(RichText::new("Keyboard input is still available.").weak());
+        ui.add_space(8.0);
+    }
+    ui.checkbox(&mut settings.gamepad_enabled, "Enable SDL3 gamepads");
+    if let Some(gamepads) = gamepads {
+        if let Some((button, pad)) = gamepads.take_captured() {
+            settings.pad_mapping.set(button, pad);
+        }
+        let names = gamepads.names();
+        let connected = gamepads.connected();
+        ui.add_space(6.0);
+        if connected == 0 {
+            ui.label(
+                RichText::new("No gamepads detected. Connect one and it will appear here.").weak(),
+            );
+        } else {
+            egui::Grid::new("gamepad-list")
+                .num_columns(2)
+                .spacing([18.0, 4.0])
+                .show(ui, |ui| {
+                    for (index, name) in names.iter().enumerate() {
+                        if let Some(name) = name {
+                            ui.label(format!("Player {}", index + 1));
+                            ui.label(RichText::new(name).strong());
+                            ui.end_row();
+                        }
+                    }
+                });
+        }
+        ui.add_space(8.0);
+        ui.label("NES port 1 (keyboard)");
+        ui.add_space(4.0);
+        egui::Grid::new("controller-map")
+            .num_columns(3)
+            .spacing([18.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("NES");
+                ui.label("Keyboard");
+                ui.label("Gamepad");
+                ui.end_row();
+                for (button, key) in [
+                    ("D-pad", "Arrow keys"),
+                    ("A", "X"),
+                    ("B", "Z"),
+                    ("Start", "Enter"),
+                    ("Select", "Shift"),
+                ] {
+                    ui.label(button);
+                    ui.label(RichText::new(key).strong());
+                    ui.label("");
+                    ui.end_row();
+                }
+            });
+        ui.add_space(8.0);
+        ui.label("Gamepad bindings");
+        egui::Grid::new("gamepad-bindings")
+            .num_columns(3)
+            .spacing([18.0, 6.0])
+            .show(ui, |ui| {
+                for button in NesButton::ALL {
+                    ui.label(button.label());
+                    ui.label(RichText::new(button_name(settings.pad_mapping.get(button))).strong());
+                    let label = if gamepads.capturing() {
+                        "Press a button..."
+                    } else {
+                        "Bind"
+                    };
+                    if ui
+                        .add_enabled(!gamepads.capturing(), egui::Button::new(label))
+                        .clicked()
+                    {
+                        gamepads.begin_capture(button);
+                    }
+                    ui.end_row();
+                }
+            });
+        ui.horizontal(|ui| {
+            if ui.button("Reset gamepad bindings").clicked() {
+                settings.pad_mapping.reset();
+            }
+            ui.label(
+                RichText::new("Bindings apply immediately; analog sticks also act as the D-pad.")
+                    .weak()
+                    .small(),
+            );
+        });
+        ui.add(egui::Slider::new(&mut settings.pad_deadzone, 0..=32_000).text("Stick dead zone"));
+        ui.add_space(8.0);
+        ui.checkbox(&mut settings.turbo_enabled, "Auto-fire A/B on gamepad");
+        if settings.turbo_enabled {
+            ui.add(egui::Slider::new(&mut settings.turbo_hz, 2.0..=30.0).text("Auto-fire Hz"));
+        }
+    }
+    ui.add_space(8.0);
+    ui.label("Keyboard shortcuts");
+    egui::Grid::new("hotkeys")
+        .num_columns(3)
+        .spacing([18.0, 6.0])
+        .show(ui, |ui| {
+            for action in HotkeyAction::ALL {
+                ui.label(action.label());
+                ui.label(RichText::new(settings.hotkeys.get(action).name()).strong());
+                let label = if *hotkey_capture == Some(action) {
+                    "Press a key..."
+                } else {
+                    "Set"
+                };
+                if ui.button(label).clicked() {
+                    *hotkey_capture = Some(action);
+                }
+                ui.end_row();
+            }
+        });
+    if ui.button("Reset shortcuts").clicked() {
+        settings.hotkeys = crate::settings::Hotkeys::default();
+    }
+    ui.add_space(8.0);
+    ui.checkbox(
+        &mut settings.per_game_input,
+        "Keep gamepad bindings per game",
+    );
+    ui.checkbox(
+        &mut settings.show_input_display,
+        "Show input display overlay",
+    );
+    ui.checkbox(
+        &mut settings.show_touch_controls,
+        "Show on-screen touch controller",
+    );
     ui.add_space(8.0);
     ui.checkbox(
         &mut settings.zapper_port2,
@@ -1167,31 +1676,6 @@ fn controllers_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         )
         .weak()
         .small(),
-    );
-    ui.add_space(8.0);
-    ui.label("NES port 1 (keyboard)");
-    ui.add_space(4.0);
-    egui::Grid::new("controller-map")
-        .num_columns(2)
-        .spacing([24.0, 6.0])
-        .show(ui, |ui| {
-            for (button, key) in [
-                ("D-pad", "Arrow keys"),
-                ("A", "X"),
-                ("B", "Z"),
-                ("Start", "Enter"),
-                ("Select", "Shift"),
-            ] {
-                ui.label(button);
-                ui.label(RichText::new(key).strong());
-                ui.end_row();
-            }
-        });
-    ui.add_space(8.0);
-    ui.label(
-        RichText::new("Gamepad mapping and rebinding are planned for the next milestone.")
-            .weak()
-            .small(),
     );
 }
 
