@@ -72,8 +72,8 @@ The main effort is now the reference-parity accuracy core. Details in
       NTSC-only odd-frame skip), with unit-test verification. An **NSF/NSFE
       parser and player** builds a synthetic NROM image with a player stub
       (INIT once, PLAY from the NMI) and is covered by header, image-layout and
-      init/play unit tests. Remaining: FDS/VS, expansion audio, gamepad and the
-      peripheral rebinding UI, and validation against real PAL/NSF content.
+      init/play unit tests. Remaining: FDS/VS, expansion audio, additional
+      peripherals and validation against real PAL/NSF content.
 - [ ] **A7** differential harness, hardware captures, performance pass.
       Performance pass started: headless accuracy core ~535 -> ~640 fps
       (max-of-7, 2400 frames) via the sprite-list pixel loop, table-driven
@@ -129,7 +129,7 @@ The main effort is now the reference-parity accuracy core. Details in
 ## M2 — NES depth
 
 - [x] Zapper (core sensor + app mouse aiming/trigger).
-- [ ] Other input devices (gamepad, four-score, family BASIC keyboard).
+- [ ] Other input devices (four-score, family BASIC keyboard, Arkanoid paddle, Power Pad).
 - [ ] FDS (BIOS supplied by the user, never bundled), Vs. System.
 - [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation
       pending).
