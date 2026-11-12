@@ -328,7 +328,7 @@ Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
 A 120-frame pass renders 6,489 with 584 blank; a 240-frame pass renders
-6,419 with 654 blank. The 240 total is slightly lower because several
+6,420 with 653 blank. The 240 total is slightly lower because several
 hundred games sit on a fade or transition frame at that exact sample;
 across both passes every loaded image renders except mapper 308 (NTDEC
 Batman), which waits for Start. The 120-frame pass attributes 2,556 of the 20-frame blanks to

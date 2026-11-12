@@ -34,7 +34,7 @@ The main effort is now the reference-parity accuracy core. Details in
       protected NROM and the 212/235/286 multicarts, `System` bus, Core ABI
       adapter and a `corpus` runner. Full-library audit: 7,073/7,101 load,
       3,896 rendering, 0 unsupported, 0 panics; 120/240-frame passes
-      6,489/6,419 rendering, with only input-gated 308 never drawing headless;
+      6,489/6,420 rendering, with only input-gated 308 never drawing headless;
       136/193/197 render 7/7,
       159/165 8/8, 172 4/6, 195 8/8 (Tiexue needs Start on its title screen)
       (`docs/mapper-audit.md`).

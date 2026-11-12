@@ -32612,13 +32612,12 @@ impl Mapper for Jf13 {
             0x6000..=0x6FFF => self.bank = value,
             0x7000..=0x7FFF => {
                 self.speech = value;
+                // The bootleg's `$7000` handler only starts a message; the
+                // UPD7756 boards' stop bit is a different submapper.
                 if value & 0x10 == 0 {
                     self.chip.reset();
                     self.sample = 0;
                     self.playing = !self.misc.is_empty() && self.submapper == 1;
-                }
-                if value & 0x20 != 0 {
-                    self.playing = false;
                 }
             }
             _ => {}
