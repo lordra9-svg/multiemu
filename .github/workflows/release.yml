@@ -8,7 +8,19 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
+  licenses:
+    name: License audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Audit dependency licenses
+        run: python3 scripts/license_audit.py
+
   linux:
     name: Linux x86_64
     runs-on: ubuntu-latest
@@ -29,23 +41,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build
-        run: cargo build --release -p unko-cli -p unko-app
+      - name: Pin the build epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
-      - name: Package
+      - name: Build
+        env:
+          RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/build/unko
+        run: cargo build --release --locked -p unko-cli -p unko-app
+
+      - name: Package tarball
+        run: python3 scripts/package.py --platform linux --arch x86_64
+
+      - name: Build AppImage
+        run: scripts/appimage.sh dist
+
+      - name: Checksums
         run: |
-          name="unko-linux-x86_64"
-          mkdir -p "dist/$name"
-          cp target/release/unko target/release/unko-app "dist/$name/"
-          cp LICENSE NOTICE README.md "dist/$name/"
-          cp -r licenses "dist/$name/"
-          tar -C dist -czf "$name.tar.gz" "$name"
-          echo "ARCHIVE=$name.tar.gz" >> "$GITHUB_ENV"
+          cd dist
+          sha256sum unko-linux-x86_64.tar.gz unko-*.AppImage > SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
           name: unko-linux-x86_64
-          path: unko-linux-x86_64.tar.gz
+          path: dist/
 
   windows:
     name: Windows x86_64
@@ -55,24 +73,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      - name: Pin the build epoch
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
       - name: Build
-        run: cargo build --release -p unko-cli -p unko-app
+        run: cargo build --release --locked -p unko-cli -p unko-app
 
       - name: Package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist\unko-windows-x86_64 | Out-Null
-          Copy-Item target\release\unko.exe dist\unko-windows-x86_64\
-          Copy-Item target\release\unko-app.exe dist\unko-windows-x86_64\
-          Copy-Item LICENSE, NOTICE, README.md dist\unko-windows-x86_64\
-          Copy-Item licenses dist\unko-windows-x86_64\licenses -Recurse
-          Compress-Archive -Path dist\unko-windows-x86_64 -DestinationPath unko-windows-x86_64.zip
-          "ARCHIVE=unko-windows-x86_64.zip" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+        run: python scripts/package.py --platform windows --arch x86_64
 
       - uses: actions/upload-artifact@v4
         with:
           name: unko-windows-x86_64
-          path: unko-windows-x86_64.zip
+          path: dist/
 
   macos:
     name: macOS arm64
@@ -84,50 +98,68 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build
-        run: cargo build --release -p unko-cli -p unko-app
+      - name: Pin the build epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
-      - name: Bundle
-        run: |
-          app="Unko.app/Contents"
-          mkdir -p "$app/MacOS" "$app/Resources"
-          cp target/release/unko-app "$app/MacOS/unko-app"
-          cp target/release/unko unko-cli
-          cat > "$app/Info.plist" <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleDevelopmentRegion</key><string>en</string>
-              <key>CFBundleDisplayName</key><string>Unko</string>
-              <key>CFBundleExecutable</key><string>unko-app</string>
-              <key>CFBundleIdentifier</key><string>dev.unko.app</string>
-              <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-              <key>CFBundleName</key><string>Unko</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>0.1.0</string>
-              <key>CFBundleVersion</key><string>1</string>
-              <key>LSMinimumSystemVersion</key><string>11.0</string>
-              <key>NSHighResolutionCapable</key><true/>
-          </dict>
-          </plist>
-          PLIST
-          name="unko-macos-arm64"
-          mkdir -p "dist/$name"
-          cp -R Unko.app unko-cli LICENSE NOTICE README.md "dist/$name/"
-          cp -r licenses "dist/$name/"
-          ditto -c -k --sequesterRsrc --keepParent "dist/$name" "$name.zip"
-          echo "ARCHIVE=$name.zip" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --release --locked -p unko-cli -p unko-app
+
+      - name: Build the app icon
+        run: scripts/make_icns.sh
+
+      - name: Package
+        run: python3 scripts/package.py --platform macos --arch arm64
 
       - uses: actions/upload-artifact@v4
         with:
           name: unko-macos-arm64
-          path: unko-macos-arm64.zip
+          path: dist/
+
+  reproducible:
+    name: Reproducible build check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libx11-dev libxext-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxfixes-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libdecor-0-dev libudev-dev libxss-dev libxtst-dev \
+            libgbm-dev libdrm-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libpulse-dev ninja-build
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build in the checkout
+        run: |
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export RUSTFLAGS="--remap-path-prefix=$PWD=/build/unko --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/build/cargo"
+          cargo build --release --locked -p unko-cli -p unko-app
+          python3 scripts/package.py --platform linux --arch x86_64 --out /tmp/dist-a
+
+      - name: Build in a second checkout
+        run: |
+          mkdir -p /tmp/unko-b
+          tar -c --exclude=target --exclude=.git . | tar -x -C /tmp/unko-b
+          cd /tmp/unko-b
+          export SOURCE_DATE_EPOCH=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
+          export RUSTFLAGS="--remap-path-prefix=/tmp/unko-b=/build/unko --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/build/cargo"
+          cargo build --release --locked -p unko-cli -p unko-app
+          python3 scripts/package.py --platform linux --arch x86_64 --out /tmp/dist-b
+          cd "$GITHUB_WORKSPACE"
+          cmp target/release/unko /tmp/unko-b/target/release/unko
+          cmp target/release/unko-app /tmp/unko-b/target/release/unko-app
+          cmp /tmp/dist-a/unko-linux-x86_64.tar.gz /tmp/dist-b/unko-linux-x86_64.tar.gz
+          echo "binaries and archives are byte-identical across checkouts"
 
   publish:
     name: Attach release artifacts
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, windows, macos]
+    needs: [licenses, linux, windows, macos, reproducible]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

@@ -38,11 +38,47 @@ cargo build --release -p unko-cli -p unko-app
 ./target/release/unko-app --roms /path/to/roms
 ```
 
-The release workflow (`.github/workflows/release.yml`) builds the three desktop
-archives on tag pushes (`v*`) and attaches them to the GitHub release. The
-macOS job bundles `Unko.app` with a minimal `Info.plist`; it is unsigned, so
-Gatekeeper needs a one-time `xattr -dr com.apple.quarantine Unko.app` or an
-`codesign`/notarisation step in a fork.
+The release workflow (`.github/workflows/release.yml`) builds the desktop
+packages on tag pushes (`v*`) and attaches them to the GitHub release:
+
+| File | Contents |
+|---|---|
+| `unko-linux-x86_64.tar.gz` | `unko`, `unko-app`, desktop entry, icon, docs and licenses |
+| `unko-<version>-x86_64.AppImage` | self-contained Linux app (linuxdeploy + appimagetool) |
+| `unko-windows-x86_64.zip` | `unko.exe`, `unko-app.exe`, docs and licenses |
+| `unko-macos-arm64.zip` | `Unko.app` (icon + `Info.plist`), `unko` CLI, docs and licenses |
+| `SHA256SUMS` | checksums for the downloadable files |
+
+The macOS bundle is unsigned, so Gatekeeper needs a one-time
+`xattr -dr com.apple.quarantine Unko.app` or a `codesign`/notarisation step in
+a fork.
+
+### Reproducible artifacts
+
+`scripts/package.py` builds archives with sorted entries, zeroed ownership and
+`SOURCE_DATE_EPOCH` timestamps, so the same commit and toolchain produce
+byte-identical `tar.gz`/zip files. The CI `Reproducible build check` job builds
+the workspace twice in different directories with
+`--remap-path-prefix=<path>=/build/unko`, then compares the binaries and the
+Linux archive byte for byte. The AppImage is built for convenience but is not
+claimed to be reproducible (appimagetool embeds timestamps).
+
+### License audit
+
+`scripts/license_audit.py` evaluates every dependency's SPDX expression from
+`cargo metadata` against the allowlist in the script (MIT, Apache-2.0,
+BSD-2/3, ISC, Zlib, Unicode-3.0, BSL-1.0, MPL-2.0, CC0, Unlicense, 0BSD,
+OFL/Ubuntu font, bzip2 and the LLVM exception). It runs in CI and fails on any
+unlisted or missing license.
+
+### Per-platform build steps
+
+```sh
+scripts/package.py --platform linux --arch x86_64
+scripts/package.py --platform windows --arch x86_64
+scripts/package.py --platform macos --arch arm64   # run scripts/make_icns.sh first
+scripts/appimage.sh dist                            # Linux AppImage
+```
 
 ## iOS
 
@@ -91,7 +127,11 @@ code is needed). Signing uses the standard Gradle release configuration.
 
 - Native gamepad support on iOS/Android.
 - Mobile ROM import and share-sheet handling.
-- App icons and launch screens (both scaffolds use platform defaults).
+- Flatpak packaging: the AppImage and tarball are the current Linux packages;
+  a Flatpak manifest would need the crates vendored (`flatpak-cargo-generator`)
+  for an offline build.
+- Android/iOS app icons and launch screens (both scaffolds use platform
+  defaults; the desktop icon is in `assets/`).
 - Notarisation/signing credentials for macOS, iOS and Play Store releases.
 - Physical-device validation: none of the mobile packages has been run on a
   device in this repository's environment.

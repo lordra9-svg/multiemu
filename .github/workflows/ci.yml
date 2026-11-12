@@ -85,6 +85,15 @@ jobs:
       - name: Check app shell
         run: cargo check -p unko-app --target ${{ matrix.target }}
 
+  licenses:
+    name: dependency license audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Audit licenses
+        run: python3 scripts/license_audit.py
+
   performance:
     name: headless performance budget
     runs-on: ubuntu-latest

@@ -97,9 +97,12 @@ The same shell builds for iOS and Android: the crate is a library
 entry points, a touch overlay, and platform settings/save paths. Packaging
 scaffolds live in `crates/unko-app/android` (Gradle + `cargo-ndk`,
 `NativeActivity`) and `crates/unko-app/ios` (XcodeGen + static library, wgpu
-renderer). Desktop release archives are produced on tag pushes by
-`.github/workflows/release.yml`. Requirements and current gaps are in
-[`docs/platforms.md`](docs/platforms.md).
+renderer). Desktop packages are produced on tag pushes by
+`.github/workflows/release.yml`: a Linux tarball and AppImage, a Windows zip
+and a macOS `Unko.app` zip, each with `SHA256SUMS`. Archives are byte
+reproducible from the same commit and toolchain, and CI audits dependency
+licenses and verifies the reproducibility claim. Requirements and current
+gaps are in [`docs/platforms.md`](docs/platforms.md).
 Keyboard: arrows = D-pad, X = A, Z = B, Enter = Start, Shift = Select,
 Space = pause, F5/F8 = save/load state, F9/F10 = step frame/instruction,
 F11 = fullscreen.

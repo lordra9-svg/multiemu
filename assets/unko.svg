@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#252a38"/>
+      <stop offset="1" stop-color="#12141c"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="200" fill="url(#bg)"/>
+  
+  <!-- controller body -->
+  <rect x="196" y="372" width="632" height="280" rx="64" fill="#d9d5c7"/>
+  <rect x="196" y="372" width="632" height="280" rx="64" fill="none" stroke="#b6b1a2" stroke-width="10"/>
+  <!-- d-pad -->
+  <rect x="288" y="470" width="150" height="52" rx="10" fill="#2b2f3a"/>
+  <rect x="337" y="421" width="52" height="150" rx="10" fill="#2b2f3a"/>
+  <!-- select / start -->
+  <rect x="486" y="520" width="64" height="20" rx="10" fill="#8f8a7c"/>
+  <rect x="566" y="520" width="64" height="20" rx="10" fill="#8f8a7c"/>
+  <!-- face buttons -->
+  <circle cx="662" cy="520" r="42" fill="#c0392b"/>
+  <circle cx="742" cy="470" r="42" fill="#2e64d8"/>
+  <!-- screen hint -->
+  <rect x="236" y="300" width="552" height="40" rx="14" fill="#0c0d12"/>
+  <rect x="252" y="310" width="120" height="20" rx="8" fill="#59d8a0"/>
+  <rect x="388" y="310" width="380" height="20" rx="8" fill="#2b2f3a"/>
+</svg>

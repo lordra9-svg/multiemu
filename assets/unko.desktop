@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Unko
+Comment=NES emulator shell
+Exec=unko-app %f
+Icon=unko
+Terminal=false
+Categories=Game;Emulator;
+Keywords=nes;emulator;famicom;
