@@ -128,8 +128,9 @@ fn palette_variant(palette: Palette) -> PaletteVariant {
 fn composite_filter(frame: &mut [u8], crt: bool) {
     let width = WIDTH as usize;
     let height = HEIGHT as usize;
-    let mut row = vec![0u8; width * 4];
-    let mut bloom = vec![0u8; width * 4];
+    // Fixed-size scratch keeps the per-frame filter allocation-free.
+    let mut row = [0u8; WIDTH as usize * 4];
+    let mut bloom = [0u8; WIDTH as usize * 4];
     for y in 0..height {
         let start = y * STRIDE;
         row.copy_from_slice(&frame[start..start + STRIDE]);
@@ -144,13 +145,13 @@ fn composite_filter(frame: &mut [u8], crt: bool) {
                 }
             }
         }
+        let source: &[u8] = if crt { &bloom } else { &row };
         for x in 0..width {
             let left = x.saturating_sub(1);
             let right = (x + 1).min(width - 1);
             let scanline = if y & 1 == 0 { 1.0 } else { 0.82 };
             let scanline = if crt { scanline * 0.94 } else { scanline };
             for channel in 0..3 {
-                let source = if crt { &bloom } else { &row };
                 let blended = (f32::from(source[left * 4 + channel])
                     + 2.0 * f32::from(source[x * 4 + channel])
                     + f32::from(source[right * 4 + channel]))
