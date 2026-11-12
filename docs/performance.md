@@ -18,12 +18,43 @@ Measured on the development machine with the release profile:
 
 A non-rendering NROM runs faster still, so the synthetic benchmark enables
 rendering: it exercises the CPU bus, the PPU background pipeline and the APU.
+`bench` prints the per-frame budget directly (`ms/frame`); the figures above
+correspond to about 1.22 ms/frame for the synthetic NROM and 2.4-2.8 ms/frame
+for the commercial boards.
 
 Recent changes: the mapper clock/IRQ/CPU-address callbacks are skipped for
 boards that do not implement them, expansion-audio mixing is skipped for boards
 without audio hardware, and the PPU CHR cache is refreshed only when a mapper
 write invalidates it. Pausing on focus loss drops the shell to 4 Hz when the
 window is inactive.
+
+## Worst-case load
+
+Frames per second on an idle machine are not the target. The machine has 8
+physical cores (16 threads), so the benchmark thread competes with a hog on
+every physical core in the measurements below:
+
+| Workload | Idle | 8 `yes` hogs | 15 `yes` hogs |
+|---|---|---|---|
+| Synthetic NROM, 3,000 frames | 813-819 fps | 419-719 fps | 375 fps |
+| MMC2 title, 2,000 frames | 375-416 fps | 277 fps | - |
+
+The spread with 8 hogs is SMT placement: when a hog shares the benchmark
+thread's physical core, throughput roughly halves (819 -> 419 fps); when the
+hogs land on other cores it barely moves. Even the fully oversubscribed case
+stays at 6.2x real-time, so the budget is expressed against that floor:
+**synthetic >= 300 fps and the MMC2 title >= 250 fps under contention**.
+
+## Idle shell
+
+The shell requests a repaint every 250 ms (4 Hz) when no game is loaded and
+when a game is paused, and the audio stream is paused rather than fed silence.
+Under the headless software renderer (llvmpipe, which is what CI and the
+capture hosts use) the library window measures 6.4% of one core at that rate,
+i.e. about 16 ms of rendering per repaint; this is render-bound, not
+busy-waiting, and the core itself does no work while paused. The efficiency
+budget is therefore: **no core CPU when paused or unfocused, <= 4 UI repaints
+per second, and the per-frame ceilings above**.
 
 ## CI budget
 

@@ -1008,10 +1008,11 @@ fn run() -> Result<(), Box<dyn Error>> {
             let secs = start.elapsed().as_secs_f64();
             let fps = f64::from(frames) / secs;
             println!(
-                "{frames} frames, {:.3}s, {:.1} fps, {:.2}x realtime",
+                "{frames} frames, {:.3}s, {:.1} fps, {:.2}x realtime, {:.3} ms/frame",
                 secs,
                 fps,
                 fps / 60.0988,
+                1000.0 * secs / f64::from(frames),
             );
             if let Some(minimum) = min_fps {
                 if fps < minimum {
