@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use crate::debug::{ApuState, CpuState, DebugSpace, Disassembly, PpuState};
 use crate::input::InputState;
 use crate::types::{
     AudioBuffer, CoreInfo, FrameBuffer, FrameStats, LoadOptions, PortDevice, VideoFilter,
@@ -97,5 +98,56 @@ pub trait Core {
     /// Replaces battery-backed cartridge RAM.
     fn load_sram(&mut self, _sram: &[u8]) -> Result<(), CoreError> {
         Ok(())
+    }
+
+    /// Whether this core implements the debugger surface.
+    ///
+    /// Frontends check this once instead of probing every accessor.
+    fn debug_supported(&self) -> bool {
+        false
+    }
+
+    /// Snapshot of the CPU registers, or `None` when unsupported.
+    fn debug_cpu(&self) -> Option<CpuState> {
+        None
+    }
+
+    /// Snapshot of the PPU timing and registers, or `None` when unsupported.
+    fn debug_ppu(&self) -> Option<PpuState> {
+        None
+    }
+
+    /// Snapshot of the APU channels, or `None` when unsupported.
+    fn debug_apu(&self) -> Option<ApuState> {
+        None
+    }
+
+    /// Side-effect-free read of one byte in `space`.
+    fn debug_peek(&self, _space: DebugSpace, _address: u16) -> Option<u8> {
+        None
+    }
+
+    /// Writes one byte in `space`; returns whether the write was accepted.
+    ///
+    /// ROM and register ranges should be rejected rather than silently
+    /// ignored, so the frontend can report read-only addresses.
+    fn debug_poke(&mut self, _space: DebugSpace, _address: u16, _value: u8) -> bool {
+        false
+    }
+
+    /// Executes exactly one CPU instruction, advancing the rest of the
+    /// machine with it. Returns the cycles consumed.
+    fn debug_step(&mut self) -> Result<u32, CoreError> {
+        Err(CoreError::Unsupported("debug single-step".into()))
+    }
+
+    /// Decodes the instruction at a CPU address without executing it.
+    fn debug_disassemble(&self, _address: u16) -> Option<Disassembly> {
+        None
+    }
+
+    /// The 32 palette entries as RGB, after emphasis, for the debugger.
+    fn debug_palette(&self) -> Option<[[u8; 3]; 32]> {
+        None
     }
 }

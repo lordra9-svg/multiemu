@@ -13,6 +13,7 @@ use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, Vec2};
 use unko_core::{Region, VideoFilter};
 
 use crate::audio::AudioOutput;
+use crate::debugger::{self, Action};
 use crate::gamepad::{
     button_name, mapping_from_text, mapping_to_text, Gamepads, NesButton, PadMapping,
 };
@@ -84,6 +85,7 @@ pub struct App {
     hotkey_capture: Option<HotkeyAction>,
     active_mapping: PadMapping,
     paused_by_focus: bool,
+    debug_on_start: bool,
 }
 
 /// Command-line overrides.
@@ -95,6 +97,8 @@ pub struct Args {
     pub rom: Option<PathBuf>,
     /// Open the settings window on launch.
     pub settings: bool,
+    /// Open the debugger window when a game starts.
+    pub debug: bool,
 }
 
 impl App {
@@ -151,6 +155,7 @@ impl App {
             hotkey_capture: None,
             active_mapping,
             paused_by_focus: false,
+            debug_on_start: args.debug,
         };
         app.status_until = Some(Instant::now() + Duration::from_secs(6));
         if args.settings {
@@ -158,6 +163,11 @@ impl App {
         }
         if let Some(entry) = app.pending_play.take() {
             app.start_entry(entry);
+        }
+        if let Some(player) = &mut app.player {
+            if args.debug {
+                player.debug.open = true;
+            }
         }
         app
     }
@@ -215,6 +225,11 @@ impl App {
                 };
                 self.set_status(format!("Loaded {} — {}", entry.title, player.core_label()));
                 self.player = Some(player);
+                if self.debug_on_start {
+                    if let Some(player) = &mut self.player {
+                        player.debug.open = true;
+                    }
+                }
             }
             Err(err) => self.set_status(format!("Load failed: {err}")),
         }
@@ -288,6 +303,20 @@ impl App {
                 self.set_status(format!("{} → {}", action.label(), key.name()));
             }
             return;
+        }
+        let (step_instruction, step_frame) = ctx.input(|input| {
+            (
+                input.key_pressed(egui::Key::F10),
+                input.key_pressed(egui::Key::F9),
+            )
+        });
+        if let Some(player) = &mut self.player {
+            if step_instruction {
+                player.apply_debug(Action::StepInstruction, ctx);
+            }
+            if step_frame {
+                player.apply_debug(Action::StepFrame, ctx);
+            }
         }
         if ctx.wants_keyboard_input() {
             return;
@@ -438,6 +467,34 @@ impl App {
                             });
                         }
                     });
+                    ui.separator();
+                    if ui
+                        .add_enabled(has_game, egui::Button::new("Debugger..."))
+                        .clicked()
+                    {
+                        if let Some(player) = &mut self.player {
+                            player.debug.open = true;
+                        }
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(has_game, egui::Button::new("Step instruction (F10)"))
+                        .clicked()
+                    {
+                        if let Some(player) = &mut self.player {
+                            player.apply_debug(Action::StepInstruction, ctx);
+                        }
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(has_game, egui::Button::new("Step frame (F9)"))
+                        .clicked()
+                    {
+                        if let Some(player) = &mut self.player {
+                            player.apply_debug(Action::StepFrame, ctx);
+                        }
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui
                         .add_enabled(has_game, egui::Button::new("Screenshot"))
@@ -1153,6 +1210,14 @@ impl eframe::App for App {
                 },
             );
             player.set_touch(touch);
+            if player.debug.open {
+                if let Some(view) = player.debug_view() {
+                    let actions = debugger::window(&mut player.debug, ctx, &view);
+                    for action in actions {
+                        player.apply_debug(action, ctx);
+                    }
+                }
+            }
         } else {
             self.library(ctx);
         }

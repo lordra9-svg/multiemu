@@ -130,6 +130,13 @@ platform toolchains.
 - Audio: cpal output with a lock-free ring buffer, device-rate resampling,
   volume/mute and underrun statistics. The stream is opened once at startup
   and fed one mono sample per emulated frame.
+- Debugger: a separate window with CPU registers/flags and a live
+  disassembly, PPU timing, palette and OAM views, APU channel meters, a
+  hex viewer/editor for CPU/PPU/OAM memory and PC breakpoints. Stepping works
+  while paused (F10 = one instruction, F9 = one frame); with breakpoints set,
+  the player executes one instruction at a time and pauses before the
+  breakpoint instruction. Open it from `Emulation -> Debugger` or with
+  `--debug`.
 - Recording: WAV audio, numbered PNG frames and animated GIF, written under
   `saves/recordings`; all encoders are pure Rust and work on every target.
 - State/SRAM: `saves/<rom>.<core>.slotN.state` and `saves/<rom>.sav`; the core

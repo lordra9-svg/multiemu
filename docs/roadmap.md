@@ -141,9 +141,12 @@ The main effort is now the reference-parity accuracy core. Details in
       pending).
 - [ ] Expansion audio levels and per-channel mixing.
 - [ ] NTSC/composite filter pass on the GPU, palette selection.
-- [ ] Debugger: memory viewer and breakpoint UI. Headless pieces exist:
+- [x] Debugger: memory viewer and breakpoint UI. Headless pieces exist:
       `unko run --dump-ppu` prints per-frame CPU/PPU/APU state and
-      `--break <hex>` stops on a PC.
+      `--break <hex>` stops on a PC. The desktop shell adds a Debugger window
+      with CPU registers/disassembly, PPU timing/palette/OAM, APU meters,
+      CPU/PPU/OAM hex view + write, and PC breakpoints; F10/F9 step one
+      instruction/frame while paused.
 - [ ] Game Genie / cheat engine.
 
 ## M3 — prove "multi"

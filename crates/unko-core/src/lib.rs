@@ -20,11 +20,13 @@
 #![warn(missing_docs)]
 
 pub mod core;
+pub mod debug;
 pub mod input;
 pub mod registry;
 pub mod types;
 
 pub use core::{Core, CoreError};
+pub use debug::{ApuState, CpuState, DebugSpace, Disassembly, PpuState};
 pub use input::{Button, InputState};
 pub use registry::{CoreRegistration, Factory, Registry};
 pub use types::{

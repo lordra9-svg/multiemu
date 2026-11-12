@@ -5,10 +5,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use unko_core::{
-    Core, InputState, LoadOptions, PortDevice, Region, Registry, SystemId, VideoFilter,
+    Core, DebugSpace, InputState, LoadOptions, PortDevice, Region, Registry, SystemId, VideoFilter,
 };
 
 use crate::audio::AudioOutput;
+use crate::debugger::{Action, DebugView, Debugger};
 use crate::library::GameEntry;
 use crate::recording::{RecordModes, Recorder};
 use crate::settings::Settings;
@@ -97,6 +98,8 @@ pub struct Player {
     gamepad: [InputState; 4],
     touch: InputState,
     recorder: Recorder,
+    /// Debugger window state and breakpoints.
+    pub debug: Debugger,
 }
 
 impl Player {
@@ -158,6 +161,7 @@ impl Player {
             gamepad: [InputState::empty(); 4],
             touch: InputState::empty(),
             recorder: Recorder::default(),
+            debug: Debugger::default(),
         })
     }
 
@@ -176,11 +180,29 @@ impl Player {
 
         let mut done = 0;
         while done < ran {
-            if let Err(err) = self.core.run_frame() {
-                self.message = err.to_string();
-                self.paused = true;
-                self.next_repaint = Duration::from_millis(250);
-                break;
+            if self.debug.breakpoints.is_empty() || !self.core.debug_supported() {
+                if let Err(err) = self.core.run_frame() {
+                    self.message = err.to_string();
+                    self.paused = true;
+                    self.next_repaint = Duration::from_millis(250);
+                    break;
+                }
+            } else {
+                match self.run_to_breakpoint() {
+                    Ok(Some(pc)) => {
+                        self.message = format!("Breakpoint at ${pc:04X}");
+                        self.paused = true;
+                        self.next_repaint = Duration::from_millis(250);
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        self.message = err;
+                        self.paused = true;
+                        self.next_repaint = Duration::from_millis(250);
+                        break;
+                    }
+                }
             }
             self.frames += 1;
             done += 1;
@@ -208,6 +230,145 @@ impl Player {
                 };
             }
         }
+    }
+
+    /// Steps instructions until the frame completes or a breakpoint is hit.
+    ///
+    /// Returns the program counter of the breakpoint, or `None` when the frame
+    /// completed normally. The first instruction after resuming is always
+    /// executed, so resuming from a breakpoint does not trap immediately.
+    fn run_to_breakpoint(&mut self) -> Result<Option<u16>, String> {
+        let start = self.core.debug_ppu().map(|ppu| ppu.frame);
+        for step in 0..2_000_000u32 {
+            if step > 0 {
+                if let Some(cpu) = self.core.debug_cpu() {
+                    if self.debug.breakpoints.contains(&cpu.pc) {
+                        return Ok(Some(cpu.pc));
+                    }
+                }
+            }
+            self.core.debug_step().map_err(|err| err.to_string())?;
+            if self.core.debug_ppu().map(|ppu| ppu.frame) != start {
+                return Ok(None);
+            }
+        }
+        Err("breakpoint run exceeded its instruction budget".into())
+    }
+
+    /// Assembles the debugger snapshot for the current machine state.
+    #[must_use]
+    pub fn debug_view(&self) -> Option<DebugView> {
+        let cpu = self.core.debug_cpu()?;
+        let ppu = self.core.debug_ppu()?;
+        let apu = self.core.debug_apu()?;
+        let palette = self.core.debug_palette()?;
+        let mut listing = Vec::with_capacity(8);
+        let mut address = cpu.pc;
+        for _ in 0..8 {
+            let Some(line) = self.core.debug_disassemble(address) else {
+                break;
+            };
+            let advance = line.bytes.len().max(1) as u16;
+            listing.push(line);
+            address = address.wrapping_add(advance);
+        }
+        let base = (self.debug.space.clamp(u32::from(self.debug.address)) as u16) & !0x0F;
+        let mut memory = Vec::with_capacity(128);
+        for offset in 0..128u16 {
+            memory.push(
+                self.core
+                    .debug_peek(self.debug.space, base.wrapping_add(offset))
+                    .unwrap_or(0),
+            );
+        }
+        let mut oam = Vec::with_capacity(256);
+        for offset in 0..256u16 {
+            oam.push(self.core.debug_peek(DebugSpace::Oam, offset).unwrap_or(0));
+        }
+        Some(DebugView {
+            cpu,
+            ppu,
+            apu,
+            listing,
+            memory,
+            memory_base: base,
+            palette,
+            oam,
+        })
+    }
+
+    /// Executes one CPU instruction and refreshes the displayed frame.
+    pub fn debug_step_instruction(&mut self, ctx: &egui::Context) -> Result<u32, String> {
+        let cycles = self.core.debug_step().map_err(|err| err.to_string())?;
+        self.upload(ctx);
+        Ok(cycles)
+    }
+
+    /// Executes one display frame while paused and refreshes the texture.
+    pub fn debug_step_frame(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        self.core.run_frame().map_err(|err| err.to_string())?;
+        self.frames += 1;
+        self.upload(ctx);
+        Ok(())
+    }
+
+    /// Applies one debugger action. `ctx` is used to refresh the video texture.
+    pub fn apply_debug(&mut self, action: Action, ctx: &egui::Context) {
+        match action {
+            Action::Pause => self.paused = true,
+            Action::Resume => {
+                self.paused = false;
+                self.pacer.reset();
+                self.next_repaint = Duration::ZERO;
+            }
+            Action::StepInstruction => {
+                self.paused = true;
+                match self.debug_step_instruction(ctx) {
+                    Ok(cycles) => self.debug.message = format!("stepped {cycles} cycles"),
+                    Err(err) => self.debug.message = err,
+                }
+            }
+            Action::StepFrame => {
+                self.paused = true;
+                match self.debug_step_frame(ctx) {
+                    Ok(()) => self.debug.message = "stepped one frame".into(),
+                    Err(err) => self.debug.message = err,
+                }
+            }
+            Action::Reset => {
+                self.reset();
+                self.debug.message = "reset".into();
+            }
+            Action::Poke(space, address, value) => {
+                if self.core.debug_poke(space, address, value) {
+                    self.debug.message = format!("wrote ${value:02X} to ${address:04X}");
+                } else {
+                    self.debug.message = format!("${address:04X} is read-only");
+                }
+            }
+            Action::ToggleBreakpoint(pc) => {
+                if let Some(index) = self.debug.breakpoints.iter().position(|value| *value == pc) {
+                    self.debug.breakpoints.remove(index);
+                    self.debug.message = format!("removed breakpoint ${pc:04X}");
+                } else {
+                    self.debug.breakpoints.push(pc);
+                    self.debug.message = format!("breakpoint set at ${pc:04X}");
+                }
+            }
+            Action::RemoveBreakpoint(pc) => {
+                self.debug.breakpoints.retain(|value| *value != pc);
+                self.debug.message = format!("removed breakpoint ${pc:04X}");
+            }
+            Action::ClearBreakpoints => {
+                self.debug.breakpoints.clear();
+                self.debug.message = "cleared breakpoints".into();
+            }
+            Action::ShowAddress(space, address) => {
+                self.debug.space = space;
+                self.debug.address = space.clamp(u32::from(address)) as u16;
+            }
+        }
+        ctx.request_repaint();
     }
 
     /// How long the UI should wait before the next emulation update.
@@ -559,6 +720,54 @@ mod tests {
         assert_eq!(wait, frame);
         let (ran, _, _) = pacer.advance(start + frame * 11);
         assert_eq!(ran, 1);
+    }
+
+    fn debug_nrom() -> Vec<u8> {
+        let prg = 16 * 1024;
+        let mut rom = vec![0u8; 16 + prg + 8 * 1024];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 1;
+        rom[5] = 1;
+        // LDA #$10 / STA $00 / JMP $8005
+        rom[16..21].copy_from_slice(&[0xA9, 0x10, 0x85, 0x00, 0x4C]);
+        rom[21..23].copy_from_slice(&[0x05, 0x80]);
+        let vector = 16 + prg - 4;
+        rom[vector] = 0x00;
+        rom[vector + 1] = 0x80;
+        rom
+    }
+
+    #[test]
+    fn breakpoints_stop_before_the_instruction() {
+        let dir = std::env::temp_dir().join("unko-app-debug-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("debug.nes");
+        std::fs::write(&path, debug_nrom()).expect("write rom");
+        let entry = crate::library::probe_path(&path)
+            .expect("probe")
+            .into_iter()
+            .next()
+            .expect("entry");
+        let settings = Settings {
+            save_dir: dir.join("saves"),
+            ..Settings::default()
+        };
+        let mut player = Player::start(&entry, &settings).expect("start");
+
+        let view = player.debug_view().expect("debug view");
+        assert_eq!(view.cpu.pc, 0x8000);
+        assert_eq!(
+            view.listing.first().map(|line| line.text.as_str()),
+            Some("LDA #$10")
+        );
+
+        player.debug.breakpoints.push(0x8002);
+        assert_eq!(player.run_to_breakpoint().expect("run"), Some(0x8002));
+        let view = player.debug_view().expect("debug view");
+        assert_eq!(view.cpu.pc, 0x8002);
+        assert_eq!(view.cpu.a, 0x10, "the LDA before the breakpoint executed");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

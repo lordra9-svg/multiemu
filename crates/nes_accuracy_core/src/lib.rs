@@ -34,9 +34,9 @@ pub use system::System;
 
 use crate::clock::Region as ClockRegion;
 use unko_core::{
-    Accuracy, AudioBuffer, Core, CoreError, CoreInfo, CoreRegistration, Features, FrameBuffer,
-    FrameStats, InputState, LoadOptions, PixelFormat, PortDevice, Region as HostRegion, SystemId,
-    VideoFilter,
+    Accuracy, ApuState, AudioBuffer, Core, CoreError, CoreInfo, CoreRegistration, CpuState,
+    DebugSpace, Disassembly, Features, FrameBuffer, FrameStats, InputState, LoadOptions,
+    PixelFormat, PortDevice, PpuState, Region as HostRegion, SystemId, VideoFilter,
 };
 
 /// Stable id of this core implementation.
@@ -269,6 +269,85 @@ impl Core for AccuracyCore {
     fn sram(&mut self) -> &[u8] {
         self.system.as_ref().map_or(&[], System::sram)
     }
+
+    fn debug_supported(&self) -> bool {
+        self.system.is_some()
+    }
+
+    fn debug_cpu(&self) -> Option<CpuState> {
+        let system = self.system.as_ref()?;
+        let registers = &system.cpu.registers;
+        Some(CpuState {
+            a: registers.a,
+            x: registers.x,
+            y: registers.y,
+            sp: registers.sp,
+            p: registers.p.bits(),
+            pc: registers.pc,
+            cycles: system.cpu.cycles,
+        })
+    }
+
+    fn debug_ppu(&self) -> Option<PpuState> {
+        let ppu = &self.system.as_ref()?.ppu;
+        Some(PpuState {
+            frame: ppu.frames,
+            scanline: ppu.scanline,
+            dot: ppu.dot,
+            ctrl: ppu.ctrl,
+            mask: ppu.mask,
+            status: ppu.status,
+            v: ppu.v,
+            t: ppu.t,
+        })
+    }
+
+    fn debug_apu(&self) -> Option<ApuState> {
+        let apu = &self.system.as_ref()?.apu;
+        let channels = apu.channel_outputs();
+        let (step, cycle) = apu.frame_position();
+        Some(ApuState {
+            pulse1: channels[0],
+            pulse2: channels[1],
+            triangle: channels[2],
+            noise: channels[3],
+            dmc: channels[4],
+            mixed: apu.output,
+            frame_step: step as u8,
+            frame_cycle: cycle,
+        })
+    }
+
+    fn debug_peek(&self, space: DebugSpace, address: u16) -> Option<u8> {
+        Some(self.system.as_ref()?.debug_peek(space, address))
+    }
+
+    fn debug_poke(&mut self, space: DebugSpace, address: u16, value: u8) -> bool {
+        self.system
+            .as_mut()
+            .is_some_and(|system| system.debug_poke(space, address, value))
+    }
+
+    fn debug_step(&mut self) -> Result<u32, CoreError> {
+        let system = self
+            .system
+            .as_mut()
+            .ok_or_else(|| CoreError::Internal("no ROM loaded".into()))?;
+        Ok(system.step_instruction())
+    }
+
+    fn debug_palette(&self) -> Option<[[u8; 3]; 32]> {
+        Some(self.system.as_ref()?.ppu.debug_palette_rgb())
+    }
+
+    fn debug_disassemble(&self, address: u16) -> Option<Disassembly> {
+        let decoded = self.system.as_ref()?.debug_disassemble(address);
+        Some(Disassembly {
+            address,
+            bytes: decoded.bytes,
+            text: decoded.text,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -287,5 +366,53 @@ mod tests {
     fn rejects_missing_rom() {
         let mut core = AccuracyCore::new();
         assert!(core.load(b"not a rom", &LoadOptions::default()).is_err());
+    }
+
+    fn debug_nrom() -> Vec<u8> {
+        let prg = 16 * 1024;
+        let mut rom = vec![0u8; 16 + prg + 8 * 1024];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 1;
+        rom[5] = 1;
+        // LDA #$10 / STA $00 / JMP $8005
+        rom[16..21].copy_from_slice(&[0xA9, 0x10, 0x85, 0x00, 0x4C]);
+        rom[21..23].copy_from_slice(&[0x05, 0x80]);
+        let vector = 16 + prg - 4;
+        rom[vector] = 0x00;
+        rom[vector + 1] = 0x80;
+        rom
+    }
+
+    #[test]
+    fn debug_surface_steps_and_pokes() {
+        let mut core = AccuracyCore::new();
+        core.load(&debug_nrom(), &LoadOptions::default())
+            .expect("load");
+        assert!(core.debug_supported());
+
+        let cpu = core.debug_cpu().expect("cpu state");
+        assert_eq!(cpu.pc, 0x8000);
+        assert!(core.debug_ppu().is_some());
+        assert!(core.debug_apu().is_some());
+
+        let decoded = core.debug_disassemble(0x8000).expect("disassembly");
+        assert_eq!(decoded.text, "LDA #$10");
+        assert_eq!(decoded.bytes, vec![0xA9, 0x10]);
+
+        // RAM, PPU memory and OAM are writable; ROM and registers are not.
+        assert!(core.debug_poke(DebugSpace::Cpu, 0x0010, 0x5A));
+        assert_eq!(core.debug_peek(DebugSpace::Cpu, 0x0010), Some(0x5A));
+        assert!(!core.debug_poke(DebugSpace::Cpu, 0x8000, 0));
+        assert!(core.debug_poke(DebugSpace::Ppu, 0x3F00, 0x21));
+        assert_eq!(core.debug_peek(DebugSpace::Ppu, 0x3F00), Some(0x21));
+        assert!(core.debug_poke(DebugSpace::Oam, 0x04, 0xAB));
+        assert_eq!(core.debug_peek(DebugSpace::Oam, 0x04), Some(0xAB));
+
+        // One instruction: LDA #$10 leaves the accumulator set and PC at $8002.
+        let cycles = core.debug_step().expect("step");
+        assert!(cycles >= 2);
+        let cpu = core.debug_cpu().expect("cpu state");
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.a, 0x10);
     }
 }

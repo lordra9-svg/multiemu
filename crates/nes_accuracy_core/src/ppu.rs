@@ -1287,6 +1287,42 @@ impl Ppu {
         }
     }
 
+    /// The 32 palette entries as RGB, after emphasis, for debuggers.
+    #[must_use]
+    pub fn debug_palette_rgb(&self) -> [[u8; 3]; 32] {
+        self.palette_rgb
+    }
+
+    /// Side-effect-free PPU address-space read for debuggers.
+    #[must_use]
+    pub fn debug_peek(&self, address: u16) -> u8 {
+        let address = address & 0x3FFF;
+        if address >= 0x3F00 {
+            self.read_palette(address)
+        } else {
+            self.read_vram(address)
+        }
+    }
+
+    /// PPU address-space write for debuggers.
+    pub fn debug_poke(&mut self, address: u16, value: u8) {
+        self.write_vram(address & 0x3FFF, value);
+    }
+
+    /// Side-effect-free read of `$2000-$2007`.
+    #[must_use]
+    pub fn debug_register_peek(&self, index: u16) -> u8 {
+        match index & 7 {
+            0 => self.ctrl,
+            1 => self.mask,
+            2 => self.status,
+            3 => self.oam_addr,
+            4 => self.oam[usize::from(self.oam_addr)],
+            7 => self.read_buffer,
+            _ => 0,
+        }
+    }
+
     fn read_vram(&self, address: u16) -> u8 {
         if self.um6578 {
             return if (0x3F00..0x3F40).contains(&address) {

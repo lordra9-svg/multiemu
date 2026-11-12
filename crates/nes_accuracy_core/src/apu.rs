@@ -976,6 +976,20 @@ impl Apu {
 
     /// Reads `$4015` and clears the frame IRQ flag.
     pub fn read_status(&mut self) -> u8 {
+        let value = self.status_bits();
+        // The flag is actually cleared on the next GET cycle; reading $4015
+        // only requests the clear.
+        self.frame.delay_irq = true;
+        value
+    }
+
+    /// `$4015` value without the read side effect, for debuggers.
+    #[must_use]
+    pub fn status_peek(&self) -> u8 {
+        self.status_bits()
+    }
+
+    fn status_bits(&self) -> u8 {
         let mut value = 0;
         if self.pulse1.length > 0 {
             value |= 0x01;
@@ -998,9 +1012,6 @@ impl Apu {
         if self.dmc.irq {
             value |= 0x80;
         }
-        // The flag is actually cleared on the next GET cycle; reading $4015
-        // only requests the clear.
-        self.frame.delay_irq = true;
         value
     }
 

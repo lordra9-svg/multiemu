@@ -10,6 +10,7 @@ use crate::cart::{CartError, Cartridge, Mirroring};
 use crate::clock::Timing;
 use crate::cpu::Cpu;
 use crate::ppu::Ppu;
+use unko_core::DebugSpace;
 
 /// CPU clock in Hz (NTSC).
 pub const CPU_HZ: f64 = 1_789_773.0;
@@ -712,6 +713,67 @@ impl System {
     #[must_use]
     pub fn read_ram(&self, address: u16) -> u8 {
         self.peek(address)
+    }
+
+    /// Side-effect-free read for the debugger.
+    ///
+    /// CPU reads do not touch `$2002` latches, `$2007` buffers or controller
+    /// shift registers; PPU reads use the current `v`-independent address.
+    #[must_use]
+    pub fn debug_peek(&self, space: DebugSpace, address: u16) -> u8 {
+        match space {
+            DebugSpace::Cpu => match address {
+                0x0000..=0x1FFF => self.ram[usize::from(address) & 0x07FF],
+                0x2000..=0x3FFF => self.ppu.debug_register_peek(address & 7),
+                0x4015 => self.apu.status_peek(),
+                0x4016 | 0x4017 => 0,
+                0x4020..=0xFFFF => self.cart.cpu_read(address),
+                _ => 0,
+            },
+            DebugSpace::Ppu => self.ppu.debug_peek(address),
+            DebugSpace::Oam => self.ppu.oam[usize::from(address & 0xFF)],
+        }
+    }
+
+    /// Debugger write. Returns `false` for read-only addresses.
+    ///
+    /// Only RAM (`$0000-$1FFF`, `$6000-$7FFF`), PPU memory and OAM are
+    /// writable; registers and ROM are rejected so the frontend can report
+    /// them instead of silently discarding the edit.
+    pub fn debug_poke(&mut self, space: DebugSpace, address: u16, value: u8) -> bool {
+        match space {
+            DebugSpace::Cpu => match address {
+                0x0000..=0x1FFF => {
+                    self.ram[usize::from(address) & 0x07FF] = value;
+                    true
+                }
+                0x6000..=0x7FFF => {
+                    self.cart.cpu_write(address, value);
+                    true
+                }
+                _ => false,
+            },
+            DebugSpace::Ppu => {
+                if address < 0x2000 && !self.cart.chr_is_ram() {
+                    return false;
+                }
+                self.ppu.debug_poke(address, value);
+                true
+            }
+            DebugSpace::Oam => {
+                self.ppu.oam[usize::from(address & 0xFF)] = value;
+                true
+            }
+        }
+    }
+
+    /// Decodes the instruction at a CPU address without executing it.
+    #[must_use]
+    pub fn debug_disassemble(&self, address: u16) -> crate::cpu::DecodedInstruction {
+        let opcode = self.debug_peek(DebugSpace::Cpu, address);
+        let lo = self.debug_peek(DebugSpace::Cpu, address.wrapping_add(1));
+        let hi = self.debug_peek(DebugSpace::Cpu, address.wrapping_add(2));
+        crate::cpu::disassemble(address, opcode, lo, hi)
     }
 
     fn peek(&self, address: u16) -> u8 {

@@ -1294,10 +1294,148 @@ fn decode(opcode: u8) -> (Kind, Mode) {
     }
 }
 
+/// A decoded instruction for debugger listings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedInstruction {
+    /// Instruction bytes (1-3).
+    pub bytes: Vec<u8>,
+    /// Formatted instruction, for example `LDA $2002`.
+    pub text: String,
+}
+
+/// Decodes one instruction from its opcode and operand bytes.
+#[must_use]
+pub fn disassemble(address: u16, opcode: u8, lo: u8, hi: u8) -> DecodedInstruction {
+    let (kind, mode) = decode(opcode);
+    let len = match mode {
+        Mode::Imp | Mode::Acc => 1,
+        Mode::Imm | Mode::Zp | Mode::ZpX | Mode::ZpY | Mode::IndX | Mode::IndY | Mode::Rel => 2,
+        Mode::Abs | Mode::AbsX | Mode::AbsY | Mode::Ind => 3,
+    };
+    let bytes = [opcode, lo, hi][..len as usize].to_vec();
+    let operand = match mode {
+        Mode::Imp => String::new(),
+        Mode::Acc => " A".to_string(),
+        Mode::Imm => format!(" #${lo:02X}"),
+        Mode::Zp => format!(" ${lo:02X}"),
+        Mode::ZpX => format!(" ${lo:02X},X"),
+        Mode::ZpY => format!(" ${lo:02X},Y"),
+        Mode::Abs => format!(" ${:04X}", u16::from_le_bytes([lo, hi])),
+        Mode::AbsX => format!(" ${:04X},X", u16::from_le_bytes([lo, hi])),
+        Mode::AbsY => format!(" ${:04X},Y", u16::from_le_bytes([lo, hi])),
+        Mode::Ind => format!(" (${:04X})", u16::from_le_bytes([lo, hi])),
+        Mode::IndX => format!(" (${lo:02X},X)"),
+        Mode::IndY => format!(" (${lo:02X}),Y"),
+        Mode::Rel => {
+            let target = address
+                .wrapping_add(2)
+                .wrapping_add_signed(i16::from(lo as i8));
+            format!(" ${target:04X}")
+        }
+    };
+    DecodedInstruction {
+        bytes,
+        text: format!("{}{operand}", kind.mnemonic()),
+    }
+}
+
+impl Kind {
+    const fn mnemonic(self) -> &'static str {
+        match self {
+            Self::Adc => "ADC",
+            Self::And => "AND",
+            Self::Asl => "ASL",
+            Self::Bcc => "BCC",
+            Self::Bcs => "BCS",
+            Self::Beq => "BEQ",
+            Self::Bit => "BIT",
+            Self::Bmi => "BMI",
+            Self::Bne => "BNE",
+            Self::Bpl => "BPL",
+            Self::Brk => "BRK",
+            Self::Bvc => "BVC",
+            Self::Bvs => "BVS",
+            Self::Clc => "CLC",
+            Self::Cld => "CLD",
+            Self::Cli => "CLI",
+            Self::Clv => "CLV",
+            Self::Cmp => "CMP",
+            Self::Cpx => "CPX",
+            Self::Cpy => "CPY",
+            Self::Dec => "DEC",
+            Self::Dex => "DEX",
+            Self::Dey => "DEY",
+            Self::Eor => "EOR",
+            Self::Inc => "INC",
+            Self::Inx => "INX",
+            Self::Iny => "INY",
+            Self::Jmp => "JMP",
+            Self::Jsr => "JSR",
+            Self::Lda => "LDA",
+            Self::Ldx => "LDX",
+            Self::Ldy => "LDY",
+            Self::Lsr => "LSR",
+            Self::Nop => "NOP",
+            Self::Ora => "ORA",
+            Self::Pha => "PHA",
+            Self::Php => "PHP",
+            Self::Pla => "PLA",
+            Self::Plp => "PLP",
+            Self::Rol => "ROL",
+            Self::Ror => "ROR",
+            Self::Rti => "RTI",
+            Self::Rts => "RTS",
+            Self::Sbc => "SBC",
+            Self::Sec => "SEC",
+            Self::Sed => "SED",
+            Self::Sei => "SEI",
+            Self::Sta => "STA",
+            Self::Stx => "STX",
+            Self::Sty => "STY",
+            Self::Tax => "TAX",
+            Self::Tay => "TAY",
+            Self::Tsx => "TSX",
+            Self::Txa => "TXA",
+            Self::Txs => "TXS",
+            Self::Tya => "TYA",
+            Self::Slo => "SLO",
+            Self::Rla => "RLA",
+            Self::Sre => "SRE",
+            Self::Rra => "RRA",
+            Self::Sax => "SAX",
+            Self::Lax => "LAX",
+            Self::Dcp => "DCP",
+            Self::Isc => "ISC",
+            Self::Anc => "ANC",
+            Self::Alr => "ALR",
+            Self::Arr => "ARR",
+            Self::Xaa => "XAA",
+            Self::Axs => "AXS",
+            Self::Ahx => "AHX",
+            Self::Shy => "SHY",
+            Self::Shx => "SHX",
+            Self::Tas => "TAS",
+            Self::Las => "LAS",
+            Self::Kil => "KIL",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bus::RamBus;
+
+    #[test]
+    fn disassembler_matches_reference_listing() {
+        assert_eq!(disassemble(0x8000, 0xA9, 0x10, 0).text, "LDA #$10");
+        assert_eq!(disassemble(0x8000, 0x4C, 0x00, 0x80).text, "JMP $8000");
+        assert_eq!(disassemble(0x8000, 0xB1, 0x20, 0).text, "LDA ($20),Y");
+        assert_eq!(disassemble(0x8000, 0xD0, 0xFE, 0).text, "BNE $8000");
+        assert_eq!(disassemble(0x8000, 0x06, 0x10, 0).text, "ASL $10");
+        assert_eq!(disassemble(0x8000, 0x02, 0, 0).text, "KIL");
+        assert_eq!(disassemble(0x8000, 0xBD, 0x00, 0x20).text, "LDA $2000,X");
+    }
 
     #[test]
     fn status_bits() {

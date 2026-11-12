@@ -101,7 +101,13 @@ renderer). Desktop release archives are produced on tag pushes by
 `.github/workflows/release.yml`. Requirements and current gaps are in
 [`docs/platforms.md`](docs/platforms.md).
 Keyboard: arrows = D-pad, X = A, Z = B, Enter = Start, Shift = Select,
-Space = pause, F5/F8 = save/load state, F11 = fullscreen.
+Space = pause, F5/F8 = save/load state, F9/F10 = step frame/instruction,
+F11 = fullscreen.
+
+The debugger window (`Emulation -> Debugger`, or `--debug` on the command
+line) shows CPU registers and disassembly, PPU timing/palette/OAM, APU channel
+outputs, a hex viewer/editor for CPU, PPU and OAM memory, and PC breakpoints
+that pause before the instruction executes.
 
 ## Testing
 

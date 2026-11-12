@@ -15,6 +15,7 @@
 
 mod app;
 mod audio;
+mod debugger;
 mod gamepad;
 mod library;
 mod player;
