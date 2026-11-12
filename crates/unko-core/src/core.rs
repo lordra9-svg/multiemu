@@ -81,6 +81,18 @@ pub trait Core {
     /// Aims the Zapper attached to `port` and reports the trigger state.
     fn set_zapper(&mut self, _port: usize, _x: u8, _y: u8, _trigger: bool) {}
 
+    /// Sets a paddle's knob position (`0..=255`) and fire button.
+    fn set_paddle(&mut self, _port: usize, _position: u8, _fire: bool) {}
+
+    /// Sets the pressed Power Pad buttons (bit `i` = button `i + 1`).
+    fn set_power_pad(&mut self, _port: usize, _buttons: u16) {}
+
+    /// Replaces the Family BASIC keyboard matrix.
+    ///
+    /// One byte per matrix row: low nibble = column half 0, high nibble =
+    /// column half 1, and a set bit means the key is held.
+    fn set_family_keyboard(&mut self, _keys: [u8; 9]) {}
+
     /// Changes the core-side video filter.
     fn set_video_filter(&mut self, filter: VideoFilter);
 

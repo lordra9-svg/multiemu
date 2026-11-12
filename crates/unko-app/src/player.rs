@@ -122,14 +122,18 @@ impl Player {
         )
         .map_err(|err| err.to_string())?;
 
-        core.set_port_device(
-            1,
-            if settings.zapper_port2 {
-                PortDevice::Zapper
-            } else {
-                PortDevice::Gamepad
-            },
-        );
+        // The shell re-applies the selected devices every frame; set the
+        // initial pair here so the first frame already has the right devices.
+        // The Four Score adapter occupies both ports.
+        let (device1, device2) = if settings.port1_device == PortDevice::FourScore
+            || settings.port2_device == PortDevice::FourScore
+        {
+            (PortDevice::FourScore, PortDevice::FourScore)
+        } else {
+            (settings.port1_device, settings.port2_device)
+        };
+        core.set_port_device(0, device1);
+        core.set_port_device(1, device2);
 
         let save_dir = settings.save_dir.clone();
         fs::create_dir_all(&save_dir).map_err(|err| format!("create save dir: {err}"))?;
@@ -461,13 +465,30 @@ impl Player {
     }
 
     /// Attaches a device to a controller port.
-    pub fn set_port_device(&mut self, port: usize, device: PortDevice) {
-        self.core.set_port_device(port, device);
-    }
-
     /// Aims the Zapper and reports its trigger.
     pub fn set_zapper(&mut self, port: usize, x: u8, y: u8, trigger: bool) {
         self.core.set_zapper(port, x, y, trigger);
+    }
+
+    /// Sets both controller ports' devices (Four Score replaces both).
+    pub fn set_port_devices(&mut self, port1: PortDevice, port2: PortDevice) {
+        self.core.set_port_device(0, port1);
+        self.core.set_port_device(1, port2);
+    }
+
+    /// Sets an Arkanoid paddle's knob and fire button.
+    pub fn set_paddle(&mut self, port: usize, position: u8, fire: bool) {
+        self.core.set_paddle(port, position, fire);
+    }
+
+    /// Sets the pressed Power Pad buttons (bit `i` = button `i + 1`).
+    pub fn set_power_pad(&mut self, port: usize, buttons: u16) {
+        self.core.set_power_pad(port, buttons);
+    }
+
+    /// Replaces the Family BASIC keyboard matrix.
+    pub fn set_family_keyboard(&mut self, keys: [u8; 9]) {
+        self.core.set_family_keyboard(keys);
     }
 
     /// Sets the display texture filtering (nearest vs smooth).

@@ -217,6 +217,42 @@ pub enum PortDevice {
     Gamepad,
     /// NES Zapper light gun.
     Zapper,
+    /// Arkanoid "Vaus" paddle (8-bit position plus fire).
+    Paddle,
+    /// Power Pad / Family Trainer mat (12 membrane buttons).
+    PowerPad,
+    /// Family BASIC keyboard matrix (9 rows x 8 columns).
+    FamilyKeyboard,
+    /// Four Score adapter (four controllers across both ports).
+    FourScore,
+}
+
+impl PortDevice {
+    /// Stable lowercase name used by configuration files and the CLI.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Gamepad => "gamepad",
+            Self::Zapper => "zapper",
+            Self::Paddle => "paddle",
+            Self::PowerPad => "powerpad",
+            Self::FamilyKeyboard => "keyboard",
+            Self::FourScore => "fourscore",
+        }
+    }
+
+    /// Parses a device name; unknown names fall back to a gamepad.
+    #[must_use]
+    pub fn from_name(name: &str) -> Self {
+        match name.trim() {
+            "zapper" => Self::Zapper,
+            "paddle" => Self::Paddle,
+            "powerpad" => Self::PowerPad,
+            "keyboard" => Self::FamilyKeyboard,
+            "fourscore" => Self::FourScore,
+            _ => Self::Gamepad,
+        }
+    }
 }
 
 /// Preferred video output style.

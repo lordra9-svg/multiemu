@@ -235,6 +235,10 @@ impl Core for AccuracyCore {
             let device = match device {
                 PortDevice::Gamepad => crate::system::PortDevice::Gamepad,
                 PortDevice::Zapper => crate::system::PortDevice::Zapper,
+                PortDevice::Paddle => crate::system::PortDevice::Paddle,
+                PortDevice::PowerPad => crate::system::PortDevice::PowerPad,
+                PortDevice::FamilyKeyboard => crate::system::PortDevice::FamilyKeyboard,
+                PortDevice::FourScore => crate::system::PortDevice::FourScore,
             };
             system.set_port_device(port, device);
         }
@@ -243,6 +247,24 @@ impl Core for AccuracyCore {
     fn set_zapper(&mut self, port: usize, x: u8, y: u8, trigger: bool) {
         if let Some(system) = self.system.as_mut() {
             system.set_zapper(port, x, y, trigger);
+        }
+    }
+
+    fn set_paddle(&mut self, port: usize, position: u8, fire: bool) {
+        if let Some(system) = self.system.as_mut() {
+            system.set_paddle(port, position, fire);
+        }
+    }
+
+    fn set_power_pad(&mut self, port: usize, buttons: u16) {
+        if let Some(system) = self.system.as_mut() {
+            system.set_power_pad(port, buttons);
+        }
+    }
+
+    fn set_family_keyboard(&mut self, keys: [u8; 9]) {
+        if let Some(system) = self.system.as_mut() {
+            system.set_family_keyboard(keys);
         }
     }
 

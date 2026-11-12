@@ -1695,7 +1695,7 @@ immediate buffer update; that experiment was reverted.
 
 ### 2026-11-12 — accuracy-core save states; TetaNES retired
 
-The accuracy core now owns the host save-state contract. `UNKOST01` states
+The accuracy core now owns the host save-state contract. `UNKOST02` states
 carry a ROM fingerprint, the mapper state and the CPU/PPU/APU/system state
 (including the resampler). `unko verify` resumes byte-identically, and state
 files are core-tagged (`<rom>.<core>.slotN.state`) so a state from another
@@ -1789,3 +1789,24 @@ frame wrap.
 
 The new `pulse_timer_period_matches_the_reference_probe` unit test pins the
 sequencer period that the differential probes verify.
+
+### 2026-11-12 — controller-port devices and state format 02
+
+Added four optional port devices alongside the gamepad and Zapper, each with
+unit-tested serial behavior taken from the NESdev documentation:
+
+- **Four Score**: a 24-read chain per port (players 1+3 on `$4016`, 2+4 on
+  `$4017`) ending in the adapter signature (`0x08` / `0x04`, LSB-first).
+- **Arkanoid paddle**: 8-bit position inverted and MSB-first on bit 4, fire
+  on bit 3, latched by the `$4016` strobe.
+- **Power Pad**: 12 buttons shifted out two bits per read on bits 3 and 4 in
+  the documented order.
+- **Family BASIC keyboard**: 9x8 matrix, `$4016` column/clock/enable, keys
+  active-low on `$4017` bits 1-4.
+
+`set_controller` now accepts players 1-4. The save-state magic moves to
+`UNKOST02` because the peripheral state and the four-controller array are part
+of the snapshot; old states are rejected with a clear format error. Arkanoid
+(USA) boots into gameplay with the paddle attached (the frame changes with the
+knob position in the demo), and Family Trainer 1 boots with the Power Pad.
+AccuracyCoin remains **146/151 (0 failures)**.

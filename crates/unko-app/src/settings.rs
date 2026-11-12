@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 
-use unko_core::{Region, VideoFilter};
+use unko_core::{PortDevice, Region, VideoFilter};
 
 use crate::gamepad::{button_name, NesButton, PadMapping};
 
@@ -156,8 +156,13 @@ pub struct Settings {
     pub integer_scale: bool,
     /// Use linear texture filtering (smooth scaling) instead of nearest.
     pub linear_filter: bool,
-    /// Attach a Zapper light gun to port 2 (mouse aims and fires).
+    /// Attach a Zapper light gun to port 2 (kept in sync with
+    /// `port2_device` for older config files).
     pub zapper_port2: bool,
+    /// Device attached to controller port 1.
+    pub port1_device: PortDevice,
+    /// Device attached to controller port 2.
+    pub port2_device: PortDevice,
     /// Colour theme.
     pub theme: Theme,
     /// Pause when the window loses focus.
@@ -203,6 +208,8 @@ impl Default for Settings {
             integer_scale: true,
             linear_filter: false,
             zapper_port2: false,
+            port1_device: PortDevice::Gamepad,
+            port2_device: PortDevice::Gamepad,
             theme: Theme::Dark,
             pause_on_focus_loss: true,
             confirm_stop: false,
@@ -245,6 +252,7 @@ impl Settings {
         let Ok(text) = fs::read_to_string(path) else {
             return settings;
         };
+        let mut explicit_port2 = false;
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -263,6 +271,11 @@ impl Settings {
                 "integer_scale" => settings.integer_scale = parse_bool(value),
                 "linear_filter" => settings.linear_filter = parse_bool(value),
                 "zapper_port2" => settings.zapper_port2 = parse_bool(value),
+                "port1_device" => settings.port1_device = PortDevice::from_name(value),
+                "port2_device" => {
+                    settings.port2_device = PortDevice::from_name(value);
+                    explicit_port2 = true;
+                }
                 "theme" => {
                     settings.theme = if value == "light" {
                         Theme::Light
@@ -305,6 +318,9 @@ impl Settings {
                 _ => {}
             }
         }
+        if !explicit_port2 && settings.zapper_port2 {
+            settings.port2_device = PortDevice::Zapper;
+        }
         settings
     }
 
@@ -325,6 +341,8 @@ filter={}
 sample_rate={}
 integer_scale={}
 linear_filter={}
+port1_device={}
+port2_device={}
 zapper_port2={}
 theme={}
 pause_on_focus_loss={}
@@ -348,7 +366,9 @@ per_game_input={}
             self.sample_rate,
             self.integer_scale,
             self.linear_filter,
-            self.zapper_port2,
+            self.port1_device.name(),
+            self.port2_device.name(),
+            self.port2_device == PortDevice::Zapper,
             match self.theme {
                 Theme::Dark => "dark",
                 Theme::Light => "light",
@@ -463,6 +483,33 @@ mod tests {
         settings.save(&path).expect("writes");
         let loaded = Settings::load(&path);
         assert_eq!(loaded, settings);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn controller_devices_round_trip() {
+        let path = std::env::temp_dir().join("unko-settings-devices.conf");
+        let settings = Settings {
+            port1_device: PortDevice::FamilyKeyboard,
+            port2_device: PortDevice::FourScore,
+            ..Settings::default()
+        };
+        settings.save(&path).expect("writes");
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.port1_device, PortDevice::FamilyKeyboard);
+        assert_eq!(loaded.port2_device, PortDevice::FourScore);
+        let text = fs::read_to_string(&path).expect("read");
+        assert!(text.contains("port1_device=keyboard"));
+        assert!(text.contains("port2_device=fourscore"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_zapper_flag_selects_the_zapper_device() {
+        let path = std::env::temp_dir().join("unko-settings-legacy-zapper.conf");
+        fs::write(&path, "zapper_port2=true\n").expect("write");
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.port2_device, PortDevice::Zapper);
         let _ = fs::remove_file(path);
     }
 

@@ -135,7 +135,12 @@ The main effort is now the reference-parity accuracy core. Details in
 ## M2 — NES depth
 
 - [x] Zapper (core sensor + app mouse aiming/trigger).
-- [ ] Other input devices (four-score, family BASIC keyboard, Arkanoid paddle, Power Pad).
+- [x] Other input devices: Four Score (4-player chain with adapter signature),
+      Arkanoid paddle (inverted MSB-first position + fire, mouse steering),
+      Power Pad / Family Trainer (12-button two-bit serial read with an
+      on-screen mat) and the Family BASIC keyboard (9x8 matrix with the
+      documented host-key mapping). Device state is part of `UNKOST02` save
+      states; the Controllers tab selects a device per port.
 - [ ] FDS (BIOS supplied by the user, never bundled), Vs. System.
 - [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation
       pending).

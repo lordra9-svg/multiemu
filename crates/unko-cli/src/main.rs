@@ -453,6 +453,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut dump_ppu = false;
             let mut dump_chr: Option<String> = None;
             let mut break_pc: Option<u16> = None;
+            let mut device1 = unko_core::PortDevice::Gamepad;
+            let mut device2 = unko_core::PortDevice::Gamepad;
+            let mut paddle: Option<u8> = None;
+            let mut paddle_fire = false;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--frames" => {
@@ -468,6 +472,25 @@ fn run() -> Result<(), Box<dyn Error>> {
                     "--core" => core_id = Some(args.next().ok_or("--core needs an id")?),
                     "--dump-ppu" => dump_ppu = true,
                     "--dump-chr" => dump_chr = Some(args.next().ok_or("--dump-chr needs a path")?),
+                    "--device1" => {
+                        device1 = unko_core::PortDevice::from_name(
+                            &args.next().ok_or("--device1 needs a name")?,
+                        );
+                    }
+                    "--device2" => {
+                        device2 = unko_core::PortDevice::from_name(
+                            &args.next().ok_or("--device2 needs a name")?,
+                        );
+                    }
+                    "--paddle" => {
+                        paddle = Some(
+                            args.next()
+                                .ok_or("--paddle needs a position")?
+                                .parse()
+                                .map_err(|_| "--paddle needs 0..255")?,
+                        );
+                    }
+                    "--paddle-fire" => paddle_fire = true,
                     "--break" => {
                         let pc = args.next().ok_or("--break needs an address")?;
                         let pc = pc.trim_start_matches("0x").trim_start_matches('$');
@@ -521,6 +544,16 @@ fn run() -> Result<(), Box<dyn Error>> {
                 if std::path::Path::new(sram).exists() {
                     core.load_sram(&fs::read(sram)?)?;
                 }
+            }
+            core.set_port_device(0, device1);
+            core.set_port_device(1, device2);
+            if let Some(position) = paddle {
+                let port = if device2 == unko_core::PortDevice::Paddle {
+                    1
+                } else {
+                    0
+                };
+                core.set_paddle(port, position, paddle_fire);
             }
 
             let start = Instant::now();
@@ -1107,6 +1140,7 @@ fn usage() -> String {
   unko scan <dir>
   unko signatures <dir> [--frames N] [--mapper ID] [--limit N] [--check FILE]
   unko run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID]
+          [--device1 NAME] [--device2 NAME] [--paddle N] [--paddle-fire]
   unko verify <rom|archive> [frames]
   unko trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N] [--audio-dir DIR]
   unko diff <a.trace> <b.trace> [--skip N] [--video]

@@ -26,7 +26,7 @@ pub struct System {
     /// APU.
     pub apu: Apu,
     ram: [u8; 0x800],
-    controllers: [u8; 2],
+    controllers: [u8; 4],
     /// Device attached to each controller port.
     devices: [PortDevice; 2],
     /// NES Zapper state per port (used when the device is [`PortDevice::Zapper`]).
@@ -47,6 +47,8 @@ pub struct System {
     /// Global CPU cycle phase (get/put).
     phase: bool,
     shift: [u8; 2],
+    /// Non-gamepad controller state (paddle, mat, keyboard, Four Score).
+    peripherals: Peripherals,
     audio: Vec<f32>,
     audio_rate: f32,
     resampler: crate::resampler::Resampler,
@@ -79,10 +81,11 @@ struct SystemStateRef<'a> {
     apu: &'a Apu,
     #[serde(with = "serde_big_array::BigArray")]
     ram: [u8; 0x800],
-    controllers: &'a [u8; 2],
+    controllers: &'a [u8; 4],
     devices: &'a [PortDevice; 2],
     zapper: &'a [Zapper; 2],
     zapper_frame: u64,
+    peripherals: &'a Peripherals,
     strobe: bool,
     timing: Timing,
     ppu_credit: u32,
@@ -110,10 +113,11 @@ struct SystemState {
     apu: Apu,
     #[serde(with = "serde_big_array::BigArray")]
     ram: [u8; 0x800],
-    controllers: [u8; 2],
+    controllers: [u8; 4],
     devices: [PortDevice; 2],
     zapper: [Zapper; 2],
     zapper_frame: u64,
+    peripherals: Peripherals,
     strobe: bool,
     timing: Timing,
     ppu_credit: u32,
@@ -142,6 +146,121 @@ pub enum PortDevice {
     Gamepad,
     /// NES Zapper light gun.
     Zapper,
+    /// Arkanoid "Vaus" paddle: an 8-bit position on bit 4 (inverted,
+    /// MSB-first) plus the fire button on bit 3, latched by the `$4016`
+    /// strobe.
+    Paddle,
+    /// Power Pad / Family Trainer mat: 12 membrane buttons read two bits at a
+    /// time on bits 3 (low half) and 4 (high half).
+    PowerPad,
+    /// Family BASIC keyboard: a 9-row x 8-column matrix scanned through
+    /// `$4016` (column/clock/enable) and read active-low on `$4017` bits 1-4.
+    FamilyKeyboard,
+    /// Four Score adapter: both ports form a 24-read serial chain carrying
+    /// players 1+3 (`$4016`) and 2+4 (`$4017`) plus an adapter signature.
+    FourScore,
+}
+
+/// Arkanoid paddle state for one port.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+pub struct Paddle {
+    /// Knob position (0 = left, 255 = right).
+    pub position: u8,
+    /// Fire button held.
+    pub fire: bool,
+    /// Serial shift register, reloaded on the strobe.
+    shift: u8,
+}
+
+/// Power Pad state for one port.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+pub struct PowerPad {
+    /// Pressed buttons: bit `i` = mat button `i + 1` (0..=11).
+    pub buttons: u16,
+    /// Low serial register (bit 3).
+    low: u8,
+    /// High serial register (bit 4).
+    high: u8,
+}
+
+impl PowerPad {
+    /// Reloads both serial registers from `buttons` in the documented order.
+    fn reload(&mut self) {
+        let p = self.buttons;
+        self.low = ((p >> 1) & 1) as u8
+            | (((p & 1) as u8) << 1)
+            | ((((p >> 4) & 1) as u8) << 2)
+            | ((((p >> 8) & 1) as u8) << 3)
+            | ((((p >> 5) & 1) as u8) << 4)
+            | ((((p >> 9) & 1) as u8) << 5)
+            | ((((p >> 10) & 1) as u8) << 6)
+            | ((((p >> 6) & 1) as u8) << 7);
+        self.high = (((p >> 3) & 1) as u8)
+            | ((((p >> 2) & 1) as u8) << 1)
+            | ((((p >> 11) & 1) as u8) << 2)
+            | ((((p >> 7) & 1) as u8) << 3)
+            | 0xF0;
+    }
+}
+
+/// Family BASIC keyboard matrix state.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+pub struct FamilyKeyboard {
+    /// Per-row key bitmap: bits 0-3 = column half 0, bits 4-7 = half 1.
+    pub keys: [u8; 9],
+    /// Selected matrix row (0..=8).
+    row: u8,
+    /// Column half selected by `$4016` bit 0.
+    column: bool,
+    /// Matrix enabled by `$4016` bit 2.
+    enabled: bool,
+    /// Last clock level (`$4016` bit 1).
+    clock: bool,
+}
+
+impl FamilyKeyboard {
+    /// Applies a `$4016` write: latch column, advance the row on a clock
+    /// rising edge, reset to row 0 on a low clock, and honour the enable bit.
+    fn write(&mut self, value: u8) {
+        let column = value & 0x01 != 0;
+        let clock = value & 0x02 != 0;
+        let enabled = value & 0x04 != 0;
+        if enabled {
+            if clock && !self.clock {
+                self.row = (self.row + 1).min(8);
+            } else if !clock {
+                self.row = 0;
+            }
+        }
+        self.column = column;
+        self.enabled = enabled;
+        self.clock = clock;
+    }
+
+    /// Reads the four selected switches, active-low on bits 1-4.
+    fn read(&self) -> u8 {
+        if !self.enabled {
+            return 0b0001_1110;
+        }
+        let byte = self.keys[usize::from(self.row.min(8))];
+        let nibble = if self.column { byte >> 4 } else { byte } & 0x0F;
+        ((!nibble) & 0x0F) << 1
+    }
+}
+
+/// Non-gamepad controller state shared by both ports.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+struct Peripherals {
+    paddle: [Paddle; 2],
+    power_pad: [PowerPad; 2],
+    keyboard: FamilyKeyboard,
+    /// Four Score serial read index per port (0..=24).
+    four_score_index: [u8; 2],
+    /// Four Score adapter signature shift registers (`$4016` = 0x08,
+    /// `$4017` = 0x04, shifted out LSB-first).
+    four_score_signature: [u8; 2],
+    /// Player 1-4 button masks latched by the strobe for the Four Score chain.
+    four_score_pads: [u8; 4],
 }
 
 /// NES Zapper state.
@@ -291,7 +410,7 @@ impl System {
             ppu,
             apu: Apu::new(),
             ram: [0; 0x800],
-            controllers: [0; 2],
+            controllers: [0; 4],
             devices: [PortDevice::Gamepad; 2],
             zapper: [Zapper::default(); 2],
             zapper_frame: 0,
@@ -303,6 +422,7 @@ impl System {
             ppu_credit: 0,
             phase: false,
             shift: [0; 2],
+            peripherals: Peripherals::default(),
             audio: Vec::with_capacity(1024),
             audio_rate: 44_100.0,
             resampler: crate::resampler::Resampler::new(44_100, 1_789_773.0),
@@ -359,11 +479,39 @@ impl System {
         }
     }
 
-    /// Sets controller input bits (`InputState` layout).
+    /// Sets controller input bits (`InputState` layout) for players 1-4.
+    ///
+    /// Ports 2 and 3 are only read when a Four Score adapter is attached.
     pub fn set_controller(&mut self, port: usize, bits: u16) {
-        if port < 2 {
+        if port < 4 {
             self.controllers[port] = bits as u8;
         }
+    }
+
+    /// Sets the Arkanoid paddle position (`0..=255`) and fire button.
+    ///
+    /// Takes effect on the next `$4016` strobe, matching the hardware latch.
+    pub fn set_paddle(&mut self, port: usize, position: u8, fire: bool) {
+        if port < 2 {
+            self.peripherals.paddle[port].position = position;
+            self.peripherals.paddle[port].fire = fire;
+        }
+    }
+
+    /// Sets the pressed Power Pad buttons (bit `i` = button `i + 1`).
+    pub fn set_power_pad(&mut self, port: usize, buttons: u16) {
+        if port < 2 {
+            self.peripherals.power_pad[port].buttons = buttons & 0x0FFF;
+            if self.strobe {
+                self.peripherals.power_pad[port].reload();
+            }
+        }
+    }
+
+    /// Replaces the Family BASIC keyboard matrix (one byte per row, low nibble
+    /// = column half 0, high nibble = half 1; a set bit means the key is held).
+    pub fn set_family_keyboard(&mut self, keys: [u8; 9]) {
+        self.peripherals.keyboard.keys = keys;
     }
 
     /// Changes the output sample rate.
@@ -489,7 +637,7 @@ impl System {
     /// Serializes the whole console state (mapper state included).
     pub fn save_state(&self) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
-        out.extend_from_slice(b"UNKOST01");
+        out.extend_from_slice(b"UNKOST02");
         out.extend_from_slice(&self.cart.fingerprint().to_le_bytes());
         let mut cart_state = Vec::new();
         self.cart.save_state(&mut cart_state)?;
@@ -504,6 +652,7 @@ impl System {
             devices: &self.devices,
             zapper: &self.zapper,
             zapper_frame: self.zapper_frame,
+            peripherals: &self.peripherals,
             strobe: self.strobe,
             timing: self.timing,
             ppu_credit: self.ppu_credit,
@@ -530,7 +679,7 @@ impl System {
 
     /// Restores a state produced by [`System::save_state`].
     pub fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
-        if data.len() < 8 + 8 + 4 || &data[..8] != b"UNKOST01" {
+        if data.len() < 8 + 8 + 4 || &data[..8] != b"UNKOST02" {
             return Err("not an Unko state (bad magic/version)".into());
         }
         let fingerprint = u64::from_le_bytes(
@@ -562,6 +711,7 @@ impl System {
         self.zapper_present = self.devices.contains(&PortDevice::Zapper);
         self.zapper = state.zapper;
         self.zapper_frame = state.zapper_frame;
+        self.peripherals = state.peripherals;
         self.strobe = state.strobe;
         self.timing = state.timing;
         self.ppu_credit = state.ppu_credit;
@@ -818,24 +968,70 @@ impl System {
     }
 
     fn read_controller(&mut self, port: usize) -> u8 {
-        if self.devices[port] == PortDevice::Zapper {
-            // Zapper: bit 4 = trigger (0 pulled), bit 3 = light (0 detected).
-            // The other pins float high; the shift register is unused.
-            let mut value = (self.open_bus & 0xE0) | 0x40;
-            if !self.zapper[port].trigger {
-                value |= 0x10;
+        // The Four Score replaces both ports with one 24-read chain.
+        if self.devices.contains(&PortDevice::FourScore) {
+            let index = usize::from(self.peripherals.four_score_index[port]);
+            let bit = if index < 8 {
+                (self.peripherals.four_score_pads[port] >> index) & 1
+            } else if index < 16 {
+                (self.peripherals.four_score_pads[port + 2] >> (index - 8)) & 1
+            } else {
+                let signature = &mut self.peripherals.four_score_signature[port];
+                let bit = *signature & 1;
+                *signature = (*signature >> 1) | 0x80;
+                bit
+            };
+            if index < 24 {
+                self.peripherals.four_score_index[port] = (index + 1) as u8;
             }
-            if !self.zapper[port].light {
-                value |= 0x08;
+            return (self.open_bus & 0xE0) | 0x40 | bit;
+        }
+
+        match self.devices[port] {
+            PortDevice::Zapper => {
+                // Zapper: bit 4 = trigger (0 pulled), bit 3 = light (0 detected).
+                // The other pins float high; the shift register is unused.
+                let mut value = (self.open_bus & 0xE0) | 0x40;
+                if !self.zapper[port].trigger {
+                    value |= 0x10;
+                }
+                if !self.zapper[port].light {
+                    value |= 0x08;
+                }
+                value
             }
-            return value;
+            PortDevice::Paddle => {
+                // Knob data is the inverted MSB on bit 4, fire on bit 3. After
+                // the register empties the serial-in bit (the LSB) repeats.
+                let paddle = &mut self.peripherals.paddle[port];
+                let data = (paddle.shift >> 7) ^ 1;
+                let serial = paddle.shift & 1;
+                paddle.shift = (paddle.shift << 1) | serial;
+                (self.open_bus & 0xE0) | 0x40 | (data << 4) | (u8::from(paddle.fire) << 3)
+            }
+            PortDevice::PowerPad => {
+                let pad = &mut self.peripherals.power_pad[port];
+                if self.strobe {
+                    pad.reload();
+                }
+                let value = ((pad.high & 1) << 4) | ((pad.low & 1) << 3);
+                pad.low = (pad.low >> 1) | 0x80;
+                pad.high = (pad.high >> 1) | 0x80;
+                (self.open_bus & 0xE0) | 0x40 | value
+            }
+            PortDevice::FamilyKeyboard => {
+                (self.open_bus & 0xE0) | 0x40 | self.peripherals.keyboard.read()
+            }
+            PortDevice::FourScore => unreachable!("handled above"),
+            PortDevice::Gamepad => {
+                let bit = self.shift[port] & 1;
+                let value = (self.open_bus & 0xE0) | 0x40 | bit;
+                if !self.strobe {
+                    self.shift[port] = (self.shift[port] >> 1) | 0x80;
+                }
+                value
+            }
         }
-        let bit = if self.shift[port] & 1 != 0 { 0x01 } else { 0 };
-        let value = (self.open_bus & 0xE0) | 0x40 | bit;
-        if !self.strobe {
-            self.shift[port] = (self.shift[port] >> 1) | 0x80;
-        }
-        value
     }
 
     fn clock(&mut self) {
@@ -1381,8 +1577,21 @@ impl CpuBus for System {
                 // reaches the controller when it lands on a put cycle.
                 if !self.rmw_dummy || self.phase {
                     self.strobe = value & 1 != 0;
+                    self.peripherals.keyboard.write(value);
                     if self.strobe {
-                        self.shift = self.controllers;
+                        self.shift = [self.controllers[0], self.controllers[1]];
+                        for port in 0..2 {
+                            if self.devices[port] == PortDevice::Paddle {
+                                self.peripherals.paddle[port].shift =
+                                    self.peripherals.paddle[port].position;
+                            }
+                            if self.devices[port] == PortDevice::PowerPad {
+                                self.peripherals.power_pad[port].reload();
+                            }
+                        }
+                        self.peripherals.four_score_index = [0; 2];
+                        self.peripherals.four_score_signature = [0x08, 0x04];
+                        self.peripherals.four_score_pads = self.controllers;
                     }
                 }
             }
@@ -2347,6 +2556,123 @@ mod tests {
         CpuBus::write(&mut system, 0x4016, 0);
         let pad = CpuBus::read(&mut system, 0x4017);
         assert_eq!(pad & 0x01, 0x01, "gamepad serial bit is read from the port");
+    }
+
+    fn strobe(system: &mut System) {
+        CpuBus::write(system, 0x4016, 1);
+        CpuBus::write(system, 0x4016, 0);
+    }
+
+    #[test]
+    fn paddle_reports_inverted_msb_first_and_fire() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_port_device(1, PortDevice::Paddle);
+        system.set_paddle(1, 0x12, true);
+        strobe(&mut system);
+
+        let mut bits = Vec::new();
+        for _ in 0..8 {
+            let value = CpuBus::read(&mut system, 0x4017);
+            bits.push((value >> 4) & 1);
+            assert_eq!((value >> 3) & 1, 1, "fire is reported on bit 3");
+        }
+        // 0x12 = 0001_0010, MSB-first and inverted.
+        assert_eq!(bits, vec![1, 1, 1, 0, 1, 1, 0, 1]);
+    }
+
+    #[test]
+    fn power_pad_serial_order_matches_the_documented_layout() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_port_device(1, PortDevice::PowerPad);
+        // Buttons 1 and 4 (bit 0 and bit 3 of the mat mask).
+        system.set_power_pad(1, 0b0000_1001);
+        strobe(&mut system);
+
+        let lows: Vec<u8> = (0..8)
+            .map(|_| (CpuBus::read(&mut system, 0x4017) >> 3) & 1)
+            .collect();
+        // Low register order: buttons 2, 1, 5, 9, 6, 10, 11, 7.
+        assert_eq!(lows, vec![0, 1, 0, 0, 0, 0, 0, 0]);
+
+        strobe(&mut system);
+        let highs: Vec<u8> = (0..8)
+            .map(|_| (CpuBus::read(&mut system, 0x4017) >> 4) & 1)
+            .collect();
+        // High register order: buttons 4, 3, 12, 8, then four 1s.
+        assert_eq!(highs, vec![1, 0, 0, 0, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn four_score_chain_carries_four_players_and_a_signature() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_port_device(0, PortDevice::FourScore);
+        system.set_port_device(1, PortDevice::FourScore);
+        system.set_controller(0, 0b0000_0001); // P1 A
+        system.set_controller(1, 0b0000_0010); // P2 B
+        system.set_controller(2, 0b0000_0100); // P3 Select
+        system.set_controller(3, 0b0000_1000); // P4 Start
+        strobe(&mut system);
+
+        let p1: Vec<u8> = (0..24)
+            .map(|_| CpuBus::read(&mut system, 0x4016) & 1)
+            .collect();
+        let p2: Vec<u8> = (0..24)
+            .map(|_| CpuBus::read(&mut system, 0x4017) & 1)
+            .collect();
+        assert_eq!(&p1[..8], &[1, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&p1[8..16], &[0, 0, 1, 0, 0, 0, 0, 0]);
+        assert_eq!(&p2[..8], &[0, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&p2[8..16], &[0, 0, 0, 1, 0, 0, 0, 0]);
+        // Adapter signatures: 0x08 on $4016, 0x04 on $4017 (LSB-first; the
+        // shifted-in 1s take another eight reads to reach the serial output).
+        assert_eq!(&p1[16..24], &[0, 0, 0, 1, 0, 0, 0, 0]);
+        assert_eq!(&p2[16..24], &[0, 0, 1, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn family_keyboard_scans_rows_and_column_halves() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_port_device(1, PortDevice::FamilyKeyboard);
+        let mut keys = [0u8; 9];
+        keys[0] = 0b0000_0001; // row 0, half 0, first key
+        keys[1] = 0b0001_0000; // row 1, half 1, first key
+        system.set_family_keyboard(keys);
+
+        // Enable with clock low: row 0, half 0.
+        CpuBus::write(&mut system, 0x4016, 0x04);
+        let value = CpuBus::read(&mut system, 0x4017);
+        assert_eq!((value >> 1) & 0x0F, 0b1110, "one key reads low");
+
+        // Clock high selects row 1; column bit selects the other half.
+        CpuBus::write(&mut system, 0x4016, 0x06);
+        CpuBus::write(&mut system, 0x4016, 0x07);
+        let value = CpuBus::read(&mut system, 0x4017);
+        assert_eq!((value >> 1) & 0x0F, 0b1110);
+
+        // Disabled matrix reads all four lines high.
+        CpuBus::write(&mut system, 0x4016, 0x00);
+        let value = CpuBus::read(&mut system, 0x4017);
+        assert_eq!((value >> 1) & 0x0F, 0x0F);
+    }
+
+    #[test]
+    fn peripheral_state_round_trips_through_save_states() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_port_device(0, PortDevice::FourScore);
+        system.set_port_device(1, PortDevice::FamilyKeyboard);
+        system.set_paddle(0, 200, true);
+        system.set_power_pad(0, 0x0F0);
+        system.set_family_keyboard([0xAA; 9]);
+        system.set_controller(3, 0x42);
+        let saved = system.save_state().expect("save");
+        let mut other = System::from_ines(&rom).expect("load");
+        other.load_state(&saved).expect("load");
+        assert_eq!(saved, other.save_state().expect("re-save"));
     }
 
     #[test]

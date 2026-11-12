@@ -127,6 +127,11 @@ platform toolchains.
   hot-plugged, remappable, support analog-stick D-pad input, auto-fire and
   per-game profiles. The input display and an on-screen touch controller are
   available for mobile and can be previewed on desktop.
+- Controller-port devices: each port can be a gamepad, Zapper, Arkanoid
+  paddle (mouse steering + fire), Power Pad (on-screen 12-pad mat), Family
+  BASIC keyboard (host keys map to the documented 9x8 matrix) or a Four Score
+  adapter (four players across both ports). Settings -> Controllers selects
+  the device per port and applies it immediately.
 - Audio: cpal output with a lock-free ring buffer, device-rate resampling,
   volume/mute and underrun statistics. The stream is opened once at startup
   and fed one mono sample per emulated frame.
@@ -140,7 +145,7 @@ platform toolchains.
 - Recording: WAV audio, numbered PNG frames and animated GIF, written under
   `saves/recordings`; all encoders are pure Rust and work on every target.
 - State/SRAM: `saves/<rom>.<core>.slotN.state` and `saves/<rom>.sav`; the core
-  never touches the filesystem. States carry an `UNKOST01` header, a ROM
+  never touches the filesystem. States carry an `UNKOST02` header, a ROM
   fingerprint and the mapper state, so a state cannot be loaded into a
   different image or core. The former TetaNES state files are ignored.
 - Audio playback is active through cpal; the Audio page reports the actual

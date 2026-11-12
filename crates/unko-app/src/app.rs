@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, Vec2};
-use unko_core::{Region, VideoFilter};
+use unko_core::{PortDevice, Region, VideoFilter};
 
 use crate::audio::AudioOutput;
 use crate::debugger::{self, Action};
@@ -260,6 +260,7 @@ impl App {
     }
 
     fn apply_settings(&mut self, ctx: &egui::Context, old: &Settings) {
+        self.settings.zapper_port2 = self.settings.port2_device == PortDevice::Zapper;
         if let Some(player) = &mut self.player {
             player.set_filter(self.settings.filter);
             let rate = self
@@ -1189,27 +1190,61 @@ impl eframe::App for App {
         }
 
         if let Some(player) = &mut self.player {
-            player.set_port_device(
-                1,
-                if self.settings.zapper_port2 {
-                    unko_core::PortDevice::Zapper
+            let port1 = self.settings.port1_device;
+            let port2 = self.settings.port2_device;
+            // The Four Score adapter occupies both ports.
+            let (device1, device2) =
+                if port1 == PortDevice::FourScore || port2 == PortDevice::FourScore {
+                    (PortDevice::FourScore, PortDevice::FourScore)
                 } else {
-                    unko_core::PortDevice::Gamepad
-                },
-            );
-            let touch = viewport(
+                    (port1, port2)
+                };
+            player.set_port_devices(device1, device2);
+            let zapper_port = if port1 == PortDevice::Zapper {
+                Some(0)
+            } else if port2 == PortDevice::Zapper {
+                Some(1)
+            } else {
+                None
+            };
+            let paddle_port = if port1 == PortDevice::Paddle {
+                Some(0)
+            } else if port2 == PortDevice::Paddle {
+                Some(1)
+            } else {
+                None
+            };
+            let power_pad_port = if port1 == PortDevice::PowerPad {
+                Some(0)
+            } else if port2 == PortDevice::PowerPad {
+                Some(1)
+            } else {
+                None
+            };
+            if port1 == PortDevice::FamilyKeyboard || port2 == PortDevice::FamilyKeyboard {
+                player.set_family_keyboard(family_keyboard_matrix(ctx));
+            }
+            let view = viewport(
                 ctx,
                 player,
                 &ViewportOptions {
                     integer_scale: self.settings.integer_scale,
                     linear_filter: self.settings.linear_filter,
-                    zapper: self.settings.zapper_port2,
+                    zapper_port,
+                    paddle_port,
+                    power_pad_port,
                     input: self.input_states,
                     show_input: self.settings.show_input_display,
                     show_touch: self.settings.show_touch_controls,
                 },
             );
-            player.set_touch(touch);
+            player.set_touch(view.touch);
+            if let (Some(port), Some((position, fire))) = (paddle_port, view.paddle) {
+                player.set_paddle(port, position, fire);
+            }
+            if let (Some(port), Some(mask)) = (power_pad_port, view.power_pad) {
+                player.set_power_pad(port, mask);
+            }
             if player.debug.open {
                 if let Some(view) = player.debug_view() {
                     let actions = debugger::window(&mut player.debug, ctx, &view);
@@ -1316,26 +1351,35 @@ fn fit_aspect(available: Rect, aspect: f32) -> Rect {
 struct ViewportOptions {
     integer_scale: bool,
     linear_filter: bool,
-    zapper: bool,
+    zapper_port: Option<usize>,
+    paddle_port: Option<usize>,
+    power_pad_port: Option<usize>,
     input: [unko_core::InputState; 4],
     show_input: bool,
     show_touch: bool,
 }
 
-fn viewport(
-    ctx: &egui::Context,
-    player: &mut Player,
-    options: &ViewportOptions,
-) -> unko_core::InputState {
+/// Input the viewport produced this frame (touch, paddle or mat).
+struct ViewportInput {
+    touch: unko_core::InputState,
+    paddle: Option<(u8, bool)>,
+    power_pad: Option<u16>,
+}
+
+fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions) -> ViewportInput {
     let ViewportOptions {
         integer_scale,
         linear_filter,
-        zapper,
+        zapper_port,
+        paddle_port,
+        power_pad_port,
         input,
         show_input,
         show_touch,
     } = *options;
     let mut touch = unko_core::InputState::empty();
+    let mut paddle = None;
+    let mut power_pad = None;
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.fill(Color32::BLACK))
         .show(ctx, |ui| {
@@ -1346,20 +1390,35 @@ fn viewport(
                 let size = Vec2::new(240.0 * scale * 4.0 / 3.0, 240.0 * scale);
                 target = Rect::from_center_size(available.center(), size);
             }
-            if zapper {
-                // Mouse aims and fires the Zapper attached to port 2. The
-                // pointer is mapped into the 256x240 frame inside the scaled
-                // viewport rect; leaving the rect keeps the trigger released.
+            if let Some(port) = zapper_port {
+                // Mouse aims and fires the Zapper. The pointer is mapped into
+                // the 256x240 frame inside the scaled viewport rect; leaving
+                // the rect keeps the trigger released.
                 let position = ctx.pointer_latest_pos();
                 let trigger = ctx.input(|input| input.pointer.primary_down());
                 if let Some(position) = position.filter(|position| target.contains(*position)) {
                     let relative = (position - target.min) / target.size();
                     let x = (relative.x * 256.0).clamp(0.0, 255.0) as u8;
                     let y = (relative.y * 240.0).clamp(0.0, 239.0) as u8;
-                    player.set_zapper(1, x, y, trigger);
+                    player.set_zapper(port, x, y, trigger);
                 } else if trigger {
-                    player.set_zapper(1, 0, 0, false);
+                    player.set_zapper(port, 0, 0, false);
                 }
+            }
+            if paddle_port.is_some() {
+                // The paddle knob follows the horizontal mouse position (or
+                // the touch point); the primary button fires.
+                let position = ctx.pointer_latest_pos();
+                let down = ctx.input(|input| input.pointer.primary_down());
+                paddle = Some(
+                    match position.filter(|position| target.contains(*position)) {
+                        Some(position) => {
+                            let relative = (position.x - target.min.x) / target.width();
+                            ((relative * 255.0).clamp(0.0, 255.0) as u8, down)
+                        }
+                        None => (128, false),
+                    },
+                );
             }
             player.set_texture_options(if linear_filter {
                 egui::TextureOptions::LINEAR
@@ -1460,8 +1519,164 @@ fn viewport(
                     );
                 }
             }
+
+            if power_pad_port.is_some() {
+                // Twelve-button mat: 3 rows x 4 columns, numbered row-major.
+                let pointer = ctx.pointer_latest_pos();
+                let down = ctx.input(|i| i.pointer.primary_down());
+                let cell = (target.width().min(target.height()) * 0.075).clamp(30.0, 58.0);
+                let grid = Vec2::new(cell * 4.0, cell * 3.0);
+                let origin =
+                    target.center_bottom() + Vec2::new(-grid.x / 2.0, -grid.y - cell * 0.6);
+                let mut mask = 0u16;
+                for row in 0..3 {
+                    for column in 0..4 {
+                        let rect = Rect::from_min_size(
+                            origin + Vec2::new(column as f32 * cell, row as f32 * cell),
+                            Vec2::splat(cell - 5.0),
+                        );
+                        let number = row * 4 + column + 1;
+                        let pressed = down && pointer.is_some_and(|pos| rect.contains(pos));
+                        if pressed {
+                            mask |= 1 << (number - 1);
+                        }
+                        ui.painter().rect_filled(
+                            rect,
+                            egui::CornerRadius::same(6),
+                            if pressed {
+                                Color32::from_white_alpha(170)
+                            } else {
+                                Color32::from_white_alpha(60)
+                            },
+                        );
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            number.to_string(),
+                            FontId::proportional(15.0),
+                            Color32::WHITE,
+                        );
+                    }
+                }
+                power_pad = Some(mask);
+            }
         });
-    touch
+    ViewportInput {
+        touch,
+        paddle,
+        power_pad,
+    }
+}
+
+/// Builds the Family BASIC keyboard matrix from the host keyboard.
+///
+/// The 9x8 matrix follows the NESdev wiki layout: each row has two column
+/// halves of four keys, selected by `$4016` bit 0. Keys that do not exist on a
+/// US layout (STOP, kana, GRPH, RSHIFT) are not mapped; Backslash types the
+/// yen key, which is its documented historical equivalent.
+fn family_keyboard_matrix(ctx: &egui::Context) -> [u8; 9] {
+    // (host key, row, column half, position within the half)
+    const MAP: &[(egui::Key, u8, u8, u8)] = &[
+        (egui::Key::CloseBracket, 0, 0, 0),
+        (egui::Key::OpenBracket, 0, 0, 1),
+        (egui::Key::Enter, 0, 0, 2),
+        (egui::Key::F8, 0, 0, 3),
+        (egui::Key::Backslash, 0, 1, 1),
+        (egui::Key::Semicolon, 1, 0, 0),
+        (egui::Key::F7, 1, 0, 3),
+        (egui::Key::Minus, 1, 1, 1),
+        (egui::Key::Slash, 1, 1, 2),
+        (egui::Key::K, 2, 0, 0),
+        (egui::Key::L, 2, 0, 1),
+        (egui::Key::O, 2, 0, 2),
+        (egui::Key::F6, 2, 0, 3),
+        (egui::Key::Num0, 2, 1, 0),
+        (egui::Key::P, 2, 1, 1),
+        (egui::Key::Comma, 2, 1, 2),
+        (egui::Key::Period, 2, 1, 3),
+        (egui::Key::J, 3, 0, 0),
+        (egui::Key::U, 3, 0, 1),
+        (egui::Key::I, 3, 0, 2),
+        (egui::Key::F5, 3, 0, 3),
+        (egui::Key::Num8, 3, 1, 0),
+        (egui::Key::Num9, 3, 1, 1),
+        (egui::Key::N, 3, 1, 2),
+        (egui::Key::M, 3, 1, 3),
+        (egui::Key::H, 4, 0, 0),
+        (egui::Key::G, 4, 0, 1),
+        (egui::Key::Y, 4, 0, 2),
+        (egui::Key::F4, 4, 0, 3),
+        (egui::Key::Num6, 4, 1, 0),
+        (egui::Key::Num7, 4, 1, 1),
+        (egui::Key::V, 4, 1, 2),
+        (egui::Key::B, 4, 1, 3),
+        (egui::Key::D, 5, 0, 0),
+        (egui::Key::R, 5, 0, 1),
+        (egui::Key::T, 5, 0, 2),
+        (egui::Key::F3, 5, 0, 3),
+        (egui::Key::Num4, 5, 1, 0),
+        (egui::Key::Num5, 5, 1, 1),
+        (egui::Key::C, 5, 1, 2),
+        (egui::Key::F, 5, 1, 3),
+        (egui::Key::A, 6, 0, 0),
+        (egui::Key::S, 6, 0, 1),
+        (egui::Key::W, 6, 0, 2),
+        (egui::Key::F2, 6, 0, 3),
+        (egui::Key::Num3, 6, 1, 0),
+        (egui::Key::E, 6, 1, 1),
+        (egui::Key::Z, 6, 1, 2),
+        (egui::Key::X, 6, 1, 3),
+        (egui::Key::Q, 7, 0, 1),
+        (egui::Key::Escape, 7, 0, 2),
+        (egui::Key::F1, 7, 0, 3),
+        (egui::Key::Num2, 7, 1, 0),
+        (egui::Key::Num1, 7, 1, 1),
+        (egui::Key::ArrowLeft, 8, 0, 0),
+        (egui::Key::ArrowRight, 8, 0, 1),
+        (egui::Key::ArrowUp, 8, 0, 2),
+        (egui::Key::Home, 8, 0, 3),
+        (egui::Key::Insert, 8, 1, 0),
+        (egui::Key::Backspace, 8, 1, 1),
+        (egui::Key::Space, 8, 1, 2),
+        (egui::Key::ArrowDown, 8, 1, 3),
+    ];
+    let mut keys = [0u8; 9];
+    ctx.input(|input| {
+        let bit = |half: u8, position: u8| -> u8 {
+            if half == 0 {
+                3 - position
+            } else {
+                4 + (3 - position)
+            }
+        };
+        for (key, row, half, position) in MAP {
+            if input.key_down(*key) {
+                keys[usize::from(*row)] |= 1 << bit(*half, *position);
+            }
+        }
+        if input.modifiers.shift {
+            keys[7] |= 1 << bit(1, 3); // LSHIFT
+        }
+        if input.modifiers.ctrl {
+            keys[7] |= 1 << bit(0, 0); // CTR
+        }
+        // Shifted punctuation that lives on another matrix key.
+        if input.modifiers.shift {
+            if input.key_down(egui::Key::Num2) {
+                keys[1] |= 1 << bit(0, 2); // @
+            }
+            if input.key_down(egui::Key::Num6) {
+                keys[1] |= 1 << bit(1, 0); // ^
+            }
+            if input.key_down(egui::Key::Minus) {
+                keys[1] |= 1 << bit(1, 3); // _
+            }
+            if input.key_down(egui::Key::Semicolon) {
+                keys[1] |= 1 << bit(0, 1); // :
+            }
+        }
+    });
+    keys
 }
 
 fn input_label(state: unko_core::InputState) -> String {
@@ -1648,6 +1863,38 @@ fn controllers_tab(
         ui.label(RichText::new("Keyboard input is still available.").weak());
         ui.add_space(8.0);
     }
+    ui.horizontal(|ui| {
+        ui.label("Port 1");
+        device_combo(ui, "port1-device", &mut settings.port1_device);
+        ui.label("Port 2");
+        device_combo(ui, "port2-device", &mut settings.port2_device);
+    });
+    match (settings.port1_device, settings.port2_device) {
+        (PortDevice::FourScore, _) | (_, PortDevice::FourScore) => ui.label(
+            RichText::new(
+                "Four Score: players 1-4 are read from gamepads 1-4 (it occupies both ports).",
+            )
+            .weak()
+            .small(),
+        ),
+        (PortDevice::Paddle, _) | (_, PortDevice::Paddle) => ui.label(
+            RichText::new("Paddle: the mouse steers horizontally, the left button fires.")
+                .weak()
+                .small(),
+        ),
+        (PortDevice::PowerPad, _) | (_, PortDevice::PowerPad) => ui.label(
+            RichText::new("Power Pad: click the 12-pad overlay in the viewport.")
+                .weak()
+                .small(),
+        ),
+        (PortDevice::FamilyKeyboard, _) | (_, PortDevice::FamilyKeyboard) => ui.label(
+            RichText::new("Family BASIC keyboard: host keys map to the documented matrix.")
+                .weak()
+                .small(),
+        ),
+        _ => ui.label(""),
+    };
+    ui.add_space(8.0);
     ui.checkbox(&mut settings.gamepad_enabled, "Enable SDL3 gamepads");
     if let Some(gamepads) = gamepads {
         if let Some((button, pad)) = gamepads.take_captured() {
@@ -1775,17 +2022,48 @@ fn controllers_tab(
         "Show on-screen touch controller",
     );
     ui.add_space(8.0);
-    ui.checkbox(
-        &mut settings.zapper_port2,
-        "Port 2: NES Zapper (mouse aims, left button fires)",
-    );
     ui.label(
         RichText::new(
-            "Zapper changes apply to the next game started; the crosshair follows the mouse inside the viewport.",
+            "Device changes apply immediately. Zapper and paddle follow the mouse inside the viewport.",
         )
         .weak()
         .small(),
     );
+}
+
+/// Human label for a controller-port device.
+fn device_label(device: PortDevice) -> &'static str {
+    match device {
+        PortDevice::Gamepad => "Gamepad",
+        PortDevice::Zapper => "Zapper",
+        PortDevice::Paddle => "Paddle",
+        PortDevice::PowerPad => "Power Pad",
+        PortDevice::FamilyKeyboard => "Family BASIC keyboard",
+        PortDevice::FourScore => "Four Score (4 players)",
+    }
+}
+
+/// Device picker for one controller port.
+fn device_combo(ui: &mut egui::Ui, id: &str, device: &mut PortDevice) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(device_label(*device))
+        .show_ui(ui, |ui| {
+            for option in [
+                PortDevice::Gamepad,
+                PortDevice::Zapper,
+                PortDevice::Paddle,
+                PortDevice::PowerPad,
+                PortDevice::FamilyKeyboard,
+                PortDevice::FourScore,
+            ] {
+                if ui
+                    .selectable_label(*device == option, device_label(option))
+                    .clicked()
+                {
+                    *device = option;
+                }
+            }
+        });
 }
 
 fn paths_tab(ui: &mut egui::Ui, settings: &mut Settings) {
@@ -1884,7 +2162,7 @@ fn advanced_tab(ui: &mut egui::Ui) {
     ui.heading("Advanced");
     ui.add_space(8.0);
     ui.label("Core: Unko NES accuracy core");
-    ui.label("State format: UNKOST01, ROM-fingerprinted and core-tagged");
+    ui.label("State format: UNKOST02, ROM-fingerprinted and core-tagged");
     ui.label("Settings file: unko.conf");
     ui.add_space(8.0);
     ui.label(
@@ -1892,4 +2170,61 @@ fn advanced_tab(ui: &mut egui::Ui) {
             .weak()
             .small(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matrix_with(events: Vec<egui::Event>) -> [u8; 9] {
+        let ctx = egui::Context::default();
+        let modifiers = events
+            .iter()
+            .find_map(|event| match event {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let input = egui::RawInput {
+            modifiers,
+            events,
+            ..egui::RawInput::default()
+        };
+        let mut keys = [0u8; 9];
+        let _ = ctx.run(input, |ctx| {
+            keys = family_keyboard_matrix(ctx);
+        });
+        keys
+    }
+
+    fn key_event(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn family_keyboard_maps_letters_to_the_documented_matrix() {
+        // A = row 6, column half 0, first key -> bit 3.
+        let keys = matrix_with(vec![key_event(egui::Key::A, egui::Modifiers::NONE)]);
+        assert_eq!(keys[6], 1 << 3);
+        // 1 = row 7, half 1, second key -> bit 4 + (3 - 1) = 6.
+        let keys = matrix_with(vec![key_event(egui::Key::Num1, egui::Modifiers::NONE)]);
+        assert_eq!(keys[7], 1 << 6);
+        // Enter = row 0, half 0, third key -> bit 1.
+        let keys = matrix_with(vec![key_event(egui::Key::Enter, egui::Modifiers::NONE)]);
+        assert_eq!(keys[0], 1 << 1);
+    }
+
+    #[test]
+    fn family_keyboard_maps_shifted_punctuation() {
+        let keys = matrix_with(vec![key_event(egui::Key::Num2, egui::Modifiers::SHIFT)]);
+        // "@" is row 1, half 0, third key -> bit 1, plus the 2 key and shift.
+        assert_eq!(keys[1] & (1 << 1), 1 << 1);
+        assert_eq!(keys[7] & (1 << 4), 1 << 4, "LSHIFT is held");
+    }
 }
