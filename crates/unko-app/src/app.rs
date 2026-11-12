@@ -931,8 +931,8 @@ impl eframe::App for App {
             self.start_entry(entry);
         }
 
-        if self.player.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(16));
+        if let Some(player) = &self.player {
+            ctx.request_repaint_after(player.next_repaint());
         } else {
             ctx.request_repaint_after(Duration::from_millis(250));
         }

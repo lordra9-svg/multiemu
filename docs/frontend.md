@@ -91,8 +91,15 @@ Key interaction rules worth keeping:
 - `egui`/`eframe` 0.31, pinned.
 - Video: the core's RGBA frame is uploaded to a nearest-neighbour texture each
   frame; the viewport preserves the NES 8:7 pixel aspect inside a 4:3 box.
-- Pacing: an accumulator targets 60.0988 Hz and runs at most four catch-up
-  frames per repaint; vsync is left to the windowing backend.
+- Pacing: a `Duration`-based accumulator targets 60.0988 Hz and runs at most
+  four catch-up frames per repaint; vsync is left to the windowing backend.
+  The UI sleeps until the next frame deadline (`request_repaint_after`), so an
+  idle-but-running console wakes once per frame instead of spinning, and a
+  suspended process never replays its stall: any backlog past the four-frame
+  catch-up is discarded, keeping latency and audio in real time. Integer
+  durations prevent fractional-frame drift, so a long session cannot start
+  emitting double frames. Pausing drops the UI cadence to 4 Hz, and an
+  unpause/load resets the clock so the first frame is presented immediately.
 - Input: keyboard map is arrows + Z/X/A/S + Enter/Shift, shown in Controllers.
 - State/SRAM: `saves/<rom>.state` and `saves/<rom>.sav`; the core never touches
   the filesystem.

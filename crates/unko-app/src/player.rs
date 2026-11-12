@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use unko_core::{
     Core, InputState, LoadOptions, PortDevice, Region, Registry, SystemId, VideoFilter,
@@ -11,7 +11,59 @@ use unko_core::{
 use crate::library::GameEntry;
 use crate::settings::Settings;
 
-const NTSC_FRAME: f32 = 1.0 / 60.0988;
+/// Maximum frames emulated in one UI update. When the desktop stalls the
+/// process, the pacer drops the excess backlog instead of fast-forwarding,
+/// so the app returns to real time immediately.
+const MAX_CATCH_UP: usize = 4;
+
+/// Fixed-timestep frame clock for the desktop shell.
+///
+/// Uses integer `Duration` arithmetic so a long session cannot drift by
+/// fractions of a frame and start emitting double frames.
+#[derive(Debug)]
+struct FramePacer {
+    frame: Duration,
+    accum: Duration,
+    last: Instant,
+}
+
+impl FramePacer {
+    fn new(now: Instant) -> Self {
+        Self {
+            frame: Duration::from_secs_f64(1.0 / 60.0988),
+            accum: Duration::ZERO,
+            last: now,
+        }
+    }
+
+    /// Drops any partial frame so the next update starts from *now*.
+    fn reset(&mut self) {
+        self.accum = Duration::ZERO;
+        self.last = Instant::now();
+    }
+
+    /// Returns `(frames_to_run, elapsed, wait_until_next_frame)`.
+    ///
+    /// A stall is allowed to catch up at most [`MAX_CATCH_UP`] frames; the
+    /// rest of the backlog is discarded so audio/video stay in real time
+    /// instead of playing back the stall.
+    fn advance(&mut self, now: Instant) -> (usize, f32, Duration) {
+        let dt = now.saturating_duration_since(self.last);
+        self.last = now;
+        self.accum = self.accum.saturating_add(dt);
+        let mut ran = 0;
+        while self.accum >= self.frame && ran < MAX_CATCH_UP {
+            self.accum -= self.frame;
+            ran += 1;
+        }
+        if ran == MAX_CATCH_UP && self.accum >= self.frame {
+            // Still behind after the bounded catch-up: resynchronise.
+            self.accum = Duration::ZERO;
+        }
+        let wait = self.frame.saturating_sub(self.accum);
+        (ran, dt.as_secs_f32(), wait)
+    }
+}
 
 /// A loaded machine plus frontend state (pause, slot, counters).
 pub struct Player {
@@ -35,8 +87,8 @@ pub struct Player {
     pub message: String,
     /// Texture filtering used for the next upload.
     texture_options: egui::TextureOptions,
-    accum: f32,
-    last_tick: Instant,
+    pacer: FramePacer,
+    next_repaint: Duration,
     sample_rate: f32,
 }
 
@@ -91,8 +143,8 @@ impl Player {
             save_dir,
             message: String::new(),
             texture_options: egui::TextureOptions::NEAREST,
-            accum: NTSC_FRAME,
-            last_tick: Instant::now(),
+            pacer: FramePacer::new(Instant::now()),
+            next_repaint: Duration::ZERO,
             sample_rate: settings.sample_rate,
         })
     }
@@ -101,35 +153,47 @@ impl Player {
     pub fn step(&mut self, ctx: &egui::Context) {
         self.apply_input(ctx);
         if self.paused {
+            self.next_repaint = Duration::from_millis(250);
             return;
         }
-        let now = Instant::now();
-        let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.25);
-        self.last_tick = now;
-        self.accum += dt;
+        let (mut ran, dt, wait) = self.pacer.advance(Instant::now());
+        self.next_repaint = wait;
+        if ran == 0 && self.frames == 0 {
+            ran = 1;
+        }
 
-        let mut ran = 0;
-        while (self.accum >= NTSC_FRAME && ran < 4) || (ran == 0 && self.frames == 0) {
+        let mut done = 0;
+        while done < ran {
             if let Err(err) = self.core.run_frame() {
                 self.message = err.to_string();
                 self.paused = true;
+                self.next_repaint = Duration::from_millis(250);
                 break;
             }
             self.frames += 1;
-            ran += 1;
-            self.accum = (self.accum - NTSC_FRAME).max(0.0);
+            done += 1;
         }
 
-        if ran > 0 {
+        if done > 0 {
             self.upload(ctx);
             if dt > 0.0001 {
-                let instant = ran as f32 / dt;
+                let instant = done as f32 / dt;
                 self.fps = if self.fps == 0.0 {
                     instant
                 } else {
                     self.fps * 0.9 + instant * 0.1
                 };
             }
+        }
+    }
+
+    /// How long the UI should wait before the next emulation update.
+    #[must_use]
+    pub fn next_repaint(&self) -> Duration {
+        if self.paused {
+            Duration::from_millis(250)
+        } else {
+            self.next_repaint
         }
     }
 
@@ -224,8 +288,12 @@ impl Player {
     /// Pauses/resumes.
     pub fn toggle_pause(&mut self) {
         self.paused = !self.paused;
-        self.last_tick = Instant::now();
-        self.accum = 0.0;
+        self.pacer.reset();
+        self.next_repaint = if self.paused {
+            Duration::from_millis(250)
+        } else {
+            Duration::ZERO
+        };
     }
 
     /// Hard reset.
@@ -262,8 +330,8 @@ impl Player {
             Ok(state) => match self.core.load_state(&state) {
                 Ok(()) => {
                     self.slot = slot;
-                    self.last_tick = Instant::now();
-                    self.accum = 0.0;
+                    self.pacer.reset();
+                    self.next_repaint = Duration::ZERO;
                     self.message = format!("Loaded state slot {slot}");
                 }
                 Err(err) => self.message = err.to_string(),
@@ -375,4 +443,62 @@ fn rom_fingerprint(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pacer_at(start: Instant) -> FramePacer {
+        FramePacer::new(start)
+    }
+
+    #[test]
+    fn pacer_runs_one_frame_per_interval() {
+        let start = Instant::now();
+        let mut pacer = pacer_at(start);
+        let frame = pacer.frame;
+        // The first interval is empty, so `Player::step` presents the
+        // power-on frame itself (frames == 0).
+        let (ran, _, wait) = pacer.advance(start);
+        assert_eq!(ran, 0);
+        assert_eq!(wait, frame);
+        let (ran, _, wait) = pacer.advance(start + frame);
+        assert_eq!(ran, 1);
+        assert_eq!(wait, frame);
+        let (ran, _, _) = pacer.advance(start + frame * 2);
+        assert_eq!(ran, 1);
+    }
+
+    #[test]
+    fn pacer_bounds_catch_up_and_drops_backlog() {
+        let start = Instant::now();
+        let mut pacer = pacer_at(start);
+        let frame = pacer.frame;
+        // A 10-frame UI stall must not produce 10 emulated frames.
+        let (ran, _, wait) = pacer.advance(start + frame * 10);
+        assert_eq!(ran, MAX_CATCH_UP);
+        // Backlog is discarded, so the next update waits a full frame
+        // instead of immediately running more stale frames.
+        assert_eq!(wait, frame);
+        let (ran, _, _) = pacer.advance(start + frame * 11);
+        assert_eq!(ran, 1);
+    }
+
+    #[test]
+    fn pacer_stays_locked_over_a_long_run() {
+        let start = Instant::now();
+        let mut pacer = pacer_at(start);
+        let frame = pacer.frame;
+        let mut now = start;
+        let mut frames = 0;
+        for _ in 0..600 {
+            now += frame;
+            let (ran, _, wait) = pacer.advance(now);
+            frames += ran;
+            assert!(ran <= 1, "steady 60 Hz input ran {ran} frames");
+            assert!(wait <= frame, "wait {wait:?} exceeds one frame");
+        }
+        assert_eq!(frames, 600);
+    }
 }
