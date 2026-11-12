@@ -149,7 +149,7 @@ See `docs/accuracy-status.md` for the measured log.
 
 ### A5 — accuracy gate
 - Exit: AccuracyCoin 146/146 non-DRAW rows and a documented divergence ledger.
-- Progress: 139/146 non-DRAW rows pass as of 2026-11-07; see
+- Progress: 146/146 non-DRAW rows pass as of 2026-11-12; see
   `docs/accuracy-status.md` and `docs/accuracy-divergences.md`.
 
 ### A6 — breadth

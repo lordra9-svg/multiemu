@@ -583,7 +583,7 @@ suite green. The remaining `INC $4014` regression was the sticky OAM2-freeze
 flag: it was being re-raised on every temporary-counter wrap after the
 dot-255 clear. Raising it only on the first wrap of an evaluation restores the
 page-06 OAM-DMA sprite-zero hit without changing the frozen-OAM2 tests. The
-isolated battery is now **139/151**.
+isolated battery was then **139/151**.
 
 `Stale Sprite Shift Regs` now passes. Two sprite-fetch details were wrong:
 the per-slot shifter/position latch ran on the first dot of each slot's fetch
@@ -1386,21 +1386,14 @@ navigates with closed-loop feedback from the ROM's own cursor variables
 (`$14` page, `$16` row), then presses A and reads that row's result address.
 It is slower but immune to cross-test corruption.
 
-Current measured result (v3.1.0 ROM):
+Current measured result (v3.1.0 ROM, 2026-11-12):
 
 ```text
-Full-battery mode:   84/151 pass, 44 fail, 5 skip, 18 unrun (stall at $F278)
 Isolated mode:       146/151 pass,  0 fail, 5 skip,  0 unrun (199320 frames)
 ```
 
-The 5 skipped rows are the DRAW tests. The 3 remaining unrun all hang even with
-8000 frames and need emulator fixes:
-
-```text
-[PPU VBlank Timing]  NMI disabled at VBlank   @ 0456
-[Sprite Evaluation]  OAM Corruption           @ 047B
-[PPU Misc.]          $2007 Stress Test        @ 048E
-```
+The 5 skipped rows are the DRAW tests. The former hangs (NMI disabled at
+VBlank, OAM Corruption and the `$2007` Stress Test) are resolved.
 
 Recent accuracy fixes from the failure clusters:
 
@@ -1719,3 +1712,20 @@ notice were removed. The header-correction database that shipped with TetaNES
 was not carried over (it contains commercial title/CRC metadata); iNES/NES 2.0
 headers are used directly, and DAT-based dump detection/header repair remains
 the planned ROM-management feature.
+
+### 2026-11-12 — PPU palette `$2007` buffer; multi-oracle gate note
+
+A palette read (`$3F00-$3FFF`) returns the palette entry immediately, but the
+deferred four-dot `$2007` buffer fill was reading the palette address itself
+instead of the nametable underneath it. The completion path now masks palette
+addresses with `$2FFF`, matching the immediate path. AccuracyCoin's PPU Read
+Buffer test goes from code 15 to PASS, and Palette RAM Quirks follows once its
+prerequisite passes. The isolated battery is **146/151 pass, 0 fail, 5 DRAW
+skips, 0 unrun**.
+
+Oracle note: raw hashes are palette-sensitive. For *Star Wars* (Namco,
+mapper 19), RustyNES reports a blank 120-frame sample while ares and MesenCE
+both render the title; at frame 120 our RGBA frame differs from ares in only
+four palette colour pairs and has identical geometry (24,134/61,440 pixels
+byte-identical). Use ares/MesenCE for geometry when the primary oracle's
+boot/palette model disagrees.
