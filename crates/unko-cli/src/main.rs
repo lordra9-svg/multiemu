@@ -905,13 +905,36 @@ fn run() -> Result<(), Box<dyn Error>> {
             );
         }
         "bench" => {
-            let path = args.next().ok_or_else(usage)?;
-            let frames: u32 = args
-                .next()
-                .unwrap_or_else(|| "600".into())
-                .parse()
-                .map_err(|_| "frames must be a number")?;
-            let (_, rom) = load_arg(&path)?;
+            let mut synthetic = false;
+            let mut min_fps: Option<f64> = None;
+            let mut positional: Vec<String> = Vec::new();
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--synthetic" => synthetic = true,
+                    "--min-fps" => {
+                        min_fps = Some(
+                            args.next()
+                                .ok_or("--min-fps needs a number")?
+                                .parse()
+                                .map_err(|_| "--min-fps needs a number")?,
+                        );
+                    }
+                    other => positional.push(other.to_string()),
+                }
+            }
+            let frames: u32 = if synthetic {
+                positional.first()
+            } else {
+                positional.get(1)
+            }
+            .map_or(Ok(600), |value| value.parse())
+            .map_err(|_| "frames must be a number")?;
+            let rom = if synthetic {
+                synthetic_benchmark_rom()
+            } else {
+                let path = positional.first().ok_or_else(usage)?;
+                load_arg(path)?.1
+            };
             let registry = registry();
             let mut core = create_core(&registry, None)?;
             core.load(&rom, &LoadOptions::default())?;
@@ -921,16 +944,57 @@ fn run() -> Result<(), Box<dyn Error>> {
                 core.run_frame()?;
             }
             let secs = start.elapsed().as_secs_f64();
+            let fps = f64::from(frames) / secs;
             println!(
                 "{frames} frames, {:.3}s, {:.1} fps, {:.2}x realtime",
                 secs,
-                f64::from(frames) / secs,
-                (f64::from(frames) / secs) / 60.0988,
+                fps,
+                fps / 60.0988,
             );
+            if let Some(minimum) = min_fps {
+                if fps < minimum {
+                    return Err(format!(
+                        "performance budget failed: {fps:.1} fps < {minimum:.1} fps"
+                    )
+                    .into());
+                }
+            }
         }
         other => return Err(format!("unknown command {other}\n{}", usage()).into()),
     }
     Ok(())
+}
+
+/// A self-contained NROM used by the CI performance budget. It enables
+/// rendering and loops `INC $00 / JMP`, so it exercises the CPU bus, PPU
+/// background pipeline and APU without shipping a commercial ROM.
+fn synthetic_benchmark_rom() -> Vec<u8> {
+    let prg_len = 16 * 1024;
+    let mut rom = vec![0u8; 16 + prg_len + 8 * 1024];
+    rom[0..4].copy_from_slice(b"NES\x1a");
+    rom[4] = 1;
+    rom[5] = 1;
+    for byte in &mut rom[16..16 + prg_len] {
+        *byte = 0xEA;
+    }
+    let code: [u8; 18] = [
+        0x78, // SEI
+        0xD8, // CLD
+        0xA2, 0xFF, // LDX #$FF
+        0x9A, // TXS
+        0xA9, 0x00, // LDA #$00
+        0x8D, 0x00, 0x20, // STA $2000
+        0xA9, 0x1E, // LDA #$1E
+        0x8D, 0x01, 0x20, // STA $2001
+        0x4C, 0x20, 0x80, // JMP $8020
+    ];
+    rom[16..16 + code.len()].copy_from_slice(&code);
+    // $8020: INC $00 / JMP $8020
+    rom[16 + 0x20..16 + 0x25].copy_from_slice(&[0xE6, 0x00, 0x4C, 0x20, 0x80]);
+    let vector = 16 + prg_len - 4;
+    rom[vector] = 0x00;
+    rom[vector + 1] = 0x80;
+    rom
 }
 
 fn registry() -> Registry {
@@ -973,7 +1037,8 @@ fn usage() -> String {
   unko corpus <dir> [--parity] [--frames N] [--oracle PATH] [--mapper ID] [--skip N] [--limit N] [--min-video PCT] [--min-audio PCT] [--jobs N]
   unko parity <a.trace> <b.trace> [--window N]
   unko boundary <rom|archive> [frames]
-  unko bench <rom|archive> [frames]"
+  unko bench <rom|archive> [frames] [--min-fps N]
+  unko bench --synthetic [frames] [--min-fps N]"
         .into()
 }
 

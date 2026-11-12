@@ -32,6 +32,8 @@ pub struct System {
     zapper: [Zapper; 2],
     /// PPU frame number of the last Zapper light reset.
     zapper_frame: u64,
+    /// Whether any port currently has a Zapper attached.
+    zapper_present: bool,
     strobe: bool,
     /// Regional timing (NTSC/PAL/Dendy).
     timing: Timing,
@@ -288,6 +290,7 @@ impl System {
             devices: [PortDevice::Gamepad; 2],
             zapper: [Zapper::default(); 2],
             zapper_frame: 0,
+            zapper_present: false,
             strobe: false,
             timing,
             ppu_credit: 0,
@@ -336,6 +339,7 @@ impl System {
     pub fn set_port_device(&mut self, port: usize, device: PortDevice) {
         if port < 2 {
             self.devices[port] = device;
+            self.zapper_present = self.devices.contains(&PortDevice::Zapper);
         }
     }
 
@@ -548,6 +552,7 @@ impl System {
         self.ram = state.ram;
         self.controllers = state.controllers;
         self.devices = state.devices;
+        self.zapper_present = self.devices.contains(&PortDevice::Zapper);
         self.zapper = state.zapper;
         self.zapper_frame = state.zapper_frame;
         self.strobe = state.strobe;
@@ -1091,12 +1096,7 @@ impl System {
     fn dma_read(&mut self, address: u16) -> u8 {
         match address {
             0x0000..=0x1FFF => self.ram[usize::from(address) & 0x07FF],
-            0x2000..=0x3FFF => {
-                if address & 7 == 7 {
-                    self.refresh_chr();
-                }
-                self.ppu.read_register(address)
-            }
+            0x2000..=0x3FFF => self.ppu.read_register(address),
             0x4015 => self.apu.read_status(),
             0x4016 => self.read_controller(0),
             0x4017 => self.read_controller(1),

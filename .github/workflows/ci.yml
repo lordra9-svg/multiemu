@@ -82,3 +82,15 @@ jobs:
         run: rustup target add ${{ matrix.target }}
       - name: Check core
         run: cargo check -p nes_accuracy_core --target ${{ matrix.target }}
+
+  performance:
+    name: headless performance budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release CLI
+        run: cargo build --release -p unko-cli
+      - name: Performance budget
+        run: ./target/release/unko bench --synthetic 3000 --min-fps 300

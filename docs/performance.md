@@ -21,6 +21,15 @@ without audio hardware, and the PPU CHR cache is refreshed only when a mapper
 write invalidates it. Pausing on focus loss drops the shell to 4 Hz when the
 window is inactive.
 
+## CI budget
+
+`unko bench --synthetic [frames] --min-fps N` runs a self-contained rendering
+NROM (no ROM file or copyrighted content) and fails when throughput falls below
+the budget. CI requires **300 fps** for 3,000 frames on the shared Linux runner;
+the current development machine measures about **700 fps** (~12x real-time)
+for the same workload. This catches gross per-cycle regressions without making
+CI dependent on a commercial ROM.
+
 ## PGO
 
 `scripts/pgo.sh <rom-directory>` builds an instrumented binary, trains it on a

@@ -1390,7 +1390,7 @@ Current measured result (v3.1.0 ROM):
 
 ```text
 Full-battery mode:   84/151 pass, 44 fail, 5 skip, 18 unrun (stall at $F278)
-Isolated mode:       139/151 pass,  7 fail, 5 skip,  0 unrun (199320 frames)
+Isolated mode:       146/151 pass,  0 fail, 5 skip,  0 unrun (199320 frames)
 ```
 
 The 5 skipped rows are the DRAW tests. The 3 remaining unrun all hang even with

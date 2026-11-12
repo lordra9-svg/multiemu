@@ -6,7 +6,7 @@ ROM). It is required by the accuracy charter in `docs/accuracy.md`. Add a dated
 entry whenever a divergence is found, and remove it only when a test or a
 hardware capture proves the behaviour matches.
 
-Current snapshot: **2026-11-08**, AccuracyCoin v3.1.0, isolated battery
+Current snapshot: **2026-11-12**, AccuracyCoin v3.1.0, isolated battery
 **146/151 passed, 0 failed, 5 skipped, 0 unrun**.
 
 The five skipped rows are the `DRAW` tests, which need a human-drawn reference
@@ -16,6 +16,28 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 ## Open failures
 
 None. All non-DRAW AccuracyCoin rows pass.
+
+## Recently closed (2026-11-12)
+
+- **PPU Read Buffer.** A read from palette RAM returned the palette entry but
+  the deferred `$2007` buffer fill then read `$3F00` itself instead of the
+  nametable underneath it (`$2F00`), so test 7 saw zero instead of `$5A`.
+  The buffer fill now masks palette addresses with `$2FFF`, matching the
+  immediate palette-read path. Unit test
+  `palette_read_loads_the_buffer_from_the_nametable_underneath`.
+- **Palette RAM Quirks.** Passes once its PPU Read Buffer prerequisite passes.
+
+## Multi-oracle note
+
+Raw frame hashes are palette-sensitive. For *Star Wars* (Namco, mapper 19),
+the RustyNES oracle reports a blank screen for the whole 120-frame sample
+(2/120 video hashes), while ares and MesenCE both render the Namco title
+screen. At frame 120 our RGBA frame differs from the ares capture in only four
+palette colour pairs (24,134 of 61,440 pixels are byte-identical, and the
+geometry is identical); the remaining difference is the reference's RGB
+palette table. RustyNES is therefore a false negative for this title, and the
+oracle hierarchy must prefer ares/MesenCE for geometry and behaviour whenever
+the primary oracle's palette or boot model is suspect.
 
 ## Recently closed (2026-11-08)
 

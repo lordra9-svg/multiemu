@@ -888,7 +888,15 @@ impl Ppu {
                 self.read_buffer = if self.data_read_render && self.fetch_hold > 0 {
                     self.fetch_byte
                 } else {
-                    self.read_vram(self.data_read_address & 0x3FFF)
+                    let address = self.data_read_address;
+                    // Palette reads return the palette entry but load the
+                    // buffer from the nametable underneath it ($2Fxx).
+                    let buffer_address = if address >= 0x3F00 {
+                        address & 0x2FFF
+                    } else {
+                        address
+                    };
+                    self.read_vram(buffer_address)
                 };
                 if self.data_read_render {
                     self.increment_vram_address(true);
@@ -2639,6 +2647,28 @@ mod tests {
         ppu.end_warmup();
         ppu.write_register(0x2000, 0x80);
         assert_eq!(ppu.ctrl, 0x80);
+    }
+
+    #[test]
+    fn palette_read_loads_the_buffer_from_the_nametable_underneath() {
+        let mut ppu = ppu();
+        ppu.mask = 0;
+        ppu.scanline = 0;
+        ppu.dot = 0;
+        // Put $5A in the nametable byte under palette $3F00.
+        ppu.v = 0x2F00;
+        ppu.write_register(7, 0x5A);
+        // A palette read returns the palette entry but buffers $2F00.
+        ppu.v = 0x3F00;
+        let palette = ppu.read_register(7);
+        assert_eq!(palette & 0x3F, 0);
+        for _ in 0..4 {
+            ppu.step_dot();
+        }
+        assert_eq!(ppu.read_buffer, 0x5A);
+        // The next normal read returns the buffered nametable byte.
+        ppu.v = 0x0000;
+        assert_eq!(ppu.read_register(7), 0x5A);
     }
 
     #[test]

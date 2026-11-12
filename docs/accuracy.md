@@ -25,7 +25,7 @@ Public suites must be 100%:
 | `ppu_sprites` | 19/19 |
 | MMC3 A12 IRQ tests | all |
 | `apu_test`, `blargg_apu_2005` | all |
-| AccuracyCoin | 146/146 non-DRAW rows (currently 139/146) |
+| AccuracyCoin | 146/146 non-DRAW rows (currently 146/146) |
 | Commercial oracle corpus | byte-identical frames/audio |
 
 "Reference parity" is stronger than "runs the library": a game that looks right
