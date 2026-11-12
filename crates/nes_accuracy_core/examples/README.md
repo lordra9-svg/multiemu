@@ -14,6 +14,7 @@ without notice. All of them expect the test ROMs to be supplied locally under
 | `accoin_stall` | Find rows that hang or stall (for example at `$F278`). |
 | `accoin_trace` | Trace per-row results across a run. |
 | `inspect` | Boot a ROM for N frames headlessly and print display/scanline diagnostics. |
+| `apudump` | Per-CPU-cycle APU channel trace for one frame; requires `--features apu-trace`. Compares directly with the reference oracle's `APU_TRACE` records. |
 
 Typical invocation:
 

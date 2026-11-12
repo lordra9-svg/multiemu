@@ -17,6 +17,29 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 
 None. All non-DRAW AccuracyCoin rows pass.
 
+## Known residual differences (no test failures)
+
+These do not fail any suite and are documented exceptions under the charter.
+
+- **Frame-origin phase / APU pulse phase.** The frame-complete point can land
+  one CPU cycle (three PPU dots) away from the reference capture, alternating
+  with frame parity. Video is unaffected (the per-dot PPU phase matches), but
+  it moves the audio drain slice and the APU clock phase seen by a register
+  write. A per-cycle channel trace shows triangle, noise and DMC outputs
+  bit-identical and both pulse channels exactly one CPU cycle out of phase
+  once continuous music starts (for example *The Legend of Zelda* from frame
+  39: 4-16 transition cycles per frame, mixed-output delta <= 0.05, inaudible
+  at 1.79 MHz). Controlled differential probe ROMs - enable, duty, timer and
+  length writes, mid-note timer writes, duty resets and `$4017` writes at every
+  cycle parity - are bit-identical, as is every frame before the music starts.
+  Per-frame drained sample counts differ by at most one sample in 36 of 120
+  frames, with the same total (87,304) over the run.
+
+  Earlier sessions ported the reference's master-clock bus and a coupled
+  CPU/PPU scheduler; both were measured and regressed video/audio parity, so
+  the integer dot scheduler is kept. Closing this difference needs a hardware
+  capture of the exact frame wrap, which is not available locally.
+
 ## Recently closed (2026-11-12)
 
 - **PPU Read Buffer.** A read from palette RAM returned the palette entry but

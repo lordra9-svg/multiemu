@@ -151,9 +151,11 @@ gating:
 - `signatures <dir> [--frames N] [--mapper ID] [--check FILE]` — hashes every
   frame of every image and compares against a local manifest, reporting
   changed/new/missing titles.
-- `trace <rom> --frames N --out trace.txt [--no-state]` and
+- `trace <rom> --frames N --out trace.txt [--no-state] [--audio-dir DIR]` and
   `diff a.trace b.trace [--skip N] [--video]` — per-frame video/audio hashes
-  and the first divergent frame for one image. `--no-state` omits the
+  and the first divergent frame for one image. `--audio-dir` also writes the
+  `f32` samples of each frame as `frame-NNNN.f32` (little-endian) for
+  sample-level comparison with a reference capture. `--no-state` omits the
   save-state hash so a trace can be compared with a reference capture that has
   no state; `--skip N` ignores start-up frames and `--video` compares video
   only while the audio mixers are still being aligned.
@@ -161,6 +163,11 @@ gating:
   video/audio match counts, the first divergence of each, and the best
   alignment over ±N frames. This distinguishes a real rendering/audio defect
   from the known one-cycle frame-origin drift.
+- `cargo run -p nes_accuracy_core --features apu-trace --example apudump --
+  <rom> <frame>` — prints every channel's DAC output and the mixed value for
+  each CPU cycle of one frame (`cycle p1 p2 tri noise dmc mixed`), matching
+  the reference oracle's `APU_TRACE=<frame>` records. The feature is off by
+  default so release builds carry no trace branch.
 - `trace <disk.fds> --bios disksys.rom ... [--press-start N]` — traces a raw
   FDS disk image with a user-supplied BIOS. `--press-start N` holds Start for
   12 frames from frame `N` so a licence screen can be dismissed deterministically.

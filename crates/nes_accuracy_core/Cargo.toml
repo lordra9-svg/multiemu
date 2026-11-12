@@ -6,6 +6,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Per-CPU-cycle APU channel trace used by the `apudump` differential example.
+# Off by default so the release hot path has no trace branch.
+apu-trace = []
+
+[[example]]
+name = "apudump"
+required-features = ["apu-trace"]
+
 [dependencies]
 unko-core.workspace = true
 serde = { version = "1", features = ["derive", "rc"] }

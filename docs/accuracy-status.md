@@ -1757,3 +1757,35 @@ New regression tests pin the timing invariants that the harness relies on:
 - `ppu_data_read_while_rendering_uses_the_fetch_byte` checks that a `$2007`
   read during rendering fills the buffer from the fetch pipeline (not VRAM)
   and applies the deferred, glitching increment (`$2000 -> $3001`).
+
+### 2026-11-12 — per-cycle APU differential trace
+
+Added a feature-gated per-CPU-cycle APU trace (`apudump`, `--features
+apu-trace`) and a raw-audio dump on `unko trace` (`--audio-dir`), then compared
+against the reference oracle's `APU_TRACE` records.
+
+Results for *The Legend of Zelda* (USA) and *Super Mario Bros.*:
+
+- Frames 1-38 are audio-bit-identical; the first difference is the first
+  continuous music note (Zelda frame 39, sample 567 of that frame).
+- From then on triangle, noise and DMC are bit-identical every cycle, and both
+  pulse channels are exactly one CPU cycle out of phase (4-16 transition
+  cycles per frame, mixed delta <= 0.05).
+- Per-frame sample counts differ by at most one in 36 of 120 frames; the run
+  total is identical (87,304 samples).
+- Twelve controlled probe ROMs (pulse enable, duty, timer low/high, mid-note
+  timer writes, duty resets, `$4017` writes, and every write parity) are
+  bit-identical, so the APU register model itself matches the reference.
+- The one-cycle offset is the known frame-origin phase difference already
+  documented above (per-instruction streams are identical but shifted by one
+  cycle from frame ~12). It only becomes audible when the pulse channels are
+  gated on, which is why the earlier calibrations stopped at frame 38.
+
+No scheduler change is shipped: the master-clock and coupled CPU/PPU
+schedulers were ported and measured earlier and both regress parity. The
+residual is recorded as a documented exception in
+`docs/accuracy-divergences.md`; closing it needs a hardware capture of the
+frame wrap.
+
+The new `pulse_timer_period_matches_the_reference_probe` unit test pins the
+sequencer period that the differential probes verify.

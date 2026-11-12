@@ -642,8 +642,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut with_state = true;
             let mut bios: Option<String> = None;
             let mut press_start: Option<u32> = None;
+            let mut audio_dir: Option<String> = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
+                    "--audio-dir" => {
+                        audio_dir = Some(args.next().ok_or("--audio-dir needs a path")?);
+                    }
                     "--frames" => {
                         frames = args
                             .next()
@@ -665,6 +669,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                     }
                     other => return Err(format!("unknown option {other}").into()),
                 }
+            }
+            if let Some(dir) = &audio_dir {
+                fs::create_dir_all(dir)?;
             }
             if let Some(bios) = bios {
                 let disk = fs::read(&path)?;
@@ -692,6 +699,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                     let mut audio = FNV_OFFSET;
                     for sample in system.audio() {
                         audio = fnv1a(audio, &sample.to_bits().to_le_bytes());
+                    }
+                    if let Some(dir) = &audio_dir {
+                        write_audio_dump(dir, frame, system.audio())?;
                     }
                     text.push_str(&format!(
                         "frame {frame} {video:016x} {audio:016x} {geometry:016x}\n"
@@ -724,6 +734,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                 let video = hash_video(FNV_OFFSET, core.as_ref());
                 let audio = hash_audio(FNV_OFFSET, core.as_ref());
                 let geometry = hash_geometry(core.video().data);
+                if let Some(dir) = &audio_dir {
+                    write_audio_dump(dir, frame, core.audio().samples)?;
+                }
                 text.push_str(&format!(
                     "frame {frame} {video:016x} {audio:016x} {geometry:016x}\n"
                 ));
@@ -1095,7 +1108,7 @@ fn usage() -> String {
   unko signatures <dir> [--frames N] [--mapper ID] [--limit N] [--check FILE]
   unko run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID]
   unko verify <rom|archive> [frames]
-  unko trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N]
+  unko trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N] [--audio-dir DIR]
   unko diff <a.trace> <b.trace> [--skip N] [--video]
   unko corpus <dir> [--parity] [--frames N] [--oracle PATH] [--mapper ID] [--skip N] [--limit N] [--min-video PCT] [--min-audio PCT] [--jobs N]
   unko parity <a.trace> <b.trace> [--window N]
@@ -1218,6 +1231,16 @@ fn parse_trace(text: &str) -> Result<Trace, Box<dyn Error>> {
         }
     }
     Ok((frames, state))
+}
+
+/// Writes one frame of `f32` audio samples as little-endian raw data.
+fn write_audio_dump(dir: &str, frame: u32, samples: &[f32]) -> Result<(), Box<dyn Error>> {
+    let mut bytes = Vec::with_capacity(samples.len() * 4);
+    for sample in samples {
+        bytes.extend_from_slice(&sample.to_bits().to_le_bytes());
+    }
+    fs::write(format!("{dir}/frame-{frame:04}.f32"), bytes)?;
+    Ok(())
 }
 
 /// Writes a binary PPM (P6), dropping the alpha channel.

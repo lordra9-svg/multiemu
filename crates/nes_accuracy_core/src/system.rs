@@ -34,6 +34,10 @@ pub struct System {
     zapper_frame: u64,
     /// Whether any port currently has a Zapper attached.
     zapper_present: bool,
+    /// Debug: per-CPU-cycle APU channel outputs collected between
+    /// `start_apu_trace` and `take_apu_trace` (feature `apu-trace`).
+    #[cfg(feature = "apu-trace")]
+    apu_trace: Option<Vec<(u64, [f32; 6])>>,
     strobe: bool,
     /// Regional timing (NTSC/PAL/Dendy).
     timing: Timing,
@@ -291,6 +295,8 @@ impl System {
             zapper: [Zapper::default(); 2],
             zapper_frame: 0,
             zapper_present: false,
+            #[cfg(feature = "apu-trace")]
+            apu_trace: None,
             strobe: false,
             timing,
             ppu_credit: 0,
@@ -616,6 +622,20 @@ impl System {
         &self.audio
     }
 
+    /// Starts collecting per-CPU-cycle APU channel outputs for debugging.
+    #[cfg(feature = "apu-trace")]
+    pub fn start_apu_trace(&mut self) {
+        self.apu_trace = Some(Vec::new());
+    }
+
+    /// Takes the per-CPU-cycle trace: `(apu_cycles, [p1, p2, tri, noise, dmc,
+    /// mixed])`.
+    #[cfg(feature = "apu-trace")]
+    #[must_use]
+    pub fn take_apu_trace(&mut self) -> Vec<(u64, [f32; 6])> {
+        self.apu_trace.take().unwrap_or_default()
+    }
+
     /// Current audio sample rate.
     #[must_use]
     pub const fn sample_rate(&self) -> f32 {
@@ -764,9 +784,23 @@ impl System {
         if self.cart.needs_cpu_clock() {
             self.cart.clock_cpu();
         }
+        self.apu_cycle();
+    }
+
+    /// Advances the APU by one CPU cycle and records a debug trace entry when
+    /// tracing is enabled.
+    #[inline]
+    fn apu_cycle(&mut self) {
         self.apu.phase_override = Some(self.phase);
         self.apu.tick();
         self.mix_sample();
+        #[cfg(feature = "apu-trace")]
+        if let Some(trace) = &mut self.apu_trace {
+            let mut record = [0.0; 6];
+            record[..5].copy_from_slice(&self.apu.channel_outputs());
+            record[5] = self.apu.output;
+            trace.push((self.apu.cycles(), record));
+        }
         self.phase = !self.phase;
     }
 
@@ -810,10 +844,7 @@ impl System {
         if self.cart.needs_cpu_clock() {
             self.cart.clock_cpu();
         }
-        self.apu.phase_override = Some(self.phase);
-        self.apu.tick();
-        self.mix_sample();
-        self.phase = !self.phase;
+        self.apu_cycle();
 
         if self.dmc_carry != 0 {
             // The OAM transfer ended while a DMC fetch was in flight, so the

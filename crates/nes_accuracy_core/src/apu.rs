@@ -1059,6 +1059,19 @@ impl Apu {
         self.dmc.load_buffer(byte);
     }
 
+    /// Debug view of the five channel DAC outputs in the order
+    /// `[pulse1, pulse2, triangle, noise, dmc]`, before mixing.
+    #[must_use]
+    pub fn channel_outputs(&self) -> [f32; 5] {
+        [
+            self.pulse1.output(),
+            self.pulse2.output(),
+            self.triangle.output(),
+            self.noise.output(),
+            self.dmc.output(),
+        ]
+    }
+
     /// Mixed output in the range `0..~100`.
     #[must_use]
     pub fn mix(&self) -> f32 {
@@ -1088,6 +1101,44 @@ impl Apu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pulse_timer_period_matches_the_reference_probe() {
+        // Mirrors the differential probe ROM: enable pulse 1, 50% duty at
+        // constant volume 15, timer $40, length index 1. A per-cycle trace of
+        // the reference (RustyNES) shows every sequencer step exactly
+        // 2 * (timer + 1) CPU cycles apart, so consecutive output edges of a
+        // 50% duty pattern are eight timer periods apart.
+        let mut apu = Apu::new();
+        apu.write(0x4015, 0x01);
+        apu.write(0x4000, 0xBF);
+        apu.write(0x4002, 0x40);
+        apu.write(0x4003, 0x08);
+        let mut edges = Vec::new();
+        let mut last = 0.0;
+        for cycle in 0..2000u32 {
+            apu.tick();
+            let output = apu.channel_outputs()[0];
+            if output != last {
+                edges.push(cycle);
+                last = output;
+            }
+        }
+        assert!(
+            edges.len() >= 4,
+            "expected several duty edges, got {edges:?}"
+        );
+        // 50% duty means four silent and four audible sequencer steps, so
+        // consecutive output edges are four timer periods apart.
+        let edge_period = 8 * (0x40 + 1);
+        for pair in edges.windows(2).skip(1) {
+            assert_eq!(
+                pair[1] - pair[0],
+                edge_period,
+                "duty edges must be four timer periods apart"
+            );
+        }
+    }
 
     #[test]
     #[allow(clippy::assertions_on_constants)]
