@@ -74,6 +74,24 @@ Key interaction rules worth keeping:
 | Per-game properties | header/mapper/region overrides | later |
 | NetPlay / Achievements / Debugger | separate milestones | later |
 
+## Platforms
+
+The shell is one egui/eframe codebase with platform backends behind it:
+
+| Target | Input | Audio | Paths |
+|---|---|---|---|
+| Linux | SDL3 | cpal/ALSA or PulseAudio | portable `unko.conf` or platform dirs |
+| Windows | SDL3 | cpal/WASAPI | portable `unko.conf` or platform dirs |
+| macOS | SDL3 | cpal/CoreAudio | portable `unko.conf` or platform dirs |
+| iOS | SDL3 + touch overlay | cpal/CoreAudio | `ProjectDirs` config/data |
+| Android | SDL3 + touch overlay | cpal/AAudio | `ProjectDirs` config/data |
+
+SDL3 is built from source by Cargo, so desktop and mobile use the same input
+backend. CI checks the full workspace on Linux, Windows and macOS, and the NES
+core for the Android and iOS Rust targets. The native mobile application
+shells (Xcode/Android Studio packaging and signing) are the remaining platform
+deliverable.
+
 ## What is deliberately different
 
 - **No Qt, no C++ UI.** `egui` keeps the shell in the same workspace and builds
@@ -109,7 +127,9 @@ Key interaction rules worth keeping:
   and fed one mono sample per emulated frame.
 - Recording: WAV audio, numbered PNG frames and animated GIF, written under
   `saves/recordings`; all encoders are pure Rust and work on every target.
-- State/SRAM: `saves/<rom>.state` and `saves/<rom>.sav`; the core never touches
-  the filesystem.
+- State/SRAM: `saves/<rom>.<core>.slotN.state` and `saves/<rom>.sav`; the core
+  never touches the filesystem. States carry an `UNKOST01` header, a ROM
+  fingerprint and the mapper state, so a state cannot be loaded into a
+  different image or core. The former TetaNES state files are ignored.
 - Audio playback is active through cpal; the Audio page reports the actual
   device rate, channel count, underruns and dropped samples.

@@ -1,15 +1,12 @@
 # Unko
 
 A multi-platform, multi-core emulator shell written in Rust. The first system
-is the NES; the compatibility core is
-[`tetanes-core`](https://crates.io/crates/tetanes-core) behind a
-system-agnostic interface, and the reference-parity core is
-`nes_accuracy_core`.
+is the NES, powered by the reference-parity `nes_accuracy_core` behind a
+system-agnostic interface.
 
 > **Rename:** this project was formerly `multi-emu` / `multiemu`. The emulator is
 > now **Unko**, the host crates are `unko-core`, `unko-rom`, `unko-cli` and
-> `unko-app`, and the two NES cores are `nes_core` (TetaNES-derived fallback) and
-> `nes_accuracy_core`. The `--core` IDs are `nes_core` and `nes_accuracy_core`.
+> `unko-app`, and the NES core is `nes_accuracy_core` (`--core nes_accuracy_core`).
 
 **Repository:** <https://github.com/lordra9-svg/unko>
 
@@ -38,7 +35,6 @@ approximation are recorded in
 crates/
   unko-core/         # SystemId, Core trait, video/audio/input/state types, registry
   unko-rom/          # discovery + .zip/.7z/.rar containers + iNES metadata
-  nes_core/          # NES compatibility core adapter (tetanes-core)
   nes_accuracy_core/ # reference-parity NES core + its Core ABI adapter (MIT + documented ISC adaptations)
   unko-cli/          # headless runner: info, scan, run, verify, trace, diff, bench, corpus
   unko-app/          # desktop shell (Dolphin-inspired UX)
@@ -55,10 +51,10 @@ docs/
 ```
 
 Target order: **NES → SNES (ares) → N64 (ares) → optional external Dolphin**.
-The NES track has two cores: `nes_core` (TetaNES-derived) for compatibility and `nes_accuracy_core`, a Rust core built to
-reference parity. The accuracy core is MIT with documented ISC-licensed
-adaptations from ares; MesenCE, RustyNES, gopher64 and Dolphin are GPL
-references or separate products. Details in `docs/systems.md`.
+The NES track uses one core: `nes_accuracy_core`, a Rust core built to
+reference parity. It is MIT with documented ISC-licensed adaptations from ares;
+MesenCE, RustyNES, gopher64 and Dolphin are GPL references or separate products.
+Details in `docs/systems.md`.
 
 ## Build and run
 
@@ -113,11 +109,15 @@ cargo run -p nes_accuracy_core --release --example accuracycoin -- \
 
 ## Licensing
 
-Project code is MIT. The NES compatibility backend, `tetanes-core`, is
-dual-licensed MIT OR Apache-2.0 and is used here under the MIT option. Parts of
-the `nes_accuracy_core` NES core are adapted from ares under its ISC
-licence; the attribution is in `NOTICE`, `licenses/ares-LICENSE.txt` and the
-crate's `PROVENANCE.md`. See `NOTICE` and `licenses/` for all third-party terms.
+Project code is MIT. Parts of the `nes_accuracy_core` NES core are adapted from
+ares under its ISC licence; attribution is in `NOTICE`,
+`licenses/ares-LICENSE.txt` and the crate's `PROVENANCE.md`. The desktop shell
+uses SDL3 (zlib), cpal, egui/eframe and the Rust audio/image crates listed in
+`NOTICE`. See `NOTICE` and `licenses/` for all third-party terms.
+
+The retired TetaNES header-correction database was not carried over; the
+accuracy core uses iNES/NES 2.0 headers directly. DAT-based bad-dump detection
+and header repair are the next ROM-management feature.
 
 This repository contains **no ROMs** and no copyrighted console firmware. Bring
 your own legally obtained dumps and BIOS images.

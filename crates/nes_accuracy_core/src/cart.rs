@@ -12,7 +12,7 @@ use std::fmt;
 use std::rc::Rc;
 
 /// Where one nametable quadrant resolves in enhanced-mapper video modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NtMapping {
     /// Console CIRAM page (0 or 1).
     Ciram(u8),
@@ -21,7 +21,7 @@ pub enum NtMapping {
 }
 
 /// Nametable mirroring requested by the cartridge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Mirroring {
     /// Two vertical nametables.
     Vertical,
@@ -40,8 +40,9 @@ pub enum Mirroring {
 ///
 /// The mapper updates this on its register writes, so mid-frame CHR banking
 /// and ExRAM-backed nametables take effect immediately.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc5Aux {
+    #[serde(with = "serde_big_array::BigArray")]
     exram: [u8; 1024],
     mode: u8,
     nt_map: [u8; 4],
@@ -291,7 +292,7 @@ impl Mmc5Aux {
 }
 
 /// Which hybrid CHR board the shared state models.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HybridKind {
     /// Mapper 165: MMC3 registers used as two latched 4 KiB pages; page 0 is
     /// the 4 KiB CHR-RAM page.
@@ -318,7 +319,7 @@ pub enum HybridKind {
 ///
 /// The mapper updates the registers; the PPU owns reads, writes and (for 165)
 /// the `$FD`/`$FE` fetch latches.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct HybridChr {
     kind: HybridKind,
     rom: Vec<u8>,
@@ -562,8 +563,30 @@ impl HybridChr {
     }
 }
 
+/// FNV-1a content fingerprint.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Serialization contract for a mapper's mutable state.
+///
+/// Implemented for every concrete board (generated below); boards that wrap a
+/// trait object (`Supervisor446`) report an explicit unsupported error.
+pub trait MapperState {
+    /// Appends this mapper's state.
+    fn save_state(&self, out: &mut Vec<u8>) -> Result<(), String>;
+
+    /// Restores this mapper's state from `data`.
+    fn load_state(&mut self, data: &[u8]) -> Result<(), String>;
+}
+
 /// A cartridge mapper.
-pub trait Mapper: fmt::Debug {
+pub trait Mapper: fmt::Debug + MapperState {
     /// Reads a PRG address in `$4020..=$FFFF`.
     fn prg_read(&self, address: u16) -> u8;
     /// Reads an address in `$4020..=$5FFF` with side effects (FDS disk status).
@@ -806,10 +829,11 @@ pub struct Cartridge {
     chr_is_ram: bool,
     mapper: Box<dyn Mapper>,
     header: Header,
+    fingerprint: u64,
 }
 
 /// A PRG/CHR byte window with the bank counts the inner logic should use.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct BankWindow {
     prg_offset: usize,
     prg_banks: usize,
@@ -818,7 +842,7 @@ struct BankWindow {
 }
 
 /// Parsed header fields retained after loading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Header {
     /// Mapper number (NES 2.0 high bits included).
     pub mapper: u16,
@@ -854,6 +878,7 @@ impl Cartridge {
         Ok(Self {
             chr_is_ram: true,
             mapper: Box::new(Fds::new(disk, bios)),
+            fingerprint: fnv1a(&[disk, bios].concat()),
             header: Header {
                 mapper: 20,
                 submapper: 0,
@@ -1240,6 +1265,7 @@ impl Cartridge {
             chr_is_ram,
             mapper,
             header,
+            fingerprint: fnv1a(bytes),
         })
     }
 
@@ -1247,6 +1273,34 @@ impl Cartridge {
     #[must_use]
     pub const fn header(&self) -> Header {
         self.header
+    }
+
+    /// FNV-1a fingerprint of the image this cartridge was built from.
+    #[must_use]
+    pub const fn fingerprint(&self) -> u64 {
+        self.fingerprint
+    }
+
+    /// Appends the mapper's mutable state.
+    pub fn save_state(&self, out: &mut Vec<u8>) -> Result<(), String> {
+        self.mapper.save_state(out)
+    }
+
+    /// Restores the mapper state produced by [`Cartridge::save_state`].
+    pub fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
+        if data.len() < 4 {
+            return Err("truncated mapper state".into());
+        }
+        let len = u32::from_le_bytes(
+            data[..4]
+                .try_into()
+                .map_err(|_| "truncated mapper state length".to_string())?,
+        ) as usize;
+        let end = 4usize
+            .checked_add(len)
+            .filter(|end| *end <= data.len())
+            .ok_or("truncated mapper state")?;
+        self.mapper.load_state(&data[4..end])
     }
 
     /// Whether CHR is writable RAM.
@@ -1615,7 +1669,7 @@ fn nes2_size(low: u8, high: u8, unit_kib: usize) -> usize {
 }
 
 /// NROM (mapper 0).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Nrom {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -1666,7 +1720,7 @@ impl Mapper for Nrom {
 }
 
 /// MMC1 (mapper 1).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc1 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -1935,7 +1989,7 @@ impl Mapper for Mmc1 {
 /// `$8000-$BFFF` is the switchable 16 KiB bank; `$C000-$FFFF` is the fixed
 /// last 16 KiB bank. ROM nametable banking is recorded but the PPU currently
 /// renders from CIRAM, so titles that rely on it show CIRAM contents.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sunsoft4 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -2081,9 +2135,10 @@ impl Mapper for Sunsoft4 {
 /// The CHR side mixes ROM and RAM banks under a latch written through the
 /// PPU; the accuracy core currently exposes a writable 8 KiB CHR window, which
 /// covers the games that upload their tiles. The ROM half is a follow-up.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Waixing195 {
     inner: Mmc3,
+    #[serde(with = "serde_big_array::BigArray")]
     ram4k: [u8; 0x1000],
 }
 
@@ -2158,7 +2213,7 @@ impl Mapper for Waixing195 {
 /// PRG, mirroring and IRQ are plain MMC3; the CHR address lines are shifted so
 /// the MMC3's 1 KiB banks become 2/4 KiB ROM banks. Each submapper wires the
 /// register selectors differently.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_197 {
     inner: Mmc3,
     sub: u8,
@@ -2259,7 +2314,7 @@ impl Mapper for Mmc3_197 {
 /// `$6000` selects a 4 KiB CHR bank for `$0000-$0FFF`, `$6001`/`$6002` select
 /// 2 KiB banks for `$1000-$17FF`/`$1800-$1FFF`, `$6003` a 16 KiB PRG bank at
 /// `$8000`, and `$6004` the mirroring. There is no PRG-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct NtdTc112 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -2356,7 +2411,7 @@ impl Mapper for NtdTc112 {
 /// `$4100-$4103` are the latch interface; writing `$8000-$FFFF` latches the
 /// register to the output. CHR uses an 8 KiB bank from output bits 0-2 and PRG
 /// a 32 KiB bank from output bit 4.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen136 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -2549,7 +2604,7 @@ impl Mapper for Sachen136 {
 ///
 /// The written byte carries the bank pair: bits 3-2 choose the 32 KiB PRG
 /// bank and bits 1-0 the 8 KiB CHR bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen133 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -2612,7 +2667,7 @@ impl Mapper for Sachen133 {
 
 /// Address-decoded multicart (mapper 225): two switchable 16 KiB PRG slots and
 /// one 8 KiB CHR window selected entirely by the write address.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart225 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -2694,7 +2749,7 @@ impl Mapper for Multicart225 {
 
 /// Whirlwind Manu SMB2j board (mapper 40): fixed 8 KiB PRG slots with bank 6
 /// visible at `$6000-$7FFF`, and a down-counting M2 IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Whirlwind40 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -2800,7 +2855,7 @@ impl Mapper for Whirlwind40 {
 
 /// Kaiser KS-7017 (mapper 303): switchable 16 KiB PRG at `$8000`, a fixed
 /// second bank at `$C000`, 8 KiB CHR-RAM, and a down-counting M2 IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Kaiser303 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -2956,7 +3011,7 @@ impl Mapper for Kaiser303 {
 /// | `$D000` | CHR latch 1, `$FD` bank |
 /// | `$E000` | CHR latch 1, `$FE` bank |
 /// | `$F000` | mirroring (bit 0: 1 vertical, 0 horizontal) |
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc2 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3094,7 +3149,7 @@ impl Mapper for Mmc2 {
 
 /// Bandai discrete board (mapper 70): 16 KiB PRG and 8 KiB CHR banks from a
 /// single `$8000-$FFFF` write; the last 16 KiB PRG bank is fixed.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bandai70 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3174,7 +3229,7 @@ impl Mapper for Bandai70 {
 
 /// Sunsoft-3R / Sunsoft-2 (mapper 93): UxROM-style 16 KiB PRG banking plus a
 /// CHR-RAM enable bit, with the board's bus conflict on the register write.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sunsoft3r {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3255,7 +3310,7 @@ impl Mapper for Sunsoft3r {
 
 /// Magic Dragon (mapper 107): a write-anywhere register whose low bit picks the
 /// 32 KiB PRG bank and whose full value picks the 8 KiB CHR bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct MagicDragon107 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3326,7 +3381,7 @@ impl Mapper for MagicDragon107 {
 
 /// Nichibutsu inverted UxROM (mapper 180): the low 16 KiB is fixed and the high
 /// 16 KiB switchable, with a bus conflict on the register write.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Nichibutsu180 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3400,7 +3455,7 @@ impl Mapper for Nichibutsu180 {
 /// The register is latched from both the write address and the written byte:
 /// the address selects the 512 KiB PRG chip, the 16 KiB page within it and
 /// mirroring; the low data bits supply the two least-significant CHR bits.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Action52 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3494,7 +3549,7 @@ impl Mapper for Action52 {
 
 /// Fong Shen Bang / Fengshenbang (mapper 246): four 8 KiB PRG and four 2 KiB
 /// CHR registers in `$6000-$6007`, with 2 KiB of battery PRG-RAM at `$6800`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct FongShenBang {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3601,7 +3656,7 @@ impl Mapper for FongShenBang {
 ///
 /// The written byte is ignored; the address low byte supplies the register
 /// value and address bit 10 supplies the MMC3 even/odd line.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Nitra250 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3788,7 +3843,7 @@ impl Mapper for Nitra250 {
 
 /// Jaleco discrete (mapper 140): a `$6000-$7FFF` write selects a 32 KiB PRG
 /// bank (bits 4-5) and an 8 KiB CHR bank (bits 0-3).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Jaleco140 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3858,7 +3913,7 @@ impl Mapper for Jaleco140 {
 }
 
 /// Sachen 149: fixed first 32 KiB PRG and a bus-conflicted CHR bank bit.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen149 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -3924,7 +3979,7 @@ impl Mapper for Sachen149 {
 }
 
 /// The Sachen `JV001` protection latch used by mapper 147.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Jv001 {
     accumulator: u8,
     inverter: u8,
@@ -3972,7 +4027,7 @@ impl Jv001 {
 
 /// Sachen 3018 / TXC JV001 (mapper 147): 32 KiB PRG and 8 KiB CHR banks
 /// driven by the protection chip's output latch.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen147 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4071,7 +4126,7 @@ impl Mapper for Sachen147 {
 
 /// C&E Decathlon (mapper 244): the written byte indexes the PRG/CHR
 /// scramble tables.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Cne244 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4160,7 +4215,7 @@ impl Mapper for Cne244 {
 /// Sachen 3014 (mapper 533): fixed 32 KiB PRG, an 8 KiB switchable CHR-ROM
 /// bank, and a four-bit latch readable back at `$E000-$EFFF` through the bus
 /// conflict with the PRG-ROM byte.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen3014 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4235,7 +4290,7 @@ impl Mapper for Sachen3014 {
 
 /// Color Dreams Rumble Station (mapper 46): two latches select a 32 KiB PRG
 /// bank and an 8 KiB CHR bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bmc46 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4310,7 +4365,7 @@ impl Mapper for Bmc46 {
 
 /// TXC/BMC-11160 (mapper 299): one value-decoded 32 KiB PRG / 8 KiB CHR
 /// register at `$8000-$FFFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bmc299 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4390,7 +4445,7 @@ impl Mapper for Bmc299 {
 }
 
 /// MMC3 clone (mapper 254) with a scrambled WRAM read-back latch.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_254 {
     inner: Mmc3,
     unlocked: bool,
@@ -4464,7 +4519,7 @@ impl Mapper for Mmc3_254 {
 
 /// Sunsoft-2 on the Sunsoft-3 board (mapper 89): a bus-conflicted register
 /// selects a 16 KiB PRG bank, an 8 KiB CHR bank and one-screen mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sunsoft2_89 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4547,7 +4602,7 @@ impl Mapper for Sunsoft2_89 {
 
 /// Irem TAM-S1 (mapper 97): fixed last 16 KiB at `$8000`, a switchable
 /// 16 KiB bank at `$C000` and a mirroring bit.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Irem97 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4621,7 +4676,7 @@ impl Mapper for Irem97 {
 
 /// BMC multicart (mapper 62): address/value-decoded 32/16 KiB PRG and 8 KiB
 /// CHR banks.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart62 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4707,7 +4762,7 @@ impl Mapper for Multicart62 {
 }
 
 /// NTDEC (mapper 63): address-decoded 16/32 KiB PRG banks and CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ntdec63 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4806,7 +4861,7 @@ impl Mapper for Ntdec63 {
 
 /// NTDEC (mapper 81): 16 KiB PRG / 8 KiB CHR banks with the last PRG bank
 /// fixed.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ntdec81 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -4881,7 +4936,7 @@ impl Mapper for Ntdec81 {
 
 /// NTDEC TF1201 (mapper 298): 8 KiB PRG / 1 KiB CHR banks with a CPU-cycle
 /// IRQ and PRG swap mode.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Tf1201 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -5039,7 +5094,7 @@ impl Mapper for Tf1201 {
 
 /// Unl158B (mapper 258): an MMC3 clone with a `$5000-$5FFF` mode register
 /// and a protection read-back LUT.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Unl158B {
     inner: Mmc3,
     reg: u8,
@@ -5142,7 +5197,7 @@ impl Mapper for Unl158B {
 /// MMC3 clone (mapper 219): the standard bank registers are disabled and
 /// replaced by a `$8002` index / `$8001` data pair for four PRG slots and
 /// eight 1 KiB CHR slots. Writes at `$A000` and above stay standard MMC3.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_219 {
     inner: Mmc3,
     ex: [u8; 3],
@@ -5279,7 +5334,7 @@ impl Mapper for Mmc3_219 {
 
 /// MMC3 clone (mapper 208) with a protected read-back LUT and a 32 KiB
 /// outer PRG window decoded from `$6800-$6FFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_208 {
     inner: Mmc3,
     ex: [u8; 6],
@@ -5400,7 +5455,7 @@ impl Mapper for Mmc3_208 {
 
 /// Mapper 170: fixed 32 KiB PRG with a write-only `$6502` latch whose bit 7
 /// is read back at `$7777` ORed with the address high byte.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper170 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -5468,7 +5523,7 @@ impl Mapper for Mapper170 {
 
 /// DreamTech 01 (mapper 521): a single `$5020` 16 KiB PRG bank with the
 /// second slot fixed to page 8.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DreamTech01 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -5533,7 +5588,7 @@ impl Mapper for DreamTech01 {
 }
 
 /// A65AS (mapper 285): a value-decoded 16 KiB PRG pair with mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct A65AS {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -5617,7 +5672,7 @@ impl Mapper for A65AS {
 
 /// Mapper 106: four 8 KiB PRG banks, eight 1 KiB CHR banks and a 16-bit
 /// CPU-cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper106 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -5762,7 +5817,7 @@ impl Mapper for Mapper106 {
 
 /// Mapper 43: a `$4022`-selected 8 KiB PRG page, a fixed `$5000` page and a
 /// 4096-cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper43 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -5883,7 +5938,7 @@ impl Mapper for Mapper43 {
 
 /// MMC3 street-fighter boards (mapper 262): four board-selected CHR A8 bits
 /// plus an 8 KiB CHR-RAM mode and the `$4100` reset switch.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_262 {
     inner: Mmc3,
     ex: u8,
@@ -5997,7 +6052,7 @@ impl Mapper for Mmc3_262 {
 
 /// Whirlwind SMB2j (mapper 304): eight 4 KiB PRG slots, three fixed tail
 /// pages in `$5000-$7FFF` and a 12-bit CPU-cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Smb2j304 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -6096,7 +6151,7 @@ impl Mapper for Smb2j304 {
 
 /// Subor learning computer (mapper 167): four address-decoded registers feed
 /// an outer/inner bank XOR with NROM, UNROM and inverted-UNROM modes.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Subor166 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -6195,7 +6250,7 @@ impl Mapper for Subor166 {
 
 /// Magic Kid Goo Goo (mapper 190): two 16 KiB PRG windows and four 2 KiB CHR
 /// pages selected by address ranges.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct MagicKid190 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -6274,7 +6329,7 @@ impl Mapper for MagicKid190 {
 
 /// City Fighter IV (mapper 266): 8 KiB PRG / 1 KiB CHR banking with a
 /// decrementing cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct CityFighter266 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -6435,7 +6490,7 @@ impl Mapper for CityFighter266 {
 
 /// BMC 64-in-1 no-repeat (mapper 314): four `$5000` registers select the
 /// 16 KiB PRG windows, mirroring and the 8 KiB CHR page.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bmc64in1 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -6560,7 +6615,7 @@ impl Mapper for Bmc64in1 {
 
 /// VRC4 board 183: the VRC2/VRC4 core with an 8 KiB PRG page selected at
 /// `$6000-$7FFF` by the low nibble of the write address.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Vrc183 {
     inner: Vrc,
     window: u8,
@@ -6644,7 +6699,7 @@ impl Mapper for Vrc183 {
 
 /// Maxivision 30-in-1 (mapper 487): a 32 KiB PRG / 8 KiB CHR latch with
 /// 32/64 KiB and second-ROM-set modes.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper487 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -6765,7 +6820,7 @@ impl Mapper for Mapper487 {
 
 /// Ax5705 (mapper 530): two 8 KiB PRG windows, four fixed high slots and
 /// eight 1 KiB CHR registers written as scrambled nibble pairs.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ax5705 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -6893,7 +6948,7 @@ impl Mapper for Ax5705 {
 
 /// Lucky Rabbit / 0353 (mapper 415): an 8 KiB PRG window at `$6000`, a
 /// fixed last 32 KiB and 8 KiB CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct LuckyRabbit415 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -6975,7 +7030,7 @@ impl Mapper for LuckyRabbit415 {
 /// Family Noraebang (mapper 515): UNROM-style 16 KiB banking into the
 /// internal last 1 MiB of PRG-ROM with the last bank fixed, plus the
 /// microphone ADC ports. The YM2413 expansion audio is not modelled.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Family515 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -7072,7 +7127,7 @@ impl Mapper for Family515 {
 
 /// Kaiser KS-7010 FDS conversion (mapper 554): read-triggered banking with
 /// the four fixed PRG windows at banks 10/11/6/7.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ks7010 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -7160,7 +7215,7 @@ impl Mapper for Ks7010 {
 
 /// VT02+/VT03 OneBus boards (mapper 256): the VTxx-native PRG/CHR bank
 /// registers with MMC3-compatible forwarding from `$8000-$FFFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct OneBus256 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -8016,7 +8071,7 @@ impl Mapper for Supervisor446 {
 
 /// Reset-based MMC1 multicart (mapper 374): each console reset increments
 /// the outer PRG/CHR window while MMC1 handles the inner banks.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ResetMc374 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -8102,7 +8157,7 @@ impl Mapper for ResetMc374 {
 
 /// Kaiser KS7016B FDS conversion (mapper 549): the 306 address-decoded
 /// latch with the fixed 32 KiB window at bank 8 and CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ks7016B {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -8183,7 +8238,7 @@ impl Mapper for Ks7016B {
 /// Batlab BATMAP-SRR-X (mapper 413): PRG 8 KiB banks at `$6000`/`$8000`/
 /// `$A000`, a fixed `$5000` 4 KiB window, fixed `$D000-$FFFF`, 4 KiB CHR
 /// banks, a scanline IRQ and the DPCM data port.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Srrx413 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -8338,7 +8393,7 @@ impl Mapper for Srrx413 {
 
 /// 970630C / KN-35A multicart (mapper 380): an address-latched UNROM /
 /// NROM board with 16/32 KiB inner banks and CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart380 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -8447,7 +8502,7 @@ impl Mapper for Multicart380 {
 
 /// Techline XB-xxx multicart (mapper 351): an MMC3-compatible ASIC with
 /// outer PRG/CHR bases, selectable inner bank sizes and the CHR-RAM mode.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Techline351 {
     inner: Mmc3,
     prg_base: u16,
@@ -8663,7 +8718,7 @@ impl Mapper for Techline351 {
 
 /// INX_007T_V01 Retro-Bit multicart (mapper 470): AOROM with a 256 KiB
 /// outer bank register at `$5000-$5FFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Inx470 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -8741,7 +8796,7 @@ impl Mapper for Inx470 {
 
 /// Sunsoft TH2131-1 bootleg (mapper 308): a VRC2b clone with its own
 /// M2-cycle IRQ counter at `$F000/$F001/$F003`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Th2131 {
     inner: Vrc,
     prg_ram: Vec<u8>,
@@ -8837,7 +8892,7 @@ impl Mapper for Th2131 {
 
 /// Yung-08 Super Mario Bros. 2 conversion (mapper 368): fixed low PRG
 /// banks, a switchable `$C000` bank, a protection latch and a 12-bit IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Yung08 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -8963,7 +9018,7 @@ impl Mapper for Yung08 {
 /// Waixing FS306 (mapper 544): a VRC4 whose register A0/A1 lines are CPU
 /// A10/A11, with a third switchable PRG bank at `$9C00` and per-nametable
 /// CIRAM registers. CHR-RAM uploads reuse the writable CHR image.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Fs306 {
     inner: Vrc,
     prg3: u8,
@@ -9072,7 +9127,7 @@ impl Mapper for Fs306 {
 /// 8-BIT XMAS 2017 (mapper 400): an UNROM-512-like 16 KiB outer/inner PRG
 /// window, 32 KiB of banked CHR-RAM and the LCD command/data ports
 /// (the LCD is not part of the TV output and is ignored).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Xmas400 {
     prg: Vec<u8>,
     aux: Rc<RefCell<Vrc7Chr>>,
@@ -9173,7 +9228,7 @@ impl Mapper for Xmas400 {
 /// SB-5013 / GCL8050 multicarts (mappers 359 and 540): four inner 8 KiB
 /// PRG banks inside a size-selectable outer bank, eight CHR registers
 /// (1 KiB for 359, rewired 2 KiB for 540) and the M2/PA12 IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct BmcSb5013 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -9405,7 +9460,7 @@ impl Mapper for BmcSb5013 {
 
 /// Super Soccer Champion / 60-1064-16L (mapper 538): two switchable 8 KiB
 /// PRG windows with three fixed tail banks and CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Soccer538 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -9484,7 +9539,7 @@ impl Mapper for Soccer538 {
 
 /// Kid Icarus FDS conversion (mapper 539): one switchable 8 KiB PRG bank
 /// with fixed tail banks and CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct KidIcarus539 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -9587,7 +9642,7 @@ impl Mapper for KidIcarus539 {
 
 /// Fine Studio Batman/RoboCop (mapper 417): three switchable 8 KiB PRG
 /// banks, eight 1 KiB CHR banks, CIRAM banks and a 10/12-bit cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct FineStudio417 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -9717,7 +9772,7 @@ impl Mapper for FineStudio417 {
 
 /// Caltron 9-in-1 (mapper 389): NROM-256/UNROM-064 mode, outer PRG/CHR
 /// banks and the inner PRG/CHR latch.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Caltron389 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -9832,7 +9887,7 @@ impl Mapper for Caltron389 {
 
 /// Maxivision 30 prototype (mapper 493): a GNROM-like 32 KiB PRG / 8 KiB CHR
 /// window with a 64 KiB outer bank register and a bus-conflicted inner one.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Gnrom493 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -9916,7 +9971,7 @@ impl Mapper for Gnrom493 {
 
 /// Korean karaoke UNROM board (mapper 517): 16 KiB PRG banking without bus
 /// conflicts and the microphone ADC ports at `$6000`/`$6001`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Unrom517 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -9991,7 +10046,7 @@ impl Mapper for Unrom517 {
 
 /// Sangokushi bootleg UNL-BJ-56 (mapper 526): eight 1 KiB CHR registers,
 /// four 8 KiB PRG registers and a fixed 4096-cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct UnlBj56 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -10091,7 +10146,7 @@ impl Mapper for UnlBj56 {
 }
 
 /// Sachen 3013 (mapper 553): NROM-128 with `$8000-$BFFF` returning `$3A`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen3013 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -10147,7 +10202,7 @@ impl Mapper for Sachen3013 {
 
 /// Dragon Fighter (mapper 292): an MMC3 clone whose `$6000-$6FFF` reads
 /// sample CPU RAM as a protection latch, plus board-selected CHR pages.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DragonFighter292 {
     inner: Mmc3,
     ex: [u8; 3],
@@ -10285,7 +10340,7 @@ impl Mapper for DragonFighter292 {
 
 /// Dance 2000 (mapper 518): two 16 KiB PRG windows, two 4 KiB CHR pages and
 /// a per-nametable CHR swap, with cart RAM readable at `$5000-$5FFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Dance2000 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -10420,7 +10475,7 @@ impl Mapper for Dance2000 {
 /// UnlDripGame (mapper 284): 16 KiB PRG pages, four 2 KiB CHR pages, an M2
 /// down-counter IRQ, per-quadrant mirroring and the extended-attribute RAM
 /// at `$C000-$FFFF` (video expansion is installed separately).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Drip284 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -10561,7 +10616,7 @@ impl Mapper for Drip284 {
 
 /// J-2012-II bootleg board (mapper 272): two switchable 8 KiB PRG banks,
 /// eight 1 KiB CHR nibble registers, mirroring control and an A13-driven IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct J2012 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -10719,7 +10774,7 @@ impl Mapper for J2012 {
 
 /// bd23 data-latch board (mapper 564): a 32 KiB PRG bank from the last
 /// written value (with some bits locked) and 8 KiB CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct LatchData564 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -10801,7 +10856,7 @@ impl Mapper for LatchData564 {
 
 /// J-2096 address-latch board (mapper 576): the write address selects the
 /// 16/32 KiB PRG window, the 8 KiB CHR bank and the mirroring mode.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct LatchAddr576 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -10884,7 +10939,7 @@ impl Mapper for LatchAddr576 {
 
 /// FE-01-1 address-latch board (mapper 585): the write address selects the
 /// PRG window, the 8 KiB CHR bank and mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct LatchAddr585 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -10971,9 +11026,10 @@ impl Mapper for LatchAddr585 {
 /// The name table byte at the current fetch position (`qt`) selects either a
 /// CHR-ROM page (bit 6) or a 4 KiB CHR-RAM bank, and the mapper keeps a
 /// private 2 KiB shadow name table that the game writes instead of CIRAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Qtram {
     /// Private shadow name table (`$D010` bit 0 set routes writes here).
+    #[serde(with = "serde_big_array::BigArray")]
     pub ram: [u8; 0x800],
     /// Last tile byte read from the shadow table.
     pub qt: u8,
@@ -11021,7 +11077,7 @@ impl Qtram {
 /// windows, 4 KiB work RAM at `$6000`/`$7000`, 16 registers at
 /// `$D000-$DFFF`, a CPU-cycle IRQ counter and the JIS glyph lookup used by
 /// the Q-Ta Kanji ROM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper547 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -11313,7 +11369,7 @@ const MSM6585_DIFF: [i16; 49 * 16] = [
 const MSM6585_INDEX_SHIFT: [i8; 8] = [-1, -1, -1, -1, 2, 4, 6, 8];
 
 /// OKI MSM6585 ADPCM decoder used by the Rinco FSG2 board.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Msm6585 {
     which_nibble: bool,
     input: u8,
@@ -11381,7 +11437,7 @@ impl Msm6585 {
 /// Rinco FSG2 / Talkman (mapper 594): an MMC3 core with an outer 256 KiB
 /// PRG/CHR bank, 8 KiB PRG-ROM at `$6000`, and an MSM6585 ADPCM FIFO at
 /// `$5000`/`$5001`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper594 {
     inner: Mmc3,
     reg: [u8; 4],
@@ -11558,7 +11614,7 @@ impl Mapper for Mapper594 {
 
 /// Shared 16 KiB CHR-RAM for CPROM (mapper 13): PPU $0000-$0FFF is fixed
 /// to the first 4 KiB, $1000-$1FFF selects one of four 4 KiB banks.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct CpromChr {
     ram: Vec<u8>,
     bank: u8,
@@ -11600,7 +11656,7 @@ impl CpromChr {
 /// Shared CHR-RAM state for mapper 169's Yuxing computer modes: an 8 KiB
 /// page selected by `$5501`, plus the 1-bpp all-points-addressable mode and
 /// the nametable-in-CHR split mode selected by `$4800`/`$5500`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Chr169 {
     ram: Vec<u8>,
     page: u8,
@@ -11692,7 +11748,7 @@ impl Chr169 {
 /// `$5501.7` is set, otherwise a computer mode with `$4800` selecting a
 /// 32 KiB PRG-ROM bank (or PRG-RAM windows) and `$4800`/`$5500`/`$5501`
 /// selecting the CHR-RAM paging and 1-bpp/NT-split graphics modes.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper169 {
     mmc3: Mmc3,
     prg_ram: Vec<u8>,
@@ -11903,7 +11959,7 @@ impl Mapper for Mapper169 {
 }
 
 /// Minimal PIC16C54 interpreter for mapper 355's protection MCU.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Pic16c54 {
     rom: Vec<u16>,
     ram: [u8; 32],
@@ -12349,7 +12405,7 @@ impl Pic16c54 {
 
 /// 3D-BLOCK / Block Force board (mapper 355): NROM-256 plus a PIC16C54
 /// protection MCU that watches CPU A4-A14 and drives the cartridge IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper355 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -12425,7 +12481,7 @@ impl Mapper for Mapper355 {
 /// by readable `$4040-$4047` registers, 8 KiB work RAM plus 2 KiB at
 /// `$5000`, the `$4031` enhanced-mode latch, the timer/IRQ registers and the
 /// general-purpose `$4048-$404F` DMA engine.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Um6578 {
     prg: Vec<u8>,
     prg_ram: Vec<u8>,
@@ -12597,7 +12653,7 @@ impl Mapper for Um6578 {
 /// Subor Sango II board (mapper 559): a VRC4 core whose register select
 /// lines are CPU A10/A11, with a switchable `$C000` bank, per-quadrant
 /// CHR-ROM nametables and a 9-bit CHR bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SuborSango559 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -12802,7 +12858,7 @@ impl Mapper for SuborSango559 {
 
 /// J-2020 board (mapper 563): a VRC2 core with the $F000 register bank
 /// repurposed as an A12-edge IRQ control.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct J2020_563 {
     inner: Vrc,
     a12: Rc<RefCell<A12Irq>>,
@@ -12878,7 +12934,7 @@ impl Mapper for J2020_563 {
 /// Nintendo Campus Challenge 1991 / NES-EVENT2 (mapper 555): an MMC3 core
 /// with extended PRG/CHR banking from a `$5800` register, a TQROM CHR-RAM
 /// mode and a cycle timer reported through the `$5800` status read.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct NeSEvent2_555 {
     inner: Mmc3,
     prg_ram: Vec<u8>,
@@ -13046,7 +13102,7 @@ impl Mapper for NeSEvent2_555 {
 /// Sangokushi II bootleg (mapper 330): three 8 KiB PRG windows with the last
 /// bank fixed, eight 1 KiB CHR registers, four nametable registers, the
 /// Namco 163 chip RAM at `$4800` and its 15-bit CPU-cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sangokushi330 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -13054,6 +13110,7 @@ pub struct Sangokushi330 {
     prg_banks: [u8; 3],
     chr_banks: [u8; 8],
     nt: [u8; 4],
+    #[serde(with = "serde_big_array::BigArray")]
     chip_ram: [u8; 128],
     chip_addr: u8,
     chip_inc: bool,
@@ -13228,7 +13285,7 @@ impl Mapper for Sangokushi330 {
 
 /// Double Dragon pirate board (mapper 127): four 8 KiB PRG windows, eight
 /// 1 KiB CHR registers, per-quadrant CIRAM selection and a 256-cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DdPirate127 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -13347,7 +13404,7 @@ impl Mapper for DdPirate127 {
 
 /// Conta/Gryzor bootleg (mapper 326): four 8 KiB PRG windows, eight 1 KiB CHR
 /// registers and four per-quadrant CIRAM selections from CHR registers 8-11.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Gryzor326 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -13445,7 +13502,7 @@ impl Mapper for Gryzor326 {
 /// AVE NINA-118 register board: used by 418 (820106-C/821007C) and 557
 /// (NTDEC 2718). A pointer/data pair at `$8000-$9FFF` selects four 8 KiB
 /// PRG windows, with 8 KiB CHR-RAM and mirroring from register 5.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct N118 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -13550,7 +13607,7 @@ impl Mapper for N118 {
 /// Fukutake Shoten Study Box (mapper 186): a 16 KiB PRG bank, fixed bank 0 at
 /// `$C000`, 8 KiB CHR-RAM and a banked 8 KiB work-RAM window, with the
 /// control registers in `$4200-$4203` and work RAM at `$4400-$4FFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct StudyBox186 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -13661,7 +13718,7 @@ impl Mapper for StudyBox186 {
 /// 256 KiB PRG/CHR slice, with a `$5009` mode register (`$0F` at power-on
 /// selects MMC3) and a `$500B` outer-bank register. BNROM mode uses a single
 /// 32 KiB bank built from both registers.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Hsk007 {
     inner: Mmc3,
     mode: u8,
@@ -13812,7 +13869,7 @@ impl Mapper for Hsk007 {
 
 /// 5/20-in-1 1993 multicart (mapper 334): MMC3 supplies CHR banking,
 /// mirroring and IRQs, while a `$6000` register selects one 32 KiB PRG bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_334 {
     inner: Mmc3,
     prg_bank: u8,
@@ -13897,7 +13954,7 @@ impl Mapper for Mmc3_334 {
 
 /// Kaiser KS7012 (mapper 346): two fixed 32 KiB PRG pages selected by magic
 /// writes, with fixed 8 KiB CHR.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ks7012 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -13979,7 +14036,7 @@ impl Mapper for Ks7012 {
 /// Kaiser KS7057 (mapper 302): 2 KiB PRG pages, four switchable 8 KiB
 /// windows at `$8000`/`$A000`/`$C000`/`$E000`, four 2 KiB ROM windows at
 /// `$6000-$7FFF` and register-select mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ks7057 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -14087,7 +14144,7 @@ impl Mapper for Ks7057 {
 
 /// Kaiser KS7037 (mapper 307): 4 KiB PRG banking, 8 KiB CHR, a 4 KiB WRAM
 /// window at `$6000` and 16 KiB windows at `$8000`/`$C000`/`$E000`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ks7037 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -14187,10 +14244,11 @@ impl Mapper for Ks7037 {
 
 /// Shared CHR/nametable state for the Irem 77 board: 2 KiB switchable
 /// CHR-ROM, 6 KiB CHR-RAM and 4 KiB of cartridge nametable RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Aux77 {
     rom: Vec<u8>,
     ram: Vec<u8>,
+    #[serde(with = "serde_big_array::BigArray")]
     nt: [u8; 0x1000],
     chr_bank: u8,
 }
@@ -14242,7 +14300,7 @@ impl Aux77 {
 
 /// Irem (mapper 77, Napoleon Senki): 32 KiB PRG banking with bus conflicts,
 /// 2 KiB CHR-ROM + 6 KiB CHR-RAM and 4 KiB cartridge nametable RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Irem77 {
     prg: Vec<u8>,
     aux: Rc<RefCell<Aux77>>,
@@ -14307,7 +14365,7 @@ impl Mapper for Irem77 {
 
 /// Kaiser KS202 (mapper 56): four 8 KiB PRG banks, eight 1 KiB CHR banks,
 /// a WRAM/ROM window at `$6000` and the Kaiser 16-bit cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ks202 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -14483,7 +14541,7 @@ impl Mapper for Ks202 {
 
 /// Konami VRC3 (mapper 73): a 16 KiB switchable PRG bank, 8 KiB CHR-RAM and
 /// a 16-bit CPU-cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Vrc3_73 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -14629,7 +14687,7 @@ impl Mapper for Vrc3_73 {
 
 /// UN1ROM (mapper 94): 16 KiB PRG banking with bus conflicts and 8 KiB
 /// CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Un1rom94 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -14700,7 +14758,7 @@ impl Mapper for Un1rom94 {
 
 /// Mapper 103: fixed last 32 KiB PRG, an 8 KiB PRG window at `$6000` that
 /// can be RAM or ROM, and a separate WRAM window at `$B800-$D7FF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper103 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -14803,7 +14861,7 @@ impl Mapper for Mapper103 {
 
 /// MMC1 variant (mapper 155): the `$E000` bit 4 WRAM-disable function is
 /// absent, so that bit never disables the 8 KiB window.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc1_155 {
     inner: Mmc1,
 }
@@ -14860,7 +14918,7 @@ impl Mapper for Mmc1_155 {
 
 /// Bandai Karaoke (mapper 188): 16 KiB switchable PRG with internal /
 /// expansion bank selection and microphone read-back.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bandai188 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -14937,7 +14995,7 @@ impl Mapper for Bandai188 {
 
 /// Whirlwind Manu LH32 (mapper 125): a `$6000` 8 KiB PRG bank selector with
 /// a fixed 24 KiB tail and PRG-RAM at `$C000`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Lh32 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -15016,7 +15074,7 @@ impl Mapper for Lh32 {
 
 /// Whirlwind Manu LH51 (mapper 309): `$8000` selects the low 8 KiB PRG bank,
 /// with the last three banks fixed and mirroring at `$E000`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Lh51 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -15101,7 +15159,7 @@ impl Mapper for Lh51 {
 
 /// Whirlwind Manu LH10 (mapper 522): eight 8 KiB PRG registers, a fixed
 /// second-last bank at `$6000`, PRG-RAM at `$C000` and a fixed last bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Lh10 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -15186,7 +15244,7 @@ impl Mapper for Lh10 {
 
 /// MMC3 variant (mapper 12): a `$4020-$5FFF` register adds CHR A16 to the
 /// low or high 4 KiB half independently.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_12 {
     inner: Mmc3,
     chr_sel: u8,
@@ -15290,7 +15348,7 @@ impl Mapper for Mmc3_12 {
 /// (power-on) or an MMC3 clone, selected by the PAL supervisor at `$A131`.
 /// The supervisor's bits 7/5/3 extend CHR to A18 for PPU `$0000-$0FFF`,
 /// `$1000-$17FF` and `$1800-$1FFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sl1632 {
     vrc: Vrc,
     mmc3: Mmc3,
@@ -15446,7 +15504,7 @@ impl Mapper for Sl1632 {
 
 /// Color Dreams (mapper 144): 32 KiB fixed PRG, 8 KiB CHR bank selected by
 /// the `$8000-$FFFF` write with bus conflicts.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ColorDreams144 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -15517,7 +15575,7 @@ impl Mapper for ColorDreams144 {
 
 /// Bit Corp UNL-PCI556 (mapper 38): 32 KiB PRG and 8 KiB CHR banks from a
 /// single `$7000-$7FFF` latch.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bitcorp38 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -15586,7 +15644,7 @@ impl Mapper for Bitcorp38 {
 
 /// Caltron 6-in-1 (mapper 41): 32 KiB PRG banking selected by address bits at
 /// `$6000-$67FF`, inner CHR bits with bus conflicts and mirroring at bit 5.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Caltron41 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -15682,7 +15740,7 @@ impl Mapper for Caltron41 {
 
 /// Mapper 512 (Zhongguo Daheng): an MMC3 clone with switchable CHR-ROM /
 /// CHR-RAM and a battery-backed WRAM window.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Si512 {
     inner: Mmc3,
     aux: Rc<RefCell<Chr512>>,
@@ -15765,7 +15823,7 @@ impl Mapper for Si512 {
 /// TEC9719 / ING003C / ING-022 multicarts (mappers 126, 422 and 534): an
 /// MMC3 core with four outer registers in the WRAM window, the shared
 /// outer PRG/CHR transform and a normal or inverted IRQ latch (534).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Tec9719 {
     inner: Mmc3,
     board: u16,
@@ -15915,7 +15973,7 @@ impl Mapper for Tec9719 {
 
 /// Realtec / J.Y. 8-in-1 boards (mapper 396): UNROM with an outer 128 KiB
 /// PRG bank and a 16 KiB inner bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Realtec396 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -16007,7 +16065,7 @@ impl Mapper for Realtec396 {
 
 /// Kaiser KS7030 (mapper 347): an FDS conversion with a split PRG image:
 /// three RAM windows, two switchable 4 KiB banks and a fixed 32 KiB tail.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ks7030 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -16105,7 +16163,7 @@ impl Mapper for Ks7030 {
 
 /// BATMAP-000 (mapper 399): fixed first/last 8 KiB PRG banks, two switchable
 /// 8 KiB windows, two 4 KiB CHR-RAM banks and an MMC3-style A12 IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Batmap399 {
     prg: Vec<u8>,
     chr_aux: Option<Rc<RefCell<Vrc7Chr>>>,
@@ -16269,7 +16327,7 @@ impl Mapper for Batmap399 {
 /// Whirlwind Manu LH53 (mapper 535): an FDS conversion with an 8 KiB
 /// switchable PRG bank, a fixed 32 KiB tail, an 8 KiB WRAM window and a
 /// 7560-cycle timer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Lh53 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -16387,7 +16445,7 @@ impl Mapper for Lh53 {
 
 /// Co Tung CTC-15 (mapper 548): an FDS-conversion board with an 8 KiB PRG-RAM
 /// window, a latched 16 KiB PRG bank and a fixed bank 3 at `$C000`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ctc15 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -16494,7 +16552,7 @@ impl Mapper for Ctc15 {
 
 /// JY043 (mapper 122): 32 KiB unbanked PRG with two independent 4 KiB CHR
 /// windows selected by even/odd writes in `$8000-$FFFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Jy043 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -16578,7 +16636,7 @@ impl Mapper for Jy043 {
 
 /// Cufrom (mapper 29): 16 KiB PRG banking with 32 KiB of banked CHR-RAM.
 /// The shared banked window keeps `$2007` uploads in the selected 8 KiB page.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Cufrom29 {
     prg: Vec<u8>,
     prg_ram: Vec<u8>,
@@ -16677,7 +16735,7 @@ impl Mapper for Cufrom29 {
 }
 
 /// A cartridge-initiated DMA transfer (UM6578 `$4048-$404F`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DmaRequest {
     /// True to write the PPU bus, false for the CPU bus.
     pub to_ppu: bool,
@@ -16692,7 +16750,7 @@ pub struct DmaRequest {
 }
 
 /// A12-edge IRQ counter shared between the PPU and a board (mapper 563).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct A12Irq {
     /// Whether the board has enabled IRQ generation.
     pub enabled: bool,
@@ -16725,7 +16783,7 @@ impl A12Irq {
 
 /// Shared CHR state for mapper 512: 128 KiB CHR-ROM plus a switchable 8 KiB
 /// CHR-RAM window used by the Chinese-character mode.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Chr512 {
     rom: Vec<u8>,
     ram: Vec<u8>,
@@ -16735,6 +16793,7 @@ pub struct Chr512 {
     /// `true` to ignore CHR-RAM writes (mapper 446 `$5005`).
     write_protect: bool,
     vram_mode: bool,
+    #[serde(with = "serde_big_array::BigArray")]
     vram: [u8; 0x1000],
     banks: [u16; 8],
 }
@@ -16812,7 +16871,7 @@ impl Chr512 {
 /// Shared CHR state for the Oeka Kids tablet board (mapper 96). The low CHR
 /// bank follows the PPU nametable quadrant currently being fetched, so the PPU
 /// updates `inner` through [`OekaChr::note_address`] during rendering.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct OekaChr {
     rom: Vec<u8>,
     ram: Vec<u8>,
@@ -16891,7 +16950,7 @@ impl OekaChr {
 
 /// Bandai Oeka Kids (mapper 96): 32 KiB PRG banks plus CHR whose low bank
 /// follows the PPU nametable quadrant.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bandai96 {
     prg: Vec<u8>,
     aux: Rc<RefCell<OekaChr>>,
@@ -16953,7 +17012,7 @@ impl Mapper for Bandai96 {
 
 /// Magic Floor / Starfight (mapper 218): NROM with CIRAM A10 wired to a PPU
 /// address line selected by the raw flags-6 bits (single-screen mirroring).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct MagicFloor218 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -17017,7 +17076,7 @@ impl Mapper for MagicFloor218 {
 /// Sachen 9602 (mapper 513): an MMC3-derived ASIC with an outer PRG bank
 /// register, top banks fixed inside the selected 256 KiB block, and 8 KiB
 /// CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen9602 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -17168,7 +17227,7 @@ impl Mapper for Sachen9602 {
 /// Later Kaiser boards (mappers 305, 306 and 312) sharing the KS-7017 family:
 /// small-window PRG banking with a fixed last 32 KiB (305/306) or a switchable
 /// 16 KiB half (312), CHR-RAM, and board-specific address decodes.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct KaiserMisc {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -17329,7 +17388,7 @@ impl Mapper for KaiserMisc {
 
 /// NTDEC N625092 (mapper 221): address-decoded 16 KiB PRG windows with a
 /// switchable NROM/UNROM/NROM-256 mode and flat 8 KiB CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ntdec221 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -17429,7 +17488,7 @@ impl Mapper for Ntdec221 {
 
 /// BMC 31-in-1 (mapper 229): an address-latched 16 KiB PRG bank mirrored over
 /// both halves, a fixed 32 KiB NROM menu bank, and 8 KiB CHR-ROM banks.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart229 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -17509,7 +17568,7 @@ impl Mapper for Multicart229 {
 
 /// BMC-60311C (mapper 289): a $6000/$6001 mode/outer latch plus a $8000 inner
 /// bank register, selecting 16 KiB PRG windows and flat 8 KiB CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bmc289 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -17622,7 +17681,7 @@ impl Mapper for Bmc289 {
 
 /// MMC3-clone multicarts (mappers 134, 205 and 238) with a board-specific
 /// outer-bank transform layered over the shared MMC3 core.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3Outer {
     inner: Mmc3,
     board: u16,
@@ -17822,7 +17881,7 @@ impl Mapper for Mmc3Outer {
 /// the ET-113 style 512 KiB / 128 KiB chip select. The latch collects the
 /// write address bits (chip and fixed-bank select) plus the data bits
 /// (outer/inner bank, mirroring, mode), and is determined by both.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bmc301 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -17949,7 +18008,7 @@ impl Mapper for Bmc301 {
 
 /// Simple discrete BMC multicarts (mappers 104 and 290): a 32 KiB PRG
 /// window with an 8 KiB fixed CHR window and board-specific latch decodes.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DiscreteBmc {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -18100,7 +18159,7 @@ impl Mapper for DiscreteBmc {
 
 /// Irem H3001 (mapper 65): 8 KiB PRG banking, eight 1 KiB CHR banks and a
 /// CPU-cycle down-counter.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Irem65 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -18266,7 +18325,7 @@ impl Mapper for Irem65 {
 
 /// Sunsoft-3 (mapper 67): 16 KiB PRG banking, four 2 KiB CHR banks and a
 /// write-twice CPU-cycle counter.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sunsoft3 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -18402,7 +18461,7 @@ impl Mapper for Sunsoft3 {
 
 /// INL (mapper 31): eight independent 4 KiB PRG slots written at `$5FF8-$5FFF`,
 /// with 8 KiB of flat CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Inl31 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -18468,7 +18527,7 @@ impl Mapper for Inl31 {
 }
 
 /// Jaleco JF-17 (mapper 72): bus-conflicted PRG/CHR latches with a strobe.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Jaleco72 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -18581,7 +18640,7 @@ impl Mapper for Jaleco72 {
 
 /// Irem/Jaleco (mapper 78): UxROM-like banking with a mirroring bit whose
 /// wiring depends on the board variant.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Irem78 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -18684,7 +18743,7 @@ impl Mapper for Irem78 {
 
 /// Racermate Challenge II (mapper 168): switchable 16 KiB PRG and 4 KiB CHR
 /// pages with a free-running CPU-cycle IRQ that fires every 1024 cycles.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Racermate168 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -18775,7 +18834,7 @@ impl Mapper for Racermate168 {
 
 /// UNL-Mapper-117: four switchable 8 KiB PRG pages, eight 1 KiB CHR pages,
 /// an A12-rise IRQ with a reload/enable pair, and `$D000` mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Unl117 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -18905,7 +18964,7 @@ impl Mapper for Unl117 {
 
 /// Yoko (mapper 264): PRG/CHR paging modes selected by `$8400`, DIP/extra
 /// registers in `$5000-$5FFF`, and a CPU-cycle down-counter.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Yoko264 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -19087,7 +19146,7 @@ impl Mapper for Yoko264 {
 
 /// Super 40-in-1 WS (mapper 332): a locked register pair in `$6000-$6FFF`
 /// selects two 16 KiB PRG banks, an 8 KiB CHR bank and mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart332 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -19173,7 +19232,7 @@ impl Mapper for Multicart332 {
 /// Taito X1-017 (mapper 552): 8 KiB PRG pages with a scrambled register,
 /// six 1 KiB CHR registers with a 2 KiB/1 KiB mode, and save-RAM permission
 /// bytes.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Taito552 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -19313,7 +19372,7 @@ impl Mapper for Taito552 {
 
 /// Reset-TXROM multicarts (mapper 313): MMC3 banking with a 2-bit outer bank
 /// that advances on every soft reset.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_313 {
     inner: Mmc3,
     counter: u8,
@@ -19406,7 +19465,7 @@ impl Mapper for Mmc3_313 {
 
 /// T230 (mapper 529): VRC-style 8 KiB PRG / 1 KiB CHR banking with an outer
 /// CHR-RAM bank and the VRC CPU-cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct T230 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -19608,7 +19667,7 @@ impl Mapper for T230 {
 
 /// Eh8813A (mapper 519): address-decoded 16 KiB PRG / 8 KiB CHR banking with
 /// the DIP-altered register readback.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Eh8813A {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -19714,7 +19773,7 @@ impl Mapper for Eh8813A {
 
 /// BMC GK 6-in-1 (mapper 57): two address-decoded registers select a
 /// 16/32 KiB PRG window and an 8 KiB CHR bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bmc57 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -19796,7 +19855,7 @@ impl Mapper for Bmc57 {
 
 /// K-1029 / 100-in-1 Contra Function 16 (mapper 15): four PRG window modes,
 /// CHR-RAM and 8 KiB of PRG-RAM at `$6000`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart15 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -19916,7 +19975,7 @@ impl Mapper for Multicart15 {
 
 /// FDS-conversion protection board (mapper 120): a switchable 8 KiB PRG bank
 /// at `$6000` and the last four 8 KiB banks fixed at `$8000`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct FdsConv120 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -19995,7 +20054,7 @@ impl Mapper for FdsConv120 {
 
 /// Sachen 8259 variant (mapper 137): 32 KiB PRG bank, four 2 KiB CHR banks
 /// plus an outer bank, selected through `$4100`/`$4101`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen137 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -20092,7 +20151,7 @@ impl Mapper for Sachen137 {
 }
 
 /// Sachen SA-72007 (mapper 145): fixed 16 KiB PRG and a single CHR bank bit.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen145 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -20160,7 +20219,7 @@ impl Mapper for Sachen145 {
 }
 
 /// UxROM (mapper 2): 16 KiB switchable at `$8000`, last bank fixed.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct UxRom {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -20239,7 +20298,7 @@ impl Mapper for UxRom {
 }
 
 /// CNROM (mapper 3): fixed PRG, switchable 8 KiB CHR.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct CnRom {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -20315,7 +20374,7 @@ impl Mapper for CnRom {
 }
 
 /// AxROM (mapper 7): 32 KiB switchable PRG, single-screen mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct AxRom {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -20406,7 +20465,7 @@ impl Mapper for AxRom {
 ///
 /// IRQ generation is not wired to the PPU yet; split-screen games that need it
 /// are a known A4 gap.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -20744,7 +20803,7 @@ impl Mapper for Mmc3 {
 }
 
 /// MMC3 clone with a PRG-address scrambler and security key (mapper 123).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_123 {
     inner: Mmc3,
     ex: [u8; 2],
@@ -20863,7 +20922,7 @@ impl Mapper for Mmc3_123 {
 
 /// MMC3 clone with an outer 512 KiB PRG window and a readback key (mapper
 /// 187).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_187 {
     inner: Mmc3,
     ex: [u8; 2],
@@ -21005,7 +21064,7 @@ impl Mapper for Mmc3_187 {
 }
 
 /// MMC3 clone with the PRG block ORed into R6/R7 (mapper 245).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_245 {
     inner: Mmc3,
 }
@@ -21100,7 +21159,7 @@ impl Mapper for Mmc3_245 {
 
 /// MMC3 variant with a fixed PRG slot layout and 4 KiB of mirrored work RAM
 /// at `$5000-$7FFF` (mapper 198).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_198 {
     inner: Mmc3,
     ex: [u8; 4],
@@ -21196,7 +21255,7 @@ impl Mapper for Mmc3_198 {
 
 /// MMC3 clone used by King of Fighters '97 pirates (mapper 263): the written
 /// value is bit-scrambled and three registers are aliased.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_263 {
     inner: Mmc3,
 }
@@ -21268,7 +21327,7 @@ impl Mapper for Mmc3_263 {
 
 /// SMB + Tetris + Nintendo World Cup (mapper 37): an MMC3 core plus a 74HC161
 /// register in the PRG-RAM window that feeds PRG A16/A17 and CHR A17.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_37 {
     inner: Mmc3,
     q: u8,
@@ -21371,7 +21430,7 @@ impl Mapper for Mmc3_37 {
 
 /// T-GA23C (mapper 45): an MMC3 core with four rotating outer registers at
 /// `$6000-$7FFF` that gate and OR the MMC3's PRG/CHR bank outputs.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ga23c {
     inner: Mmc3,
     regs: [u8; 4],
@@ -21531,13 +21590,14 @@ impl Mapper for Ga23c {
 /// slots 2/3 (`$C000`/`$E000`) and 1 KiB CHR slots 1/3, while slots 0/2 come
 /// from the normal R0/R1 registers. `$A000` selects one of four mirroring
 /// modes. All local images use 8 KiB CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_199 {
     inner: Mmc3,
     ex: [u8; 4],
     /// 4 KiB PRG-RAM window at `$5000-$5FFF` (as on the Waixing FS303/FS309
     /// class boards). The local FS309 games copy an NMI handler there and jump
     /// to it, so reads/writes must hit this RAM instead of open bus.
+    #[serde(with = "serde_big_array::BigArray")]
     low_ram: [u8; 0x1000],
 }
 
@@ -21660,7 +21720,7 @@ impl Mapper for Mmc3_199 {
 /// Dragon Ninja / CTC-31 (mapper 222): eight 1 KiB CHR banks and two
 /// switchable 8 KiB PRG banks with the last 16 KiB fixed, plus an IRQ that
 /// counts A12 rises (one per rendered scanline) and fires after 240.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ctc222 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -21771,7 +21831,7 @@ impl Mapper for Ctc222 {
 /// Bonza / Magic Jewelry II (mapper 216): the PRG and CHR bank are selected by
 /// the *address* of a write (bit 0 for the 32 KiB PRG page, bits 1-3 for the
 /// 8 KiB CHR page), not by the data. `$5000` reads return 0.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mapper216 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -21853,7 +21913,7 @@ impl Mapper for Mapper216 {
 
 /// 4-in-1 multicart (mapper 60): the selected 16 KiB PRG bank and 8 KiB CHR
 /// bank advance on every soft reset, cycling through four games.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct FourInOne60 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -21914,7 +21974,7 @@ impl Mapper for FourInOne60 {
 
 /// Waixing educational cartridges (mapper 164): a 32 KiB PRG bank selected by
 /// two nibble writes in `$5000-$51FF`, plus 8 KiB CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Waixing164 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -21978,7 +22038,7 @@ impl Mapper for Waixing164 {
 ///
 /// Register reads are side-effecting (the ROM byte on the bus is latched), as
 /// the menu uses dummy reads to select a game.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Maxi15 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -22099,7 +22159,7 @@ impl Mapper for Maxi15 {
 
 /// Waixing/Myth Struggle board (mapper 249): MMC3 plus a `$5000` register that
 /// scrambles the CHR and PRG page numbers when bit 1 is set.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_249 {
     inner: Mmc3,
     ex: u8,
@@ -22221,12 +22281,13 @@ impl Mapper for Mmc3_249 {
 /// (`$F000`/`$F004` reload, `$F008` enable). A 2 KiB CHR-RAM page pair is
 /// selected while a CHR low nibble is 4 or 5 and the game has not forced
 /// CHR-ROM with the `$C8`/`$88` signature on slot 0.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Waixing253 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     chr_lo: [u8; 8],
     chr_hi: [u8; 8],
+    #[serde(with = "serde_big_array::BigArray")]
     chr_ram: [u8; 0x800],
     force_chr_rom: bool,
     prg_banks: [u8; 2],
@@ -22385,7 +22446,7 @@ impl Mapper for Waixing253 {
 
 /// Board variant for the VRC2/VRC4 family. The mapper chip is the same; the
 /// PCBs wire different CPU address lines to the chip's register select.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum VrcVariant {
     Vrc2a,
     Vrc2b,
@@ -22413,7 +22474,7 @@ impl VrcVariant {
 /// second-to-last bank and `$E000` to the last (VRC4 swap mode exchanges
 /// `$8000` and `$C000`). CHR is eight 1 KiB banks written as low/high nibble
 /// pairs, and the VRC4 IRQ runs on the CPU cycle clock.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Vrc {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -22695,7 +22756,7 @@ const MMC5_DUTY: [[u8; 8]; 4] = [
 ];
 
 /// One MMC5 pulse channel.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Mmc5Pulse {
     duty: u8,
     halt: bool,
@@ -22780,7 +22841,7 @@ impl Mmc5Pulse {
 }
 
 /// MMC5 expansion audio: two pulses and the 8-bit PCM DAC.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Mmc5Audio {
     pulse1: Mmc5Pulse,
     pulse2: Mmc5Pulse,
@@ -22869,11 +22930,12 @@ impl Mmc5Audio {
 ///
 /// ExRAM, split-screen mode, the multiplier and expansion audio are not
 /// implemented yet.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc5 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
+    #[serde(with = "serde_big_array::BigArray")]
     exram: [u8; 1024],
     prg_mode: u8,
     chr_mode: u8,
@@ -23335,7 +23397,7 @@ impl Mapper for Mmc5 {
 /// Daou Infosys (mapper 156): 16 KiB PRG banking, eight 1 KiB CHR banks with
 /// 16-bit bank registers split across low/high writes, 8 KiB work RAM and a
 /// runtime vertical/horizontal mirroring select.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Daou156 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -23453,7 +23515,7 @@ impl Mapper for Daou156 {
 }
 
 /// Color Dreams (mapper 11): 32 KiB PRG + 8 KiB CHR banking, bus conflicts.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ColorDreams {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -23521,7 +23583,7 @@ impl Mapper for ColorDreams {
 
 /// CPROM (mapper 13): fixed 32 KiB PRG, 16 KiB CHR-RAM with a switchable
 /// upper 4 KiB bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Cprom {
     prg: Vec<u8>,
     ram: Rc<RefCell<CpromChr>>,
@@ -23581,7 +23643,7 @@ impl Mapper for Cprom {
 }
 
 /// GxROM (mapper 66): 32 KiB PRG + 8 KiB CHR banking.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct GxRom {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -23655,7 +23717,7 @@ impl Mapper for GxRom {
 }
 
 /// Camerica (mapper 71): 16 KiB switchable + fixed last, CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camerica {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -23729,7 +23791,7 @@ impl Mapper for Camerica {
 
 /// Mapper 34: BNROM (32 KiB PRG banking, CHR-RAM) and NINA-001
 /// (32 KiB PRG + 4 KiB CHR banking with registers in `$7FFD-$7FFF`).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Nina {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -23848,7 +23910,7 @@ impl Mapper for Nina {
 
 /// NINA-03/NINA-06 (mapper 79) and the identical Sachen 3015 (mapper 146).
 /// A single control register selects a 32 KiB PRG bank and an 8 KiB CHR bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Nina79 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -23916,7 +23978,7 @@ impl Mapper for Nina79 {
 /// DxROM / Namco 118 / Tengen MIMIC-1 (mappers 206, 76, 88, 95, 154): a
 /// simplified MMC3 with no IRQ. `$C000`/`$E000` are always the last two 8 KiB
 /// banks and CHR always uses the left 2 KiB / right 1 KiB arrangement.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DxRom {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -24035,7 +24097,7 @@ impl Mapper for DxRom {
 
 /// UNROM-512 (mapper 30): 16 KiB switchable PRG at `$8000`, fixed last
 /// 16 KiB at `$C000`, 8 KiB CHR-RAM and optional one-screen mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Unrom512 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -24143,7 +24205,7 @@ impl Mapper for Unrom512 {
 
 /// Nanjing FC-001 (mapper 163): 32 KiB switchable PRG, 8 KiB CHR-RAM and a
 /// small mode/feedback register set.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Nanjing163 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -24279,7 +24341,7 @@ impl Mapper for Nanjing163 {
 
 /// Sachen SA-015/SA-630 (mapper 150): index/data register pair at
 /// `$4100`/`$4101` selecting 32 KiB PRG, 8 KiB CHR and mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen150 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -24393,14 +24455,14 @@ impl Mapper for Sachen150 {
 }
 
 /// One YM2149 tone channel.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct YmTone {
     phase: u16,
     output: bool,
 }
 
 /// The YM2149 noise generator (17-bit LFSR, taps at bits 16 and 13).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct YmNoise {
     phase: u16,
     lfsr: u32,
@@ -24429,7 +24491,7 @@ impl YmNoise {
 }
 
 /// The YM2149 envelope generator.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct YmEnvelope {
     period: u16,
     phase: u16,
@@ -24510,7 +24572,7 @@ const SUNSOFT5B_LOG_VOL32: [i32; 32] = [
 ];
 
 /// Sunsoft 5B (YM2149F) expansion audio used by FME-7 boards such as Gimmick!.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Sunsoft5b {
     registers: [u8; 16],
     selected: u8,
@@ -24613,7 +24675,7 @@ impl Sunsoft5b {
 /// Sunsoft FME-7 / 5A / 5B (mapper 69): 8 KiB PRG and 1 KiB CHR banking,
 /// switchable nametables, a CPU-cycle IRQ counter and YM2149 audio on 5B
 /// boards such as Gimmick!.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Fme7 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -24784,7 +24846,7 @@ impl Mapper for Fme7 {
 
 /// Sachen SA-008-A / Tengen 800008 (mapper 148): mapper 79's latch moved to
 /// `$8000-$FFFF` with bus conflicts.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Nina148 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -24855,7 +24917,7 @@ impl Mapper for Nina148 {
 
 /// Jaleco SS 88006 (mapper 18): VRC4-like 8 KiB PRG / 1 KiB CHR banking with
 /// a CPU-cycle IRQ counter. Banks are built from nibble pairs.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ss88006 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -25064,7 +25126,7 @@ impl std::error::Error for CartError {}
 /// Waixing FS305 / Nanjing NJ0430 (mapper 178): 8 KiB CHR(-RAM) window,
 /// 16/32 KiB PRG with a low inner bank and a high outer bank, plus 8 KiB
 /// banked PRG-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Fs305 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -25205,7 +25267,7 @@ impl Mapper for Fs305 {
 
 /// Action 53 (mapper 28): multicart mapper with inner/outer PRG bank
 /// registers and an 8 KiB window over 32 KiB of CHR-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Action53 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -25340,9 +25402,10 @@ impl Mapper for Action53 {
 /// below `$E0`). CIRAM is shared through this struct so a game that writes
 /// nametables before programming the registers (the power-on layout follows
 /// the header mirroring) keeps its data.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct N163Nt {
     /// The console's 2 KiB CIRAM as this board sees it.
+    #[serde(with = "serde_big_array::BigArray")]
     ram: [u8; 0x800],
     /// Register value per 1 KiB quadrant (`$2000/$2400/$2800/$2C00`).
     banks: [u8; 4],
@@ -25351,7 +25414,7 @@ pub struct N163Nt {
 }
 
 /// Where a nametable address resolves to.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 enum N163NtTarget {
     /// Console CIRAM byte offset (0..0x800).
     Ciram(usize),
@@ -25421,11 +25484,12 @@ impl N163Nt {
 /// Namco 129/163 (mapper 19): 8 KiB PRG banks, 1 KiB CHR banks that can also
 /// select the 2 KiB nametable RAM, a 15-bit CPU-cycle IRQ counter and the
 /// 128-byte internal chip RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Namco163 {
     prg: Vec<u8>,
     chr: Vec<u8>,
     prg_ram: Vec<u8>,
+    #[serde(with = "serde_big_array::BigArray")]
     chip_ram: [u8; 128],
     chip_addr: u8,
     chr_banks: [u8; 8],
@@ -25726,7 +25790,7 @@ impl Mapper for Namco163 {
 /// J.Y. Company ASIC (mappers 35/90/209/211): flexible PRG/CHR banking,
 /// 4-way nametable arrangement, hardware multiplier and a prescaled IRQ
 /// counter with selectable clock source.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct JyAsic {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -26167,7 +26231,7 @@ impl Mapper for JyAsic {
 /// J87 (mappers 87/101): a 32 KiB fixed PRG board with a single 8 KiB CHR
 /// bank register at `$6000-$7FFF`. Mapper 101 is the same board with every
 /// CHR byte's bit order reversed in the dump.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct J87 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -26238,7 +26302,7 @@ impl Mapper for J87 {
 /// J.Y. Company clone (mapper 91, submapper 0): two 8 KiB PRG banks plus a
 /// fixed last bank, four 2 KiB CHR banks, an outer 128 KiB PRG / 512 KiB CHR
 /// register and a fixed 64-rise PPU A12 IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct JyClone {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -26350,7 +26414,7 @@ impl Mapper for JyClone {
 /// double as the outer PRG bank. The board samples `banks[addr >> 10 & 3]`
 /// on PPU fetches, so the outer block follows the CHR register the PPU is
 /// currently reading.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bandai153 {
     banks: [u8; 8],
     outer: u8,
@@ -26380,7 +26444,7 @@ impl Bandai153 {
 
 /// Bandai FCG / LZ93D50 (mapper 16): 16 KiB PRG banks, eight 1 KiB CHR
 /// banks, mirroring control and a 16-bit CPU-cycle down-counter IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct BandaiFcg {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -26682,7 +26746,7 @@ impl Mapper for BandaiFcg {
 
 /// TXC 05-00002-010 (mapper 112): MMC3-like 8 KiB PRG and mixed 2/1 KiB CHR
 /// banking with a scrambled register layout.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Txc112 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -26796,7 +26860,7 @@ impl Mapper for Txc112 {
 
 /// BxROM with 8 KiB WRAM (mapper 241): 32 KiB PRG banking at `$8000-$FFFF`
 /// without bus conflicts, plus battery-backed PRG-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct BxRomWram {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -26870,7 +26934,7 @@ impl Mapper for BxRomWram {
 /// Simple NROM/CNROM multicart (mappers 58/213): a single latch at
 /// `$8000-$FFFF` selects a 32 KiB PRG bank, an 8 KiB CHR bank, PRG size mode
 /// and mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart58 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -26964,7 +27028,7 @@ impl Mapper for Multicart58 {
 
 /// CNROM with the 8 KiB CHR configuration (mapper 185). Bus conflicts apply
 /// because the latch is written through the PRG window.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct CnRom185 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -27023,7 +27087,7 @@ impl Mapper for CnRom185 {
 
 /// Hengge BxROM (mapper 177): 32 KiB PRG banking, mirroring control and
 /// 8 KiB banked PRG-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Hengge177 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -27111,7 +27175,7 @@ impl Mapper for Hengge177 {
 /// TXC 05-00002-010 latch (mappers 132 and 173): a three-bit shift/invert
 /// register pair used for CHR (and, on 132, PRG) banking plus copy
 /// protection.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct TxcLatch {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -27230,7 +27294,7 @@ impl Mapper for TxcLatch {
 /// TXC UNL-22211 (mapper 132): the scrambling-accumulator chip drives a
 /// 32 KiB PRG bank and an 8 KiB CHR bank, latched only on a subsequent
 /// `$8000-$FFFF` write.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Txc132 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -27353,7 +27417,7 @@ impl Mapper for Txc132 {
 /// MMC3 clone with 32 KiB PRG banking (mapper 189): CHR, mirroring and IRQ
 /// come from the MMC3 register set, while PRG is a single 32 KiB latch at
 /// `$4100-$5FFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_32k {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -27544,7 +27608,7 @@ impl Mapper for Mmc3_32k {
 /// CoolBoy / MINDKIDS AA6023 (mappers 224/268): an oversize MMC3 clone with
 /// outer PRG/CHR bank registers in a selectable `$5000-$5FFF` or
 /// `$6000-$6FFF` window.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Coolboy {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -27803,7 +27867,7 @@ impl Mapper for Coolboy {
 
 /// Enhanced MMC3 8025 (mapper 176): standard MMC3 banking plus a mode
 /// register, PRG/CHR base registers and NROM/UNROM compatibility modes.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_176 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -28260,7 +28324,7 @@ impl Mapper for Mmc3_176 {
 
 /// Sugar Softec MMC3 clone (mapper 215): standard MMC3 registers behind a
 /// selectable address/data scramble, plus NROM/outer-bank overrides.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_215 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -28555,7 +28619,7 @@ impl Mapper for Mmc3_215 {
 
 /// Kasheng SFC-02B/-03/-004 (mapper 115): MMC3 clone with a 256 KiB outer
 /// CHR bank and an NROM-style PRG override register.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_115 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -28762,7 +28826,7 @@ impl Mapper for Mmc3_115 {
 
 /// Sachen 8259 (mappers 138/139/141): register-pair banking with four 2 KiB
 /// CHR windows, an outer CHR bank and a 32 KiB PRG bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sachen8259 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -28850,7 +28914,7 @@ impl Mapper for Sachen8259 {
 /// Camerica Quattro (mapper 232): mapper 71 plus a 64 KiB outer block
 /// register. `$8000-$BFFF` selects the outer block, `$C000-$FFFF` the inner
 /// 16 KiB bank; `$C000-$FFFF` is fixed to the last bank of the block.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Quattro232 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -28922,7 +28986,7 @@ impl Mapper for Quattro232 {
 
 /// Namco 175/340 (mapper 210): a cost-reduced Namco 163 with 8 KiB PRG and
 /// 1 KiB CHR banking, no IRQ or expansion audio.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Namco210 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -29042,7 +29106,7 @@ impl Mapper for Namco210 {
 
 /// Kasheng A9711/A9713 (mapper 121): MMC3 clone with a read-back protection
 /// array, a bit-reversed protection bank latch and an outer 256 KiB bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_121 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -29276,7 +29340,7 @@ impl Mapper for Mmc3_121 {
 
 /// GTROM / Cheapocabra (mapper 111, CHR-RAM variant): 32 KiB PRG pages
 /// selected through `$5000-$5FFF` / `$7000-$7FFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Gtrom {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -29335,7 +29399,7 @@ impl Mapper for Gtrom {
 
 /// Cony/Yoko ASIC (mapper 83): PRG base + mode registers, four 8 KiB PRG
 /// windows, eight 1 KiB CHR windows, scratch RAM and an up/down IRQ counter.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Cony83 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -29537,7 +29601,7 @@ impl Mapper for Cony83 {
 
 /// Taito TC0190 (mapper 33): two 8 KiB PRG banks, six CHR windows and
 /// mirroring, without IRQs.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Taito33 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -29627,7 +29691,7 @@ impl Mapper for Taito33 {
 
 /// Konami VRC1 (mapper 75): three 8 KiB PRG banks, two 4 KiB CHR banks with
 /// high bits from the mirroring register, no IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Vrc1 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -29712,10 +29776,11 @@ impl Mapper for Vrc1 {
 
 /// Taito X1-005 (mapper 80): three 8 KiB PRG banks, six CHR windows,
 /// mirroring, 128 bytes of internal RAM and a RAM-enable register.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Taito80 {
     prg: Vec<u8>,
     chr: Vec<u8>,
+    #[serde(with = "serde_big_array::BigArray")]
     internal_ram: [u8; 128],
     ram_enabled: bool,
     prg_banks: [u8; 3],
@@ -29841,7 +29906,7 @@ impl Mapper for Taito80 {
 
 /// Address-latch multicart (mapper 242): the write address itself selects the
 /// outer/inner PRG banks, mirroring and NROM/UNROM modes.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart242 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -29940,7 +30005,7 @@ impl Mapper for Multicart242 {
 
 /// Waixing 242: an address-latched 32 KiB PRG bank and mirroring with 8 KiB
 /// of work RAM at `$6000-$7FFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Waixing242 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -30022,7 +30087,7 @@ impl Mapper for Waixing242 {
 
 /// Sunsoft-1 (mapper 184): a single CHR latch at `$6000-$7FFF` selecting the
 /// two 4 KiB CHR banks; PRG is a fixed 32 KiB.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Sunsoft1 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -30091,7 +30156,7 @@ impl Mapper for Sunsoft1 {
 /// Tengen RAMBO-1 (mapper 64): MMC3-like PRG/CHR banking with a 16-entry
 /// register file, CHR A12 inversion, 1 KiB CHR mode and a scanline or
 /// CPU-cycle IRQ counter.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Rambo1 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -30318,7 +30383,7 @@ impl Mapper for Rambo1 {
 /// Address-latch multicart (mapper 59): the write address selects an 8 KiB
 /// CHR bank, mirroring, a 16 KiB PRG bank and the NROM-128/256 mode, with a
 /// lock bit and a DIP-switch read mode.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart59 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -30402,7 +30467,7 @@ impl Mapper for Multicart59 {
 
 /// HP-898F / KD-7/9-E (NES 2.0 mapper 319): two 16 KiB PRG windows selected
 /// by a `$6004` register with mirroring, plus an 8 KiB CHR bank at `$6000`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Hp898f {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -30490,7 +30555,7 @@ impl Mapper for Hp898f {
 /// FDS-to-cartridge conversions (mapper 108): an 8 KiB switchable bank at
 /// `$6000-$7FFF`, a fixed last 32 KiB at `$8000-$FFFF`, and CHR-RAM or a
 /// switchable 8 KiB CHR-ROM bank.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Fds108 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -30567,7 +30632,7 @@ impl Mapper for Fds108 {
 
 /// Shared banked CHR-RAM state for VRC7 boards (Lagrange Point uses CHR RAM
 /// and switches 1 KiB banks at runtime).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Vrc7Chr {
     ram: Vec<u8>,
     /// CHR-ROM image for boards that mix ROM and RAM pages (mapper 252).
@@ -30638,8 +30703,9 @@ impl Vrc7Chr {
 /// produces a signed sample for the APU mixer. The board/BIOS loader is a
 /// separate follow-up; this device is self-contained so it can be tested and
 /// attached to an FDS mapper later.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FdsAudio {
+    #[serde(with = "serde_big_array::BigArray")]
     wave: [u8; 64],
     mod_table: [u8; 32],
     enabled: bool,
@@ -30928,7 +30994,7 @@ fn fds_side_wire(side: &[u8]) -> (Vec<u8>, Vec<(usize, usize, usize)>) {
 /// per-block CRC-16), and bytes are delivered to `$4031` every [`FDS_BYTE_CYCLES`]
 /// CPU cycles while a read transfer is armed — the handshake the real BIOS
 /// loader polls through `$4030`/`$4032`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Fds {
     bios: Vec<u8>,
     /// Raw `.fds` bytes of every side, concatenated.
@@ -31474,7 +31540,7 @@ const ENV_DECAY: u8 = 2;
 const ENV_SUSTAIN: u8 = 3;
 const ENV_RELEASE: u8 = 4;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Vrc7Operator {
     phase: f32,
     envelope: f32,
@@ -31544,7 +31610,7 @@ impl Vrc7Operator {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Vrc7Channel {
     frequency: u16,
     octave: u8,
@@ -31557,9 +31623,10 @@ struct Vrc7Channel {
 }
 
 /// VRC7 / YM2413-style two-operator FM synthesis, six channels.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Vrc7Audio {
     custom: [u8; 8],
+    #[serde(with = "serde_big_array::BigArray")]
     registers: [u8; 64],
     selected: u8,
     channels: [Vrc7Channel; 6],
@@ -31711,7 +31778,7 @@ impl Vrc7Audio {
 /// Konami VRC7 (mapper 85): 8 KiB PRG + 1 KiB CHR banking, WRAM protection,
 /// switchable mirroring, a VRC cycle/scanline IRQ and the YM2413-style
 /// six-channel FM expansion audio.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Vrc7 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -31939,7 +32006,7 @@ impl Mapper for Vrc7 {
 }
 
 /// One VRC6 pulse channel.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Vrc6Pulse {
     volume: u8,
     duty: u8,
@@ -31997,7 +32064,7 @@ impl Vrc6Pulse {
 }
 
 /// The VRC6 sawtooth channel.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Vrc6Saw {
     rate: u8,
     freq: u16,
@@ -32053,7 +32120,7 @@ impl Vrc6Saw {
 }
 
 /// VRC6 expansion audio: two pulse channels and one sawtooth.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Vrc6Audio {
     pulse1: Vrc6Pulse,
     pulse2: Vrc6Pulse,
@@ -32104,7 +32171,7 @@ impl Vrc6Audio {
 /// Konami VRC6 (mappers 24/26): 16 KiB + 8 KiB PRG banking, eight 1 KiB CHR
 /// banks, PPU banking/mirroring control, the VRC cycle/scanline IRQ and the
 /// two-pulse + sawtooth expansion audio.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Vrc6 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -32327,7 +32394,7 @@ impl Mapper for Vrc6 {
 
 /// Irem G-101 (mapper 32): two 8 KiB PRG banks with a switchable/fixed pair,
 /// eight 1 KiB CHR banks and a mirroring/PRG-mode register.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Irem32 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -32422,7 +32489,7 @@ impl Mapper for Irem32 {
 }
 
 /// Harris HC-55516 CVSD speech decoder (software-clocked variant).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Hc55516 {
     shiftreg: u8,
     digit: u8,
@@ -32525,7 +32592,7 @@ impl Hc55516 {
 /// `$6000-$6FFF`. NES 2.0 submapper 1 is the bootleg JF-13 board whose
 /// `$7000` write starts a CVSD message from the miscellaneous ROM, clocked
 /// at `$5000` bit 7; submapper 0 boards have no on-cartridge speech data.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Jf13 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -32539,6 +32606,7 @@ pub struct Jf13 {
     count: u32,
     playing: bool,
     chip: Hc55516,
+    #[serde(with = "serde_big_array::BigArray")]
     output: [i16; 176],
     audio: f32,
 }
@@ -32662,7 +32730,7 @@ impl Mapper for Jf13 {
 
 /// Taito TC0690 (mapper 48): TC0190-style PRG/CHR banking plus an MMC3-like
 /// IRQ with an inverted reload value.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Taito48 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -32793,7 +32861,7 @@ impl Mapper for Taito48 {
 
 /// TXC 01-22000-400 (mapper 36): a 2-bit latch/inverter ASIC selecting the
 /// 32 KiB PRG bank, plus a separate 8 KiB CHR latch at `$4200`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Txc36 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -32878,7 +32946,7 @@ impl Mapper for Txc36 {
 /// CHR pages 6/7 backed by RAM. The PPU owns the combined CHR window so the
 /// game's `$2007` uploads reach those pages; the slot map follows the VRC4 CHR
 /// registers.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Waixing252 {
     prg: Vec<u8>,
     prg_ram: Vec<u8>,
@@ -33024,7 +33092,7 @@ impl Mapper for Waixing252 {
 
 /// NES-EVENT (mapper 105, Nintendo World Championships 1990): an MMC1 whose
 /// CHR registers are rewired to a PRG chip select and a 30-bit M2 timer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct NesEvent105 {
     inner: Mmc1,
     prg: Vec<u8>,
@@ -33201,7 +33269,7 @@ impl Mapper for NesEvent105 {
 /// FDS-to-cartridge conversion (mapper 50, SMB2j pirate): a fixed 8 KiB layout
 /// with a scrambled switchable bank at `$C000`, 8 KiB CHR-RAM and a 4096-cycle
 /// one-shot IRQ substituting for the disk BIOS timer.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Fds50 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -33316,7 +33384,7 @@ impl Mapper for Fds50 {
 
 /// FDS-to-cartridge conversion (mapper 42): an 8 KiB bank at `$6000-$7FFF`,
 /// fixed last 32 KiB, an 8 KiB CHR bank, mirroring and a 24576-cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Fds42 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -33469,7 +33537,7 @@ impl Mapper for Fds42 {
 /// Waixing FS304 (mapper 162): 32 KiB PRG banking, 8 KiB CHR-RAM and
 /// battery-backed PRG-RAM, with the `$5000`/`$5100`/`$5200`/`$5300` bank
 /// composition.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Fs304 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -33569,7 +33637,7 @@ impl Mapper for Fs304 {
 
 /// HES NTD-8 (mapper 113): 32 KiB PRG / 8 KiB CHR banking with mirroring, in
 /// a control register in `$4100-$5FFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Hes113 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -33639,7 +33707,7 @@ impl Mapper for Hes113 {
 /// Ka Sheng / SuperGame MMC3 clone (mapper 114): MMC3 registers behind a
 /// scrambled address/index map, an NROM PRG override at `$6000` and a
 /// 256 KiB outer CHR bank at `$6001`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mmc3_114 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -33864,7 +33932,7 @@ impl Mapper for Mmc3_114 {
 
 /// Mapper 152: 16 KiB PRG at `$8000`, 8 KiB CHR and one-screen mirroring from
 /// a single bus-conflicted latch at `$8000-$FFFF`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bus152 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -33954,7 +34022,7 @@ impl Mapper for Bus152 {
 
 /// Multicart 226: a 7-bit PRG latch at `$8000`/`$8001` with mirroring and a
 /// 32 KiB/16 KiB mode; CHR is unbanked RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart226 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -34052,7 +34120,7 @@ impl Mapper for Multicart226 {
 
 /// GNROM-style latch at `$4020-$5FFF` (mapper 240): 32 KiB PRG / 8 KiB CHR
 /// plus PRG-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Gnrom240 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -34134,7 +34202,7 @@ impl Mapper for Gnrom240 {
 
 /// Kaiser KS7032 / VRC3-like (mapper 142): four 8 KiB PRG windows plus a
 /// fixed last bank, 8 KiB CHR-RAM and a 16-bit cycle IRQ.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ks7032 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -34256,7 +34324,7 @@ impl Mapper for Ks7032 {
 
 /// Yancheng YC-03-09 (NES 2.0 mapper 558): 32 KiB PRG banking from
 /// `$5000`/`$5100`/`$5300`, 8 KiB CHR-RAM and PRG-RAM.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Fs558 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -34357,7 +34425,7 @@ impl Mapper for Fs558 {
 
 /// Discrete-logic multicart (mapper 212): the write address is the latch,
 /// selecting 16 or 32 KiB PRG, 8 KiB CHR and mirroring.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart212 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -34443,7 +34511,7 @@ impl Mapper for Multicart212 {
 
 /// Protected NROM board (mapper 143): normal NROM PRG/CHR plus a protection
 /// read in `$4100-$5FFF` that returns the inverted low address bits.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Prot143 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -34494,7 +34562,7 @@ impl Mapper for Prot143 {
 
 /// Golden Game 150-in-1 (mapper 235): the write address latches the 32 KiB
 /// page, 16 KiB half, ROM chip, mirroring and one/two-screen mode.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Multicart235 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -34586,7 +34654,7 @@ impl Mapper for Multicart235 {
 
 /// Benshieng BMC-BS-5 (NES 2.0 mapper 286): address-latched 8 KiB PRG and
 /// 2 KiB CHR windows.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Benshieng286 {
     prg: Vec<u8>,
     chr: Vec<u8>,
@@ -41625,5 +41693,288 @@ mod tests {
         }
         assert_eq!(cart.cpu_read(0x8000), 2);
         assert_eq!(cart.cpu_read(0xC000), 3);
+    }
+}
+
+macro_rules! mapper_states {
+    ($($ty:ident),* $(,)?) => {
+        $(
+            impl MapperState for $ty {
+                fn save_state(&self, out: &mut Vec<u8>) -> Result<(), String> {
+                    let bytes = bincode::serialize(self).map_err(|err| err.to_string())?;
+                    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                    out.extend_from_slice(&bytes);
+                    Ok(())
+                }
+                fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
+                    *self = bincode::deserialize(data).map_err(|err| err.to_string())?;
+                    Ok(())
+                }
+            }
+        )*
+    };
+}
+
+mapper_states!(
+    A65AS,
+    Action52,
+    Action53,
+    Ax5705,
+    AxRom,
+    Bandai188,
+    Bandai70,
+    Bandai96,
+    BandaiFcg,
+    Batmap399,
+    Benshieng286,
+    Bitcorp38,
+    Bmc289,
+    Bmc299,
+    Bmc301,
+    Bmc46,
+    Bmc57,
+    Bmc64in1,
+    BmcSb5013,
+    Bus152,
+    BxRomWram,
+    Caltron389,
+    Caltron41,
+    Camerica,
+    CityFighter266,
+    CnRom,
+    CnRom185,
+    Cne244,
+    ColorDreams,
+    ColorDreams144,
+    Cony83,
+    Coolboy,
+    Cprom,
+    Ctc15,
+    Ctc222,
+    Cufrom29,
+    Dance2000,
+    Daou156,
+    DdPirate127,
+    DiscreteBmc,
+    DragonFighter292,
+    DreamTech01,
+    Drip284,
+    DxRom,
+    Eh8813A,
+    Family515,
+    Fds,
+    Fds108,
+    Fds42,
+    Fds50,
+    FdsConv120,
+    FineStudio417,
+    Fme7,
+    FongShenBang,
+    FourInOne60,
+    Fs304,
+    Fs305,
+    Fs306,
+    Fs558,
+    Ga23c,
+    Gnrom240,
+    Gnrom493,
+    Gryzor326,
+    Gtrom,
+    GxRom,
+    Hengge177,
+    Hes113,
+    Hp898f,
+    Hsk007,
+    Inl31,
+    Inx470,
+    Irem32,
+    Irem65,
+    Irem77,
+    Irem78,
+    Irem97,
+    J2012,
+    J2020_563,
+    J87,
+    Jaleco140,
+    Jaleco72,
+    Jf13,
+    Jy043,
+    JyAsic,
+    JyClone,
+    Kaiser303,
+    KaiserMisc,
+    KidIcarus539,
+    Ks202,
+    Ks7010,
+    Ks7012,
+    Ks7016B,
+    Ks7030,
+    Ks7032,
+    Ks7037,
+    Ks7057,
+    LatchAddr576,
+    LatchAddr585,
+    LatchData564,
+    Lh10,
+    Lh32,
+    Lh51,
+    Lh53,
+    LuckyRabbit415,
+    MagicDragon107,
+    MagicFloor218,
+    MagicKid190,
+    Mapper103,
+    Mapper106,
+    Mapper169,
+    Mapper170,
+    Mapper216,
+    Mapper355,
+    Mapper43,
+    Mapper487,
+    Mapper547,
+    Mapper594,
+    Maxi15,
+    Mmc1,
+    Mmc1_155,
+    Mmc2,
+    Mmc3,
+    Mmc3Outer,
+    Mmc3_114,
+    Mmc3_115,
+    Mmc3_12,
+    Mmc3_121,
+    Mmc3_123,
+    Mmc3_176,
+    Mmc3_187,
+    Mmc3_197,
+    Mmc3_198,
+    Mmc3_199,
+    Mmc3_208,
+    Mmc3_215,
+    Mmc3_219,
+    Mmc3_245,
+    Mmc3_249,
+    Mmc3_254,
+    Mmc3_262,
+    Mmc3_263,
+    Mmc3_313,
+    Mmc3_32k,
+    Mmc3_334,
+    Mmc3_37,
+    Mmc5,
+    Multicart15,
+    Multicart212,
+    Multicart225,
+    Multicart226,
+    Multicart229,
+    Multicart235,
+    Multicart242,
+    Multicart332,
+    Multicart380,
+    Multicart58,
+    Multicart59,
+    Multicart62,
+    N118,
+    Namco163,
+    Namco210,
+    Nanjing163,
+    NeSEvent2_555,
+    NesEvent105,
+    Nichibutsu180,
+    Nina,
+    Nina148,
+    Nina79,
+    Nitra250,
+    Nrom,
+    NtdTc112,
+    Ntdec221,
+    Ntdec63,
+    Ntdec81,
+    OneBus256,
+    Prot143,
+    Quattro232,
+    Racermate168,
+    Rambo1,
+    Realtec396,
+    ResetMc374,
+    Sachen133,
+    Sachen136,
+    Sachen137,
+    Sachen145,
+    Sachen147,
+    Sachen149,
+    Sachen150,
+    Sachen3013,
+    Sachen3014,
+    Sachen8259,
+    Sachen9602,
+    Sangokushi330,
+    Si512,
+    Sl1632,
+    Smb2j304,
+    Soccer538,
+    Srrx413,
+    Ss88006,
+    StudyBox186,
+    Subor166,
+    SuborSango559,
+    Sunsoft1,
+    Sunsoft2_89,
+    Sunsoft3,
+    Sunsoft3r,
+    Sunsoft4,
+    T230,
+    Taito33,
+    Taito48,
+    Taito552,
+    Taito80,
+    Tec9719,
+    Techline351,
+    Tf1201,
+    Th2131,
+    Txc112,
+    Txc132,
+    Txc36,
+    TxcLatch,
+    Um6578,
+    Un1rom94,
+    Unl117,
+    Unl158B,
+    UnlBj56,
+    Unrom512,
+    Unrom517,
+    UxRom,
+    Vrc,
+    Vrc1,
+    Vrc183,
+    Vrc3_73,
+    Vrc6,
+    Vrc7,
+    Waixing164,
+    Waixing195,
+    Waixing242,
+    Waixing252,
+    Waixing253,
+    Whirlwind40,
+    Xmas400,
+    Yoko264,
+    Yung08,
+);
+
+impl MapperState for Supervisor446 {
+    fn save_state(&self, _out: &mut Vec<u8>) -> Result<(), String> {
+        Err("mapper 446 save states are not implemented".into())
+    }
+    fn load_state(&mut self, _data: &[u8]) -> Result<(), String> {
+        Err("mapper 446 save states are not implemented".into())
+    }
+}
+
+impl MapperState for Inner446 {
+    fn save_state(&self, _out: &mut Vec<u8>) -> Result<(), String> {
+        Err("mapper 446 save states are not implemented".into())
+    }
+    fn load_state(&mut self, _data: &[u8]) -> Result<(), String> {
+        Err("mapper 446 save states are not implemented".into())
     }
 }

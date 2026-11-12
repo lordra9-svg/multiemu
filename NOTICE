@@ -1,17 +1,22 @@
 Unko
 Copyright (c) 2026 Unko contributors
 
-This product includes software developed by Luke Petherbridge
-(tetanes-core, https://github.com/lukexor/tetanes), used under the
-MIT license option of its MIT OR Apache-2.0 dual license.
-
-The MIT text applying to tetanes-core is reproduced in
-licenses/tetanes-MIT.txt.
+Unko formerly linked tetanes-core; that adapter has been retired and no
+TetaNES code is included in the current tree.
 
 The desktop frontend uses egui/eframe (https://github.com/emilk/egui),
 Copyright (c) egui developers, dual-licensed MIT OR Apache-2.0. Its
 UX structure is inspired by Dolphin, but no Dolphin code, icons or
 assets are included.
+
+Desktop input and audio use:
+- SDL3 (https://github.com/libsdl-org/SDL), zlib
+- cpal (https://github.com/RustAudio/cpal), MIT OR Apache-2.0
+- rtrb (https://github.com/mgeier/rtrb), MIT OR Apache-2.0
+- hound (https://github.com/ruuda/hound), Apache-2.0
+- png (https://github.com/image-rs/image-png), MIT OR Apache-2.0
+- gif (https://github.com/image-rs/image-gif), MIT OR Apache-2.0
+- directories (https://github.com/dirs-dev/directories-rs), MIT OR Apache-2.0
 
 Archive reading uses:
 - zip (https://github.com/zip-rs/zip2), MIT

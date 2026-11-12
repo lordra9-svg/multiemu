@@ -24,11 +24,16 @@ A trait keeps the host type-safe and lets cores expose richer metadata than
 libretro's C structs. If third-party cores or RetroArch distribution matter later,
 add a `unko-libretro` adapter crate; do not make libretro the internal model.
 
-## ADR-0004 — NES backend: tetanes-core
+## ADR-0004 — NES backend: tetanes-core (superseded)
+
+> Superseded by ADR-0008/ADR-0009: TetaNES was retired once the accuracy core
+> reached the mapper and save-state bar. The original rationale is kept for
+> history.
 
 Chosen because it is MIT OR Apache-2.0, actively maintained, Rust, has save
 states/run-ahead/filters/zapper, and covers 30+ mappers and >90% of the licensed
-library. It sits behind `nes_core`, so it is replaceable.
+library. It sat behind a replaceable adapter, so retiring it did not touch the
+shell or the ABI.
 
 Rejected for now:
 
@@ -71,7 +76,7 @@ Dolphin is GPL-2.0-or-later. Therefore:
 
 This keeps the shell MIT while borrowing the proven UX structure.
 
-## ADR-0008 — reference-parity accuracy core; TetaNES becomes the fallback
+## ADR-0008 — reference-parity accuracy core (TetaNES retired)
 
 The NES target is **reference parity**, the license stays MIT, the core is pure
 Rust, and there is no deadline. The consequences:
@@ -79,9 +84,10 @@ Rust, and there is no deadline. The consequences:
 - A second NES core is written from public hardware documentation and
   ISC-licensed ares source (`nes_accuracy_core`), independent of any GPL
   source. ares adaptations are attributed in `PROVENANCE.md` and `NOTICE`.
-- TetaNES remains the shipped compatibility backend and the default until the
-  accuracy core passes its gates.
-- Both cores implement `unko_core::Core`; selection is by `CoreInfo.id`.
+- The accuracy core became the default, gained versioned save states, and
+  TetaNES was removed from the workspace and dependencies.
+- Any future NES core can implement `unko_core::Core` and be selected by
+  `CoreInfo.id`.
 - GPL emulators (MesenCE, RustyNES, Dolphin) are run as black-box oracles only
   and are never copied or linked. ares is ISC, so documented adaptations are
   allowed with attribution.

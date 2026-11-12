@@ -6,24 +6,19 @@ binary; the rest are references, oracles, or separate processes.
 
 Status: `shipped` · `planned` · `deferred` · `reference-only`
 
-## NES / Famicom — shipped, plus an accuracy core
+## NES / Famicom — shipped
 
 | | |
 |---|---|
-| Compatibility core | `tetanes-core` 0.17 (Rust, MIT OR Apache-2.0) |
-| Accuracy core | Rust, MIT + documented ISC (ares) adaptations — in progress |
-| Adapter | `crates/nes_core` (TetaNES) |
+| Core | `nes_accuracy_core` (Rust, MIT + documented ISC ares adaptations) |
+| Adapter | `crates/nes_accuracy_core` (built-in `Core` implementation) |
 | Accuracy bar | reference parity; see `docs/accuracy.md` |
-| Scope | licensed library, then FDS/VS/PAL/Dendy/expansion/peripherals/unlicensed/NSF |
-| Status | compatibility core shipped; accuracy core at A5 (CPU/PPU 12+19, APU 13, mappers + system + Core ABI; AccuracyCoin 139/151) |
+| Scope | licensed library, FDS, PAL/Dendy, expansion audio, Zapper, NSF, 405 enhanced video |
+| Status | default and only NES core; save states, 7,073-image audit, 0 unsupported mapper IDs |
 
-`nes_core` (TetaNES-derived) remains the default until the accuracy core passes its gates; both will
-be selectable by `CoreInfo.id`. The accuracy core is MIT with documented
-ISC-licensed adaptations from ares; no GPL source is read, translated or
-linked. Provenance is recorded in `crates/nes_accuracy_core/PROVENANCE.md`.
-
-Next: close the remaining A5 failures (DMA/abort timing, NMI hijack, `$2007`
-read buffer, scanline-0 sprites), then A6 breadth.
+The former TetaNES compatibility core was retired after the accuracy core
+gained save states and became the default. A future NES core can be registered
+beside it; the host chooses by `CoreInfo.id`.
 
 ## SNES / Super Famicom — planned
 
@@ -94,8 +89,6 @@ implementation.
 
 | Core id | Crate | Role |
 |---|---|---|
-| `nes_core` | `nes_core` | compatible default backend (TetaNES-derived) |
-| `nes_accuracy_core` | `nes_accuracy_core` | reference-parity accuracy backend |
+| `nes_accuracy_core` | `nes_accuracy_core` | reference-parity NES backend |
 
-Select with `--core nes_accuracy_core` in the CLI; the desktop app
-registers both and defaults to `nes_core`.
+Select with `--core nes_accuracy_core` in the CLI; it is also the default.

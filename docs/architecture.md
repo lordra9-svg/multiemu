@@ -22,18 +22,16 @@ input, audio, screenshot or save-state code.
 └───────────────▲──────────────────────────────┬───────────────┘
                 │ implements                    │ factory()
 ┌───────────────┴──────────────────────────────▼───────────────┐
-│ core crates: nes_core (tetanes-core today, others later) │
+│ core crates: nes_accuracy_core (others later)                │
 │  SNES core · GB core · ...                                   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 The host never depends on a core crate. It depends on `unko-core` and builds
 a `Registry` from the cores it chooses to link (or, later, load as plugins).
-The NES adapter is the only crate that mentions TetaNES.
-
-`nes_accuracy_core` is the second NES backend: the crate contains the
-reference-parity system itself plus its `Core` ABI adapter, so the CLI and
-desktop app can select it with `--core nes_accuracy_core`.
+`nes_accuracy_core` is the only NES backend: the crate contains the
+reference-parity system itself plus its `Core` ABI adapter. The former
+TetaNES adapter has been retired.
 
 `unko-rom` is a sibling boundary for *input*: it discovers loose ROMs and
 members of `.zip`/`.7z`/`.rar` archives, parses iNES metadata, and returns
@@ -65,9 +63,9 @@ Rules that keep the boundary honest:
    code.
 3. **One display frame per `run_frame`.** A core that runs multiple console
    frames (fast-forward) reports the count in `FrameStats`.
-4. **Buffers are borrowed, not copied, at the boundary.** The NES adapter copies
-   TetaNES' frame into its own buffer once per frame because TetaNES' accessor
-   needs `&mut self`; that is an implementation detail, not an API change.
+4. **Buffers are borrowed, not copied, at the boundary.** The PPU owns the
+   completed frame and exposes it through `System::video`, so the adapter does
+   not copy a full frame per display.
 5. **Save states are opaque and versioned by the core.** The host stores them,
    never interprets them.
 
@@ -80,19 +78,17 @@ the cores you chose to link.
 
 ## NES backend
 
-`nes_core` adapts `tetanes-core`:
+`nes_accuracy_core` owns the cycle-stepped CPU, PPU, APU, cartridge and system
+bus. Its `Core` adapter:
 
-- `ControlDeck` owns CPU/PPU/APU/bus/cart.
-- The adapter forces `VideoFilter::Pixellate` so the host gets raw pixels, and
-  sets `sram_dir: None` so TetaNES performs no filesystem I/O.
-- `run_frame` loops `clock_frame()` until a display frame completes and copies
-  the RGBA frame into a stable buffer.
-- Input bits map 1:1 to TetaNES' `JoypadBtnState` because both use the NES
-  shift-register order.
+- loads iNES/NES 2.0 and raw FDS images;
+- exposes RGBA video and mono f32 audio through borrowed buffers;
+- serializes versioned `UNKOST01` save states, including mapper state and a ROM
+  fingerprint;
+- maps the host input bits to the NES shift-register order.
 
-If TetaNES stops meeting the accuracy or mapper-coverage bar, the adapter is the
-only thing that changes; the host and the ABI stay put. A second NES core can be
-registered alongside it.
+The core is deterministic and has no window, audio-device or filesystem
+dependency. The desktop shell owns SDL3 input, cpal output and all files.
 
 ## What is deliberately not here yet
 

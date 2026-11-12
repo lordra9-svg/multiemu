@@ -1,8 +1,7 @@
 //! Differential test against the `nestest` golden log.
 //!
 //! The ROM and log are not committed; place them in `test-roms/` at the
-//! workspace root (they are distributed with TetaNES under its test data and
-//! widely available as homebrew). The test is skipped when the files are absent.
+//! workspace root (they are widely available as homebrew). The test is skipped when the files are absent.
 
 use std::fs;
 use std::path::Path;

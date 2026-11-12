@@ -62,7 +62,7 @@ const TND_MIX: [f32; 203] = {
 };
 
 /// One pulse channel.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Pulse {
     /// Channel enabled from `$4015`.
     pub enabled: bool,
@@ -223,7 +223,7 @@ impl Pulse {
 }
 
 /// Triangle channel.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Triangle {
     /// Enabled.
     pub enabled: bool,
@@ -317,7 +317,7 @@ impl Triangle {
 }
 
 /// Noise channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Noise {
     /// Enabled.
     pub enabled: bool,
@@ -445,7 +445,7 @@ impl Noise {
 }
 
 /// Delta modulation channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Dmc {
     /// Enabled.
     pub enabled: bool,
@@ -673,13 +673,13 @@ impl Dmc {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum FrameMode {
     Four,
     Five,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct FrameCounter {
     counter: u16,
     step: usize,
@@ -694,7 +694,7 @@ struct FrameCounter {
 const PERIOD4: [u16; 6] = [7457, 7456, 7458, 7457, 1, 1];
 const PERIOD5: [u16; 6] = [7457, 7456, 7458, 7458, 7452, 1];
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct FrameEvents {
     quarter: bool,
     half: bool,
@@ -797,7 +797,7 @@ impl FrameCounter {
 }
 
 /// The full APU.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Apu {
     /// CPU get/put phase of the current `$4015` write, when known.
     ///

@@ -1027,7 +1027,7 @@ impl App {
                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                 ui.add_space(6.0);
                 ui.label("A multi-system, multi-core emulator shell.");
-                ui.label("MIT licensed. NES backend: TetaNES (MIT/Apache-2.0).");
+                ui.label("MIT licensed. NES backend: Unko's accuracy core.");
                 ui.add_space(6.0);
                 ui.label("Frontend structure inspired by Dolphin's desktop UX;");
                 ui.label("no Dolphin code, icons or assets are used.");
@@ -1772,8 +1772,8 @@ fn nes_tab(ui: &mut egui::Ui, settings: &mut Settings, entry: Option<&GameEntry>
 fn advanced_tab(ui: &mut egui::Ui) {
     ui.heading("Advanced");
     ui.add_space(8.0);
-    ui.label("Core: TetaNES (adapted) — MIT OR Apache-2.0");
-    ui.label("State format: core-owned, versioned by the backend");
+    ui.label("Core: Unko NES accuracy core");
+    ui.label("State format: UNKOST01, ROM-fingerprinted and core-tagged");
     ui.label("Settings file: unko.conf");
     ui.add_space(8.0);
     ui.label(

@@ -21,9 +21,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libasound2-dev \
             libx11-dev libxext-dev libxrandr-dev libxi-dev \
-            libxcursor-dev libxfixes-dev libxkbcommon-dev \
-            libwayland-dev libdecor-0-dev libudev-dev \
-            ninja-build
+            libxcursor-dev libxfixes-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libdecor-0-dev libudev-dev libxss-dev libxtst-dev \
+            libgbm-dev libdrm-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libpulse-dev ninja-build
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -67,3 +68,17 @@ jobs:
 
       - name: Check workspace
         run: cargo check --workspace --all-targets
+
+  mobile-core:
+    name: NES core check (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-linux-android, aarch64-apple-ios]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Check core
+        run: cargo check -p nes_accuracy_core --target ${{ matrix.target }}

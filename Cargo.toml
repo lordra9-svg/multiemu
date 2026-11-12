@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/unko-core",
     "crates/unko-rom",
-    "crates/nes_core",
     "crates/nes_accuracy_core",
     "crates/unko-cli",
     "crates/unko-app",
@@ -18,7 +17,6 @@ repository = "https://github.com/lordra9-svg/unko"
 
 [workspace.dependencies]
 unko-core = { path = "crates/unko-core" }
-tetanes-core = "0.17.0"
 
 [profile.release]
 lto = "thin"

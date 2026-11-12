@@ -26,7 +26,7 @@ pub const STATUS_OVERFLOW: u8 = 0x20;
 /// tile low byte is `$FD` or `$FE` selects the matching bank for the rest of
 /// the table, which is how Punch-Out!! swaps background and sprite tiles
 /// mid-frame.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Mmc2Chr {
     rom: Vec<u8>,
     banks: [u8; 4],
@@ -68,7 +68,7 @@ impl Mmc2Chr {
 }
 
 /// 2C02 state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ppu {
     /// PPUCTRL ($2000).
     pub ctrl: u8,
@@ -109,12 +109,14 @@ pub struct Ppu {
     /// Completed frames.
     pub frames: u64,
     /// Nametable VRAM (4 KiB; four-screen carts use all of it).
+    #[serde(with = "serde_big_array::BigArray")]
     pub vram: [u8; 0x1000],
     /// Palette RAM (32 bytes).
     pub palette: [u8; 32],
     /// Expanded RGB for each palette entry (rebuilt on palette writes).
     palette_rgb: [[u8; 3]; 32],
     /// Object attribute memory.
+    #[serde(with = "serde_big_array::BigArray")]
     pub oam: [u8; 256],
     /// CHR memory (8 KiB window; mappers can replace this later).
     pub chr: Vec<u8>,
@@ -165,6 +167,7 @@ pub struct Ppu {
     /// UM6578 `$2008` colour/tile select.
     um_ctrl: u8,
     /// UM6578 64-entry palette.
+    #[serde(with = "serde_big_array::BigArray")]
     um_palette: [u8; 64],
     /// Shared CHR-RAM state for mapper 169's computer modes.
     chr169: Option<Rc<RefCell<Chr169>>>,

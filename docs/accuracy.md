@@ -1,7 +1,8 @@
 # Accuracy charter — NES
 
-Decision: **reference parity, Rust, MIT with documented ISC adaptations**, no deadline. TetaNES stays
-as the compatibility fallback while a second NES core is built to the bar below.
+Decision: **reference parity, Rust, MIT with documented ISC adaptations**, no
+deadline. `nes_accuracy_core` is the only NES core; TetaNES was retired after
+the accuracy core met the mapper and save-state bar.
 
 ## 1. What "accurate" means
 
@@ -103,7 +104,7 @@ Order inside the core:
 ## 6. Milestones
 
 ### A0 — harness and skeleton (done)
-- [x] Accuracy crate (`nes_accuracy_core`), independent of TetaNES.
+- [x] Accuracy crate (`nes_accuracy_core`), now the only NES core.
 - [x] Region timing table, CPU bus contract, CPU registers/reset.
 - [x] Deterministic frame/audio trace format and `unko trace` / `diff`.
 - [x] Provenance rules and crate-level `PROVENANCE.md`.
@@ -112,7 +113,7 @@ Order inside the core:
 Commands:
 
 ```sh
-unko trace game.nes --core nes_core --frames 600 --out ref.trace
+unko trace game.nes --core nes_accuracy_core --frames 600 --out ref.trace
 unko trace game.nes --core <accuracy-id> --frames 600 --out new.trace
 unko diff ref.trace new.trace
 ```

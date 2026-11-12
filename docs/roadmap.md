@@ -89,8 +89,8 @@ The main effort is now the reference-parity accuracy core. Details in
 
 - [x] Cargo workspace, MIT license, third-party notices.
 - [x] `unko-core`: `Core`, `CoreInfo`, `Registry`, video/audio/input/state types.
-- [x] `nes_core`: TetaNES adapter (load, frames, RGBA video, f32 audio, input,
-      save state, SRAM).
+- [x] `nes_accuracy_core`: load, frames, RGBA video, f32 audio, input, SRAM
+      and versioned save states. The TetaNES adapter has been retired.
 - [x] `unko-cli`: `info`, `run` (PPM screenshots), `bench`.
 - [x] Synthetic NROM boot test; state round-trip test; registry tests.
 - [x] Verified locally: 256×240 RGBA, ~937 fps / 15.6× realtime in release on a
@@ -118,6 +118,7 @@ The main effort is now the reference-parity accuracy core. Details in
 - [ ] Frame advance, fast-forward and rewind ring in the host.
 - [x] CLI regression mode: hash frames/audio, fresh-run vs state-resume, assert
       byte-identical tails (`unko verify`).
+- [x] Versioned accuracy-core save states and retirement of the TetaNES adapter.
 - [x] Test-ROM harness: `nestest`, blargg CPU/PPU/APU, `ppu_vbl_nmi`, MMC3 A12,
       and the AccuracyCoin isolated battery. Pass counts are recorded in
       `docs/accuracy-status.md`; the suites run in `crates/nes_accuracy_core/tests/`.
@@ -159,8 +160,8 @@ The main effort is now the reference-parity accuracy core. Details in
 
 ## Accuracy policy
 
-The NES backend is currently classed `Accuracy::High`, not `CycleAccurate`,
-because TetaNES is not dot-locked to the same degree as ares/Mesen/RustyNES.
+The NES backend is classed `Accuracy::High`; raising the badge requires the
+remaining parity and hardware-capture work, not a second core.
 Do not raise the badge without a passing page of the test matrix and a
 documented list of known approximations. `docs/accuracy-status.md` and
 `docs/accuracy-divergences.md` hold that record.

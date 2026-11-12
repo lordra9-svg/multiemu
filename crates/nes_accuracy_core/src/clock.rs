@@ -16,7 +16,7 @@
 //! PPU model, not of this table.
 
 /// NES timing region.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Region {
     /// NTSC (Japan/US).
     Ntsc,
@@ -27,7 +27,7 @@ pub enum Region {
 }
 
 /// Derived timing for one region.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Timing {
     /// Region.
     pub region: Region,

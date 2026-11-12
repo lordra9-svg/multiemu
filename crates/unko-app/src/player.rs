@@ -83,6 +83,8 @@ pub struct Player {
     pub title: String,
     /// Stable save name (title + CRC).
     pub stem: String,
+    /// Core id, so state files never cross between implementations.
+    pub core_id: String,
     /// Where states/SRAM live.
     pub save_dir: PathBuf,
     /// Last operator-facing message.
@@ -102,7 +104,7 @@ impl Player {
     pub fn start(entry: &GameEntry, settings: &Settings) -> Result<Self, String> {
         let rom = unko_rom::load(entry).map_err(|err| format!("read ROM: {err}"))?;
         let mut registry = Registry::new();
-        registry.register(nes_core::registration());
+        // The accuracy core is the default now that it owns save states.
         registry.register(nes_accuracy_core::registration());
         let mut core = registry
             .create_default(SystemId::Nes)
@@ -136,6 +138,7 @@ impl Player {
             core.load_sram(&sram).map_err(|err| err.to_string())?;
         }
 
+        let core_id = core.info().id.to_string();
         Ok(Self {
             core,
             texture: None,
@@ -145,6 +148,7 @@ impl Player {
             slot: 0,
             title: entry.title.clone(),
             stem,
+            core_id,
             save_dir,
             message: String::new(),
             texture_options: egui::TextureOptions::NEAREST,
@@ -380,7 +384,7 @@ impl Player {
     #[must_use]
     pub fn thumb_path(&self, slot: u8) -> PathBuf {
         self.save_dir
-            .join(format!("{}.slot{slot}.thumb", self.stem))
+            .join(format!("{}.{}.slot{slot}.thumb", self.stem, self.core_id))
     }
 
     /// Saved thumbnail (`64x60` RGBA) for `slot`, if one exists.
@@ -486,7 +490,7 @@ impl Player {
     #[must_use]
     pub fn state_path(&self, slot: u8) -> PathBuf {
         self.save_dir
-            .join(format!("{}.slot{slot}.state", self.stem))
+            .join(format!("{}.{}.slot{slot}.state", self.stem, self.core_id))
     }
 
     /// Requested sample rate, for the status bar.

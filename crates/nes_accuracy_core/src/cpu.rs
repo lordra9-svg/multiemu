@@ -8,7 +8,7 @@
 use crate::bus::CpuBus;
 
 /// Processor status register bits.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Status(u8);
 
 impl Status {
@@ -72,7 +72,7 @@ impl Status {
 }
 
 /// Visible 6502 registers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Registers {
     /// Accumulator.
     pub a: u8,
@@ -102,7 +102,7 @@ impl Default for Registers {
 }
 
 /// The CPU state.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Cpu {
     /// Registers.
     pub registers: Registers,
@@ -128,7 +128,7 @@ pub struct Cpu {
     service_irq: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Mode {
     Imp,
     Acc,
@@ -145,14 +145,14 @@ enum Mode {
     Ind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Penalty {
     Read,
     Store,
     Rmw,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Kind {
     Adc,
     And,

@@ -240,8 +240,8 @@ missing mapper feature.
 ### Core ABI
 
 New crate `nes_accuracy_core` implements `unko_core::Core`
-(id `nes_accuracy_core`) and is registered beside `nes_core`. The CLI can
-select it with `--core nes_accuracy_core`.
+(id `nes_accuracy_core`), the only registered NES core. The CLI can select it
+explicitly with `--core nes_accuracy_core`.
 
 ### Commercial verification
 
@@ -1525,8 +1525,8 @@ test accuracycoin_isolated_runner_writes_every_row ... ok
 
 Baseline for the accuracy core, headless (`unko run <rom> --frames 1200
 --core nes_accuracy_core` on AccuracyCoin, release build): **~535 fps**
-(about 9x real-time). The default `nes_core` core runs at ~1200 fps, so the
-accuracy core has clear headroom.
+(about 9x real-time). The retired TetaNES adapter ran at ~1200 fps; the accuracy core still has
+clear 60 Hz headroom.
 
 Profiling by subsystem (temporary A/B builds): the per-pixel background/sprite
 composition was ~27% of frame time, the APU mixer ~4%, and the rest is the
@@ -1699,3 +1699,23 @@ but the sequence is still misaligned and the pattern reads use the `v` that the
 `$2007` reads themselves advanced. A correct model needs the PPU data state
 machine (address latch, idle, read) with the shared octal latch, not an
 immediate buffer update; that experiment was reverted.
+
+### 2026-11-12 — accuracy-core save states; TetaNES retired
+
+The accuracy core now owns the host save-state contract. `UNKOST01` states
+carry a ROM fingerprint, the mapper state and the CPU/PPU/APU/system state
+(including the resampler). `unko verify` resumes byte-identically, and state
+files are core-tagged (`<rom>.<core>.slotN.state`) so a state from another
+implementation cannot be loaded by accident.
+
+All 244 concrete mapper implementations serialize and restore; mapper 446
+(`Supervisor446`) wraps a trait object and reports an explicit unsupported
+state rather than silently producing a bad one. A state from a commercial
+MMC5 title is about 1.1 MB because mapper serialization currently includes the
+ROM copy; skipping immutable ROM in the state is a later size optimization.
+
+The TetaNES adapter, `tetanes-core` dependency, workspace member and licence
+notice were removed. The header-correction database that shipped with TetaNES
+was not carried over (it contains commercial title/CRC metadata); iNES/NES 2.0
+headers are used directly, and DAT-based dump detection/header repair remains
+the planned ROM-management feature.

@@ -10,7 +10,6 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use nes_core::NesCore;
 use unko_core::{Core, LoadOptions, Registry, SystemId};
 
 fn main() {
@@ -936,7 +935,6 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn registry() -> Registry {
     let mut registry = Registry::new();
-    registry.register(nes_core::registration());
     registry.register(nes_accuracy_core::registration());
     registry
 }
@@ -1076,10 +1074,6 @@ fn write_ppm(
     fs::write(path, file)?;
     Ok(())
 }
-
-/// Keeps the adapter's concrete type name visible in this crate's docs.
-#[allow(dead_code)]
-fn _assert_core_type(_: NesCore) {}
 
 /// Runs a hundreds-of-frames differential audit of one library against a
 /// reference trace producer (the RustyNES oracle). Every image is executed for

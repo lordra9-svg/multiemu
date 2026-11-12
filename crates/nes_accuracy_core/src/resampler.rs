@@ -28,7 +28,7 @@ const RING_SIZE: usize = 4096;
 const RING_MASK: usize = RING_SIZE - 1;
 
 /// Polyphase windowed-sinc kernel, `[phase][tap]`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Kernel {
     coeffs: Box<[[f32; TAPS]]>,
 }
@@ -80,7 +80,7 @@ impl Kernel {
 }
 
 /// One-pole high-pass stage: `y = coeff * (y[-1] + x - x[-1])`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct HighPass {
     coeff: f32,
     prev_in: f32,
@@ -111,7 +111,7 @@ impl HighPass {
 }
 
 /// One-pole low-pass stage: `y = y[-1] + coeff * (x - y[-1])`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct LowPass {
     coeff: f32,
     prev_out: f32,
@@ -138,7 +138,7 @@ impl LowPass {
 }
 
 /// NES front-loader output network: 90 Hz HP, 440 Hz HP, 14 kHz LP.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct FilterChain {
     hp1: HighPass,
     hp2: HighPass,
@@ -168,12 +168,13 @@ impl FilterChain {
 }
 
 /// Streaming band-limited decimator plus the analog output filter chain.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Resampler {
     rate: u32,
     step: f64,
     phase: f64,
     kernel: Kernel,
+    #[serde(with = "serde_big_array::BigArray")]
     delta_ring: [f32; RING_SIZE],
     head: usize,
     primed: bool,

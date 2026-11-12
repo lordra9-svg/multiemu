@@ -1,9 +1,9 @@
 //! Unko NES accuracy core: a clean-room, reference-parity NES core and its
 //! [`unko_core::Core`] adapter.
 //!
-//! The emulator itself is independent of `nes_core` (the TetaNES-derived
-//! fallback) and of every reference emulator. It is built from public
-//! hardware documentation; see `PROVENANCE.md` and `docs/accuracy.md`.
+//! The emulator is the only NES backend and is independent of every reference
+//! emulator. It is built from public hardware documentation; see
+//! `PROVENANCE.md` and `docs/accuracy.md`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -72,7 +72,10 @@ pub const fn info() -> CoreInfo {
         version: env!("CARGO_PKG_VERSION"),
         system: SystemId::Nes,
         accuracy: Accuracy::High,
-        features: Features::BATTERY,
+        features: Features::SAVE_STATES
+            .union(Features::BATTERY)
+            .union(Features::LIGHT_GUN)
+            .union(Features::EXPANSION_AUDIO),
     }
 }
 
@@ -243,16 +246,24 @@ impl Core for AccuracyCore {
         }
     }
 
-    fn save_state(&mut self, _out: &mut Vec<u8>) -> Result<(), CoreError> {
-        Err(CoreError::Unsupported(
-            "save states are not implemented in the accuracy core yet".into(),
-        ))
+    fn save_state(&mut self, out: &mut Vec<u8>) -> Result<(), CoreError> {
+        let system = self
+            .system
+            .as_ref()
+            .ok_or_else(|| CoreError::State("no ROM loaded".into()))?;
+        *out = system.save_state().map_err(CoreError::State)?;
+        Ok(())
     }
 
-    fn load_state(&mut self, _state: &[u8]) -> Result<(), CoreError> {
-        Err(CoreError::Unsupported(
-            "save states are not implemented in the accuracy core yet".into(),
-        ))
+    fn load_state(&mut self, state: &[u8]) -> Result<(), CoreError> {
+        let system = self
+            .system
+            .as_mut()
+            .ok_or_else(|| CoreError::State("no ROM loaded".into()))?;
+        system.load_state(state).map_err(CoreError::State)?;
+        self.frame = system.video().to_vec();
+        self.audio.clear();
+        Ok(())
     }
 
     fn sram(&mut self) -> &[u8] {
