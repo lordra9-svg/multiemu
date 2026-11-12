@@ -10,7 +10,7 @@ Measured on the development machine with the release profile:
 
 | Workload | Throughput |
 |---|---|
-| MMC2 title, 1,200 frames | ~405-412 fps (6.7-6.9x real-time) |
+| MMC2 title, 2,000 frames | ~392-401 fps (6.5-6.7x real-time) |
 | MMC5 title, 1,200 frames | ~355-360 fps (5.9-6.0x real-time) |
 | 7,101-image audit, 20 frames | ~43-45 s wall, parallel |
 | Same audit with 8 CPU hogs | ~62 s wall, identical totals |
@@ -26,7 +26,7 @@ window is inactive.
 `scripts/pgo.sh <rom-directory>` builds an instrumented binary, trains it on a
 corpus slice, and produces a profile-guided build under `target/pgo`. On the
 MMC2 benchmark this is about **10-13% faster** than a plain release build
-(~435-448 fps versus ~396-412 fps). The script never copies ROM data into the
+(~442-448 fps versus ~392-401 fps). The script never copies ROM data into the
 repository.
 
 PGO profiles are compiler-version and target specific, so build them on the
