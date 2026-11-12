@@ -216,7 +216,8 @@ impl Default for Settings {
             turbo_enabled: false,
             turbo_hz: 12.0,
             show_input_display: false,
-            show_touch_controls: false,
+            // Touch is the primary controller on phones and tablets.
+            show_touch_controls: cfg!(any(target_os = "android", target_os = "ios")),
             hotkeys: Hotkeys::default(),
             per_game_input: false,
         }
@@ -309,6 +310,11 @@ impl Settings {
 
     /// Writes the settings file.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            if !dir.as_os_str().is_empty() {
+                let _ = fs::create_dir_all(dir);
+            }
+        }
         let mut text = format!(
             "\
 # Unko settings

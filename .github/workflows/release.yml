@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev \
+            libx11-dev libxext-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxfixes-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libdecor-0-dev libudev-dev libxss-dev libxtst-dev \
+            libgbm-dev libdrm-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libpulse-dev ninja-build
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p unko-cli -p unko-app
+
+      - name: Package
+        run: |
+          name="unko-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp target/release/unko target/release/unko-app "dist/$name/"
+          cp LICENSE NOTICE README.md "dist/$name/"
+          cp -r licenses "dist/$name/"
+          tar -C dist -czf "$name.tar.gz" "$name"
+          echo "ARCHIVE=$name.tar.gz" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unko-linux-x86_64
+          path: unko-linux-x86_64.tar.gz
+
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p unko-cli -p unko-app
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist\unko-windows-x86_64 | Out-Null
+          Copy-Item target\release\unko.exe dist\unko-windows-x86_64\
+          Copy-Item target\release\unko-app.exe dist\unko-windows-x86_64\
+          Copy-Item LICENSE, NOTICE, README.md dist\unko-windows-x86_64\
+          Copy-Item licenses dist\unko-windows-x86_64\licenses -Recurse
+          Compress-Archive -Path dist\unko-windows-x86_64 -DestinationPath unko-windows-x86_64.zip
+          "ARCHIVE=unko-windows-x86_64.zip" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unko-windows-x86_64
+          path: unko-windows-x86_64.zip
+
+  macos:
+    name: macOS arm64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: brew install ninja
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p unko-cli -p unko-app
+
+      - name: Bundle
+        run: |
+          app="Unko.app/Contents"
+          mkdir -p "$app/MacOS" "$app/Resources"
+          cp target/release/unko-app "$app/MacOS/unko-app"
+          cp target/release/unko unko-cli
+          cat > "$app/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key><string>en</string>
+              <key>CFBundleDisplayName</key><string>Unko</string>
+              <key>CFBundleExecutable</key><string>unko-app</string>
+              <key>CFBundleIdentifier</key><string>dev.unko.app</string>
+              <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+              <key>CFBundleName</key><string>Unko</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>0.1.0</string>
+              <key>CFBundleVersion</key><string>1</string>
+              <key>LSMinimumSystemVersion</key><string>11.0</string>
+              <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          name="unko-macos-arm64"
+          mkdir -p "dist/$name"
+          cp -R Unko.app unko-cli LICENSE NOTICE README.md "dist/$name/"
+          cp -r licenses "dist/$name/"
+          ditto -c -k --sequesterRsrc --keepParent "dist/$name" "$name.zip"
+          echo "ARCHIVE=$name.zip" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unko-macos-arm64
+          path: unko-macos-arm64.zip
+
+  publish:
+    name: Attach release artifacts
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

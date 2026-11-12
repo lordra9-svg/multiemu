@@ -89,6 +89,17 @@ status bar, and one settings window with a category rail. See
 
 Gamepads are hot-plugged through SDL3; bindings, auto-fire, dead zone,
 per-game profiles and keyboard shortcuts are configurable in Settings.
+
+### Mobile and packaging
+
+The same shell builds for iOS and Android: the crate is a library
+(`unko_app`) plus a desktop binary, with `android_main` and `start_winit_app`
+entry points, a touch overlay, and platform settings/save paths. Packaging
+scaffolds live in `crates/unko-app/android` (Gradle + `cargo-ndk`,
+`NativeActivity`) and `crates/unko-app/ios` (XcodeGen + static library, wgpu
+renderer). Desktop release archives are produced on tag pushes by
+`.github/workflows/release.yml`. Requirements and current gaps are in
+[`docs/platforms.md`](docs/platforms.md).
 Keyboard: arrows = D-pad, X = A, Z = B, Enter = Start, Shift = Select,
 Space = pause, F5/F8 = save/load state, F11 = fullscreen.
 

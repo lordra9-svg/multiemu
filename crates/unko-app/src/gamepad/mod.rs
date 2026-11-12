@@ -1,16 +1,23 @@
-//! SDL3 gamepad input for the desktop shell.
+//! Gamepad binding model and per-platform input backends.
 //!
-//! The same module is used by the desktop, iOS and Android targets; SDL3 owns
-//! hot-plug and platform mapping, and this layer only translates gamepad
-//! buttons into the core's [`InputState`].
+//! The binding table, button names and defaults are platform independent.
+//! The backend that actually reads pads differs: SDL3 on desktop (it owns hot
+//! plug and the platform mappings) and a no-op backend on mobile, where the
+//! touch overlay is the primary controller and SDL is not available without
+//! the platform SDKs.
 
-use std::time::{Duration, Instant};
-
-use sdl3::event::Event;
-pub use sdl3::gamepad::Button;
-use sdl3::gamepad::{Axis, Gamepad};
-use sdl3::{EventPump, GamepadSubsystem};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use unko_core::InputState;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod mobile;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub use mobile::Gamepads;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod desktop;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use desktop::Gamepads;
 
 /// A NES controller button that can be bound to a gamepad button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +84,7 @@ impl NesButton {
     }
 
     /// Core input bit.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[must_use]
     pub const fn mask(self) -> u16 {
         match self {
@@ -103,6 +111,46 @@ impl NesButton {
             Self::Select => 7,
         }
     }
+}
+
+/// A physical gamepad button in SDL3's naming, independent of the backend.
+///
+/// Keeping our own enum lets the binding table, settings files and UI compile
+/// on mobile, where the SDL3 backend is not built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Button {
+    /// South face button (A on Xbox, cross on PlayStation).
+    South,
+    /// East face button (B on Xbox, circle on PlayStation).
+    East,
+    /// North face button (Y on Xbox, triangle on PlayStation).
+    North,
+    /// West face button (X on Xbox, square on PlayStation).
+    West,
+    /// Back / select / share.
+    Back,
+    /// Start / options.
+    Start,
+    /// Left shoulder.
+    LeftShoulder,
+    /// Right shoulder.
+    RightShoulder,
+    /// Left stick click.
+    LeftStick,
+    /// Right stick click.
+    RightStick,
+    /// D-pad up.
+    DPadUp,
+    /// D-pad down.
+    DPadDown,
+    /// D-pad left.
+    DPadLeft,
+    /// D-pad right.
+    DPadRight,
+    /// Misc button 1.
+    Misc1,
+    /// Touchpad click.
+    Touchpad,
 }
 
 /// Gamepad-to-NES binding table.
@@ -205,7 +253,6 @@ pub fn button_name(button: Button) -> &'static str {
         Button::DPadRight => "dpright",
         Button::Misc1 => "misc1",
         Button::Touchpad => "touchpad",
-        _ => "south",
     }
 }
 
@@ -231,205 +278,6 @@ pub fn button_from_name(value: &str) -> Option<Button> {
         "touchpad" => Button::Touchpad,
         _ => return None,
     })
-}
-
-struct Slot {
-    id: Option<sdl3::joystick::JoystickId>,
-    name: String,
-    pad: Option<Gamepad>,
-}
-
-/// Connected gamepads and their current NES input state.
-pub struct Gamepads {
-    _subsystem: GamepadSubsystem,
-    events: EventPump,
-    slots: [Slot; 4],
-    capture: Option<NesButton>,
-    captured: Option<(NesButton, Button)>,
-    turbo_on: bool,
-    last_turbo: Instant,
-}
-
-impl Gamepads {
-    /// Opens SDL3 and any gamepads that are already connected.
-    pub fn new() -> Result<Self, String> {
-        sdl3::hint::set("SDL_JOYSTICK_THREAD", "1");
-        let sdl = sdl3::init().map_err(|err| format!("SDL3 init: {err}"))?;
-        let subsystem = sdl
-            .gamepad()
-            .map_err(|err| format!("SDL3 gamepad: {err}"))?;
-        let events = sdl
-            .event_pump()
-            .map_err(|err| format!("SDL3 events: {err}"))?;
-        let mut gamepads = Self {
-            _subsystem: subsystem.clone(),
-            events,
-            slots: std::array::from_fn(|_| Slot {
-                id: None,
-                name: String::new(),
-                pad: None,
-            }),
-            capture: None,
-            captured: None,
-            turbo_on: false,
-            last_turbo: Instant::now(),
-        };
-        gamepads.refresh();
-        Ok(gamepads)
-    }
-
-    /// Re-enumerates connected gamepads, opening new ones into free slots.
-    pub fn refresh(&mut self) {
-        let ids = match self._subsystem.gamepads() {
-            Ok(ids) => ids,
-            Err(_) => return,
-        };
-        for id in ids {
-            if self.slots.iter().any(|slot| slot.id == Some(id)) {
-                continue;
-            }
-            let Some(index) = self.slots.iter().position(|slot| slot.id.is_none()) else {
-                break;
-            };
-            self.open(index, id);
-        }
-    }
-
-    fn open(&mut self, index: usize, id: sdl3::joystick::JoystickId) {
-        let Ok(pad) = self._subsystem.open(id) else {
-            return;
-        };
-        let name = pad
-            .name()
-            .unwrap_or_else(|| format!("Gamepad {}", index + 1));
-        let _ = pad.set_player_index(index as u16);
-        self.slots[index] = Slot {
-            id: Some(id),
-            name,
-            pad: Some(pad),
-        };
-    }
-
-    fn close(&mut self, id: sdl3::joystick::JoystickId) {
-        if let Some(index) = self.slots.iter().position(|slot| slot.id == Some(id)) {
-            self.slots[index] = Slot {
-                id: None,
-                name: String::new(),
-                pad: None,
-            };
-        }
-    }
-
-    /// Drains SDL events and returns the four NES input states.
-    pub fn poll(
-        &mut self,
-        mapping: PadMapping,
-        deadzone: i16,
-        turbo: bool,
-        turbo_hz: f32,
-    ) -> [InputState; 4] {
-        let events: Vec<Event> = self.events.poll_iter().collect();
-        for event in events {
-            match event {
-                Event::GamepadAdded { which, .. } => {
-                    if let Some(index) = self.slots.iter().position(|slot| slot.id.is_none()) {
-                        self.open(index, which);
-                    }
-                }
-                Event::GamepadRemoved { which, .. } => self.close(which),
-                Event::GamepadButtonDown { button, .. } => {
-                    if let Some(target) = self.capture.take() {
-                        self.captured = Some((target, button));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let now = Instant::now();
-        let half = if turbo && turbo_hz > 0.0 {
-            Duration::from_secs_f32(0.5 / turbo_hz)
-        } else {
-            Duration::ZERO
-        };
-        if half.is_zero() {
-            self.turbo_on = true;
-        } else if now.duration_since(self.last_turbo) >= half {
-            self.turbo_on = !self.turbo_on;
-            self.last_turbo = now;
-        }
-
-        let mut states = [InputState::empty(); 4];
-        for (index, slot) in self.slots.iter().enumerate() {
-            let Some(pad) = &slot.pad else {
-                continue;
-            };
-            let mut bits = 0u16;
-            for button in NesButton::ALL {
-                let bound = mapping.get(button);
-                let mut pressed = pad.button(bound);
-                if matches!(
-                    button,
-                    NesButton::Up | NesButton::Down | NesButton::Left | NesButton::Right
-                ) {
-                    let (axis, negative) = match button {
-                        NesButton::Up => (Axis::LeftY, true),
-                        NesButton::Down => (Axis::LeftY, false),
-                        NesButton::Left => (Axis::LeftX, true),
-                        _ => (Axis::LeftX, false),
-                    };
-                    let value = pad.axis(axis);
-                    pressed |= if negative {
-                        value < -deadzone
-                    } else {
-                        value > deadzone
-                    };
-                }
-                if pressed {
-                    if turbo && matches!(button, NesButton::A | NesButton::B) && !self.turbo_on {
-                        continue;
-                    }
-                    bits |= button.mask();
-                }
-            }
-            states[index] = InputState::from_bits(bits);
-        }
-        states
-    }
-
-    /// Starts capturing the next gamepad button for `button`.
-    pub fn begin_capture(&mut self, button: NesButton) {
-        self.capture = Some(button);
-        self.captured = None;
-    }
-
-    /// Returns and clears a captured binding.
-    pub fn take_captured(&mut self) -> Option<(NesButton, Button)> {
-        self.captured.take()
-    }
-
-    /// Whether a capture is pending.
-    #[must_use]
-    pub fn capturing(&self) -> bool {
-        self.capture.is_some()
-    }
-
-    /// Connected gamepad names in slot order.
-    #[must_use]
-    pub fn names(&self) -> [Option<String>; 4] {
-        std::array::from_fn(|index| {
-            self.slots[index]
-                .pad
-                .as_ref()
-                .map(|_| self.slots[index].name.clone())
-        })
-    }
-
-    /// Number of connected gamepads.
-    #[must_use]
-    pub fn connected(&self) -> usize {
-        self.slots.iter().filter(|slot| slot.pad.is_some()).count()
-    }
 }
 
 #[cfg(test)]

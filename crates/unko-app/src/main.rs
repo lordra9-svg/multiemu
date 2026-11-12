@@ -3,35 +3,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-mod app;
-mod audio;
-mod gamepad;
-mod library;
-mod player;
-mod recording;
-mod settings;
-
 use std::path::PathBuf;
 
-use app::{App, Args};
+use unko_app::{run, Args};
 
 fn main() -> eframe::Result<()> {
-    let args = parse_args();
-    let settings = settings::Settings::load(&settings::Settings::path());
-
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([960.0, 600.0])
-            .with_title("Unko"),
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "unko",
-        options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, settings, args)))),
-    )
+    run(parse_args())
 }
 
 fn parse_args() -> Args {

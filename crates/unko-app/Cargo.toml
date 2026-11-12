@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+name = "unko_app"
+path = "src/lib.rs"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
 [[bin]]
 name = "unko-app"
 path = "src/main.rs"
@@ -14,9 +19,8 @@ path = "src/main.rs"
 unko-core.workspace = true
 nes_accuracy_core = { path = "../nes_accuracy_core" }
 unko-rom = { path = "../unko-rom" }
-eframe = "0.31.1"
+eframe = { version = "0.31.1", default-features = false, features = ["default_fonts"] }
 egui = "0.31.1"
-sdl3 = { version = "0.22.1", features = ["build-from-source"] }
 cpal = "0.18.2"
 rtrb = "0.3.2"
 hound = "3.5.1"
@@ -25,4 +29,26 @@ gif = "0.14.2"
 directories = "6.0.0"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
 rfd = "0.17.2"
+sdl3 = { version = "0.22.1", features = ["build-from-source"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = [
+    "android-native-activity",
+    "default_fonts",
+    "glow",
+] }
+winit = "0.30"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = [
+    "default_fonts",
+    "wgpu",
+] }

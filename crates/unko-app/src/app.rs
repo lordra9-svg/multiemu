@@ -1181,7 +1181,20 @@ impl eframe::App for App {
         }
     }
 
+    #[cfg(not(target_os = "ios"))]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.shutdown();
+    }
+
+    #[cfg(target_os = "ios")]
+    fn on_exit(&mut self) {
+        self.shutdown();
+    }
+}
+
+impl App {
+    /// Stops the audio stream and persists settings when the shell exits.
+    fn shutdown(&mut self) {
         if let Some(player) = &mut self.player {
             player.shutdown();
         }

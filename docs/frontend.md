@@ -86,11 +86,16 @@ The shell is one egui/eframe codebase with platform backends behind it:
 | iOS | SDL3 + touch overlay | cpal/CoreAudio | `ProjectDirs` config/data |
 | Android | SDL3 + touch overlay | cpal/AAudio | `ProjectDirs` config/data |
 
-SDL3 is built from source by Cargo, so desktop and mobile use the same input
-backend. CI checks the full workspace on Linux, Windows and macOS, and the NES
-core for the Android and iOS Rust targets. The native mobile application
-shells (Xcode/Android Studio packaging and signing) are the remaining platform
-deliverable.
+SDL3 is built from source by Cargo for the desktop targets. The mobile shells
+use the touch overlay as their primary controller and a no-op gamepad backend,
+because SDL3 needs the platform SDKs; a native `GameController`/`Gamepad`
+backend can replace it without touching the UI. CI checks the full workspace
+on Linux, Windows and macOS, and both the NES core and the complete app shell
+for the Android and iOS Rust targets. The packaging scaffolds live in
+`crates/unko-app/android` (Gradle + `cargo-ndk`, `NativeActivity`) and
+`crates/unko-app/ios` (XcodeGen + static library); see `docs/platforms.md`.
+Signed/notarised release builds and device validation still need those
+platform toolchains.
 
 ## What is deliberately different
 

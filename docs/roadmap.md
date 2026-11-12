@@ -92,6 +92,12 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] `nes_accuracy_core`: load, frames, RGBA video, f32 audio, input, SRAM
       and versioned save states. The TetaNES adapter has been retired.
 - [x] `unko-cli`: `info`, `run` (PPM screenshots), `bench`.
+- [x] App shell for five targets: shared `unko_app` library with desktop,
+  Android (`android_main`) and iOS (`start_winit_app`) entry points; SDL3
+  gamepads on desktop and a mobile input stub; desktop release workflow;
+  Android Gradle and iOS XcodeGen scaffolds. Mobile packaging/signing and
+  device validation still need Xcode and the Android SDK/NDK
+  (`docs/platforms.md`).
 - [x] Synthetic NROM boot test; state round-trip test; registry tests.
 - [x] Verified locally: 256×240 RGBA, ~937 fps / 15.6× realtime in release on a
       test ROM.

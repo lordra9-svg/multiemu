@@ -1,0 +1,44 @@
+# XcodeGen spec for the Unko iOS shell.
+#
+#   cargo build --release --target aarch64-apple-ios --lib -p unko-app
+#   xcodegen generate --spec crates/unko-app/ios/project.yml
+#   xcodebuild -project crates/unko-app/ios/Unko.xcodeproj -scheme Unko \
+#     -configuration Release -sdk iphoneos -derivedDataPath crates/unko-app/ios/build
+name: Unko
+options:
+  bundleIdPrefix: dev.unko
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+targets:
+  Unko:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.unko.app
+        INFOPLIST_FILE: Sources/Info.plist
+        # The static library produced by `cargo build --lib` for this target.
+        LIBRARY_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../../../target/aarch64-apple-ios/release
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -lunko_app
+        # wgpu/Metal plus the UIKit glue that winit and cpal use.
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(SDKROOT)/System/Library/Frameworks
+    dependencies:
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreGraphics.framework
+      - sdk: UIKit.framework
+      - sdk: CoreAudio.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreFoundation.framework
