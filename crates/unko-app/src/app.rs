@@ -1583,9 +1583,7 @@ fn family_keyboard_matrix(ctx: &egui::Context) -> [u8; 9] {
         (egui::Key::Enter, 0, 0, 2),
         (egui::Key::F8, 0, 0, 3),
         (egui::Key::Backslash, 0, 1, 1),
-        (egui::Key::Semicolon, 1, 0, 0),
         (egui::Key::F7, 1, 0, 3),
-        (egui::Key::Minus, 1, 1, 1),
         (egui::Key::Slash, 1, 1, 2),
         (egui::Key::K, 2, 0, 0),
         (egui::Key::L, 2, 0, 1),
@@ -1607,7 +1605,6 @@ fn family_keyboard_matrix(ctx: &egui::Context) -> [u8; 9] {
         (egui::Key::G, 4, 0, 1),
         (egui::Key::Y, 4, 0, 2),
         (egui::Key::F4, 4, 0, 3),
-        (egui::Key::Num6, 4, 1, 0),
         (egui::Key::Num7, 4, 1, 1),
         (egui::Key::V, 4, 1, 2),
         (egui::Key::B, 4, 1, 3),
@@ -1630,7 +1627,6 @@ fn family_keyboard_matrix(ctx: &egui::Context) -> [u8; 9] {
         (egui::Key::Q, 7, 0, 1),
         (egui::Key::Escape, 7, 0, 2),
         (egui::Key::F1, 7, 0, 3),
-        (egui::Key::Num2, 7, 1, 0),
         (egui::Key::Num1, 7, 1, 1),
         (egui::Key::ArrowLeft, 8, 0, 0),
         (egui::Key::ArrowRight, 8, 0, 1),
@@ -1662,18 +1658,27 @@ fn family_keyboard_matrix(ctx: &egui::Context) -> [u8; 9] {
             keys[7] |= 1 << bit(0, 0); // CTR
         }
         // Shifted punctuation that lives on another matrix key.
-        if input.modifiers.shift {
-            if input.key_down(egui::Key::Num2) {
+        // Keys whose shifted symbol is a separate matrix key: press the
+        // symbol that matches the shift state instead of both switches.
+        let shift = input.modifiers.shift;
+        if input.key_down(egui::Key::Semicolon) {
+            keys[1] |= 1 << if shift { bit(0, 1) } else { bit(0, 0) };
+        }
+        if input.key_down(egui::Key::Minus) {
+            keys[1] |= 1 << if shift { bit(1, 3) } else { bit(1, 1) };
+        }
+        if input.key_down(egui::Key::Num2) {
+            if shift {
                 keys[1] |= 1 << bit(0, 2); // @
+            } else {
+                keys[7] |= 1 << bit(1, 0); // 2
             }
-            if input.key_down(egui::Key::Num6) {
+        }
+        if input.key_down(egui::Key::Num6) {
+            if shift {
                 keys[1] |= 1 << bit(1, 0); // ^
-            }
-            if input.key_down(egui::Key::Minus) {
-                keys[1] |= 1 << bit(1, 3); // _
-            }
-            if input.key_down(egui::Key::Semicolon) {
-                keys[1] |= 1 << bit(0, 1); // :
+            } else {
+                keys[4] |= 1 << bit(1, 0); // 6
             }
         }
     });
@@ -2256,6 +2261,16 @@ mod tests {
         // Enter = row 0, half 0, third key -> bit 1.
         let keys = matrix_with(vec![key_event(egui::Key::Enter, egui::Modifiers::NONE)]);
         assert_eq!(keys[0], 1 << 1);
+    }
+
+    #[test]
+    fn family_keyboard_does_not_press_both_shift_variants() {
+        let keys = matrix_with(vec![key_event(egui::Key::Num2, egui::Modifiers::SHIFT)]);
+        assert_eq!(keys[1] & (1 << 1), 1 << 1, "@ is pressed");
+        assert_eq!(keys[7] & (1 << 7), 0, "2 is not pressed while shifted");
+        let keys = matrix_with(vec![key_event(egui::Key::Minus, egui::Modifiers::SHIFT)]);
+        assert_eq!(keys[1] & (1 << 4), 1 << 4, "_ is pressed");
+        assert_eq!(keys[1] & (1 << 6), 0, "- is not pressed while shifted");
     }
 
     #[test]

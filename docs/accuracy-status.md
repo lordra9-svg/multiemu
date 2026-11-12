@@ -1804,9 +1804,10 @@ unit-tested serial behavior taken from the NESdev documentation:
 - **Family BASIC keyboard**: 9x8 matrix, `$4016` column/clock/enable, keys
   active-low on `$4017` bits 1-4.
 
-`set_controller` now accepts players 1-4. The save-state magic moves to
-`UNKOST03` because the peripheral state and the four-controller array are part
-of the snapshot; old states are rejected with a clear format error. Arkanoid
+`set_controller` now accepts players 1-4. The peripheral state and the
+four-controller array are part of the snapshot, so the save-state format was
+bumped (`UNKOST02` at this point, `UNKOST03` when the palette preset was
+added); old states are rejected with a clear format error. Arkanoid
 (USA) boots into gameplay with the paddle attached (the frame changes with the
 knob position in the demo), and Family Trainer 1 boots with the Power Pad.
 AccuracyCoin remains **146/151 (0 failures)**.

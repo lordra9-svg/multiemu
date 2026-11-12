@@ -121,6 +121,7 @@ that pause before the instruction executes.
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+python3 scripts/license_audit.py
 ```
 
 Tests that need public test ROMs look for them under `test-roms/` and skip

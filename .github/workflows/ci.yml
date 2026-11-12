@@ -40,6 +40,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Clippy (debug tooling)
+        run: cargo clippy -p nes_accuracy_core --features apu-trace --all-targets -- -D warnings
+
       - name: Test
         run: cargo test --workspace
 
