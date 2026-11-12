@@ -1165,6 +1165,14 @@ impl CpuBus for System {
             self.ppu.step_dots(1);
             self.end_dots = 0;
         }
+        // Internal RAM is the most common CPU target; keep it out of the
+        // general bus match.
+        if address < 0x2000 {
+            let value = self.ram[usize::from(address) & 0x07FF];
+            self.open_bus = value;
+            self.internal_bus = value;
+            return value;
+        }
         let mut drives_bus = true;
         let value = match address {
             0x0000..=0x1FFF => self.ram[usize::from(address) & 0x07FF],
@@ -1222,6 +1230,12 @@ impl CpuBus for System {
     fn write(&mut self, address: u16, value: u8) {
         if self.cart.needs_cpu_address() {
             self.cart.set_cpu_address(address);
+        }
+        if address < 0x2000 {
+            self.ram[usize::from(address) & 0x07FF] = value;
+            self.open_bus = value;
+            self.internal_bus = value;
+            return;
         }
         match address {
             0x0000..=0x1FFF => {
