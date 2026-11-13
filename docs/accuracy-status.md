@@ -2032,3 +2032,13 @@ the same 12-button two-bit serial matrix and strobe, so the existing mat
 overlay and `set_power_pad` path drive it; only the device label and the
 strobe reload condition differed. A test reuses the documented Power Pad
 button order through the Family Trainer device.
+
+### 2026-11-13 — Subor keyboard
+
+Added the Subor/Dendy clone keyboard protocol: `$4016` bit 2 enables the
+keyboard, bit 1 selects the lower/upper nibble (a 1 -> 0 edge advances one of
+13 rows) and bit 0 resets the row counter; `$4017` bits 1-4 return the
+inverted nibble. The app maps the documented FCEUX/PlayPower matrix onto host
+keys (letters, digits, arrows, F1-F12, editing keys, punctuation, Shift and
+Ctrl) and sends the 13-row matrix every frame while the device is attached.
+Test covers nibble reads, row advance and reset.

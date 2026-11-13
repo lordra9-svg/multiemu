@@ -225,6 +225,8 @@ pub enum PortDevice {
     FamilyTrainer,
     /// Family BASIC keyboard matrix (9 rows x 8 columns).
     FamilyKeyboard,
+    /// Subor/Dendy clone keyboard (13 rows x 8 columns, two nibbles).
+    SuborKeyboard,
     /// Four Score adapter (four controllers across both ports).
     FourScore,
     /// Famicom controller microphone (`$4016` D2).
@@ -246,6 +248,7 @@ impl PortDevice {
             Self::PowerPad => "powerpad",
             Self::FamilyTrainer => "familytrainer",
             Self::FamilyKeyboard => "keyboard",
+            Self::SuborKeyboard => "subor",
             Self::FourScore => "fourscore",
             Self::Microphone => "microphone",
             Self::Tape => "tape",
@@ -262,6 +265,7 @@ impl PortDevice {
             "powerpad" => Self::PowerPad,
             "familytrainer" | "family-trainer" => Self::FamilyTrainer,
             "keyboard" => Self::FamilyKeyboard,
+            "subor" | "suborkeyboard" => Self::SuborKeyboard,
             "fourscore" => Self::FourScore,
             "microphone" | "mic" => Self::Microphone,
             "tape" | "recorder" => Self::Tape,

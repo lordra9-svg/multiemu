@@ -580,6 +580,11 @@ impl Player {
         self.core.set_family_keyboard(keys);
     }
 
+    /// Replaces the Subor keyboard matrix.
+    pub fn set_subor_keyboard(&mut self, rows: [u8; 13]) {
+        self.core.set_subor_keyboard(rows);
+    }
+
     /// Changes the display palette and rebuilds the cached colours.
     pub fn set_palette(&mut self, palette: unko_core::Palette) {
         self.core.set_palette(palette);

@@ -102,6 +102,9 @@ pub trait Core {
     /// column half 1, and a set bit means the key is held.
     fn set_family_keyboard(&mut self, _keys: [u8; 9]) {}
 
+    /// Replaces the Subor keyboard matrix (13 rows, active-high).
+    fn set_subor_keyboard(&mut self, _rows: [u8; 13]) {}
+
     /// Changes the core-side video filter.
     fn set_video_filter(&mut self, filter: VideoFilter);
 

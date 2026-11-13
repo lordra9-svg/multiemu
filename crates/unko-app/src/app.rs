@@ -2002,6 +2002,9 @@ impl eframe::App for App {
             if port1 == PortDevice::FamilyKeyboard || port2 == PortDevice::FamilyKeyboard {
                 player.set_family_keyboard(family_keyboard_matrix(ctx));
             }
+            if port1 == PortDevice::SuborKeyboard || port2 == PortDevice::SuborKeyboard {
+                player.set_subor_keyboard(subor_keyboard_matrix(ctx));
+            }
             let view = viewport(
                 ctx,
                 player,
@@ -2487,6 +2490,104 @@ fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions)
 /// halves of four keys, selected by `$4016` bit 0. Keys that do not exist on a
 /// US layout (STOP, kana, GRPH, RSHIFT) are not mapped; Backslash types the
 /// yen key, which is its documented historical equivalent.
+/// Host-key map for the Subor keyboard matrix. A position is 0-3 for the
+/// lower nibble and 4-7 for the upper nibble of each row.
+const SUBOR_MAP: &[(egui::Key, usize, u8)] = &[
+    (egui::Key::Num4, 0, 0),
+    (egui::Key::G, 0, 1),
+    (egui::Key::F, 0, 2),
+    (egui::Key::C, 0, 3),
+    (egui::Key::F2, 0, 4),
+    (egui::Key::E, 0, 5),
+    (egui::Key::Num5, 0, 6),
+    (egui::Key::V, 0, 7),
+    (egui::Key::Num2, 1, 0),
+    (egui::Key::D, 1, 1),
+    (egui::Key::S, 1, 2),
+    (egui::Key::End, 1, 3),
+    (egui::Key::F1, 1, 4),
+    (egui::Key::W, 1, 5),
+    (egui::Key::Num3, 1, 6),
+    (egui::Key::X, 1, 7),
+    (egui::Key::Insert, 2, 0),
+    (egui::Key::Backspace, 2, 1),
+    (egui::Key::PageDown, 2, 2),
+    (egui::Key::ArrowRight, 2, 3),
+    (egui::Key::F8, 2, 4),
+    (egui::Key::PageUp, 2, 5),
+    (egui::Key::Delete, 2, 6),
+    (egui::Key::Home, 2, 7),
+    (egui::Key::Num9, 3, 0),
+    (egui::Key::I, 3, 1),
+    (egui::Key::L, 3, 2),
+    (egui::Key::Comma, 3, 3),
+    (egui::Key::F5, 3, 4),
+    (egui::Key::O, 3, 5),
+    (egui::Key::Num0, 3, 6),
+    (egui::Key::Period, 3, 7),
+    (egui::Key::CloseBracket, 4, 0),
+    (egui::Key::Enter, 4, 1),
+    (egui::Key::ArrowUp, 4, 2),
+    (egui::Key::ArrowLeft, 4, 3),
+    (egui::Key::F7, 4, 4),
+    (egui::Key::OpenBracket, 4, 5),
+    (egui::Key::Backslash, 4, 6),
+    (egui::Key::ArrowDown, 4, 7),
+    (egui::Key::Q, 5, 0),
+    (egui::Key::Z, 5, 2),
+    (egui::Key::Tab, 5, 3),
+    (egui::Key::Escape, 5, 4),
+    (egui::Key::A, 5, 5),
+    (egui::Key::Num1, 5, 6),
+    (egui::Key::Num7, 6, 0),
+    (egui::Key::Y, 6, 1),
+    (egui::Key::K, 6, 2),
+    (egui::Key::M, 6, 3),
+    (egui::Key::F4, 6, 4),
+    (egui::Key::U, 6, 5),
+    (egui::Key::Num8, 6, 6),
+    (egui::Key::J, 6, 7),
+    (egui::Key::Minus, 7, 0),
+    (egui::Key::Semicolon, 7, 1),
+    (egui::Key::Quote, 7, 2),
+    (egui::Key::Slash, 7, 3),
+    (egui::Key::F6, 7, 4),
+    (egui::Key::P, 7, 5),
+    (egui::Key::Equals, 7, 6),
+    (egui::Key::T, 8, 0),
+    (egui::Key::H, 8, 1),
+    (egui::Key::N, 8, 2),
+    (egui::Key::Space, 8, 3),
+    (egui::Key::F3, 8, 4),
+    (egui::Key::R, 8, 5),
+    (egui::Key::Num6, 8, 6),
+    (egui::Key::B, 8, 7),
+    (egui::Key::F11, 10, 3),
+    (egui::Key::F12, 10, 4),
+    (egui::Key::F10, 11, 4),
+    (egui::Key::Backtick, 12, 0),
+    (egui::Key::F9, 12, 4),
+];
+
+fn subor_keyboard_matrix(ctx: &egui::Context) -> [u8; 13] {
+    let mut rows = [0u8; 13];
+    ctx.input(|input| {
+        for &(key, row, bit) in SUBOR_MAP {
+            if input.key_down(key) {
+                rows[row] |= 1 << bit;
+            }
+        }
+        // The matrix's Shift and Ctrl cells are modifiers, not key codes.
+        if input.modifiers.shift {
+            rows[7] |= 1 << 7;
+        }
+        if input.modifiers.ctrl {
+            rows[5] |= 1 << 7;
+        }
+    });
+    rows
+}
+
 fn family_keyboard_matrix(ctx: &egui::Context) -> [u8; 9] {
     // (host key, row, column half, position within the half)
     const MAP: &[(egui::Key, u8, u8, u8)] = &[
@@ -3289,6 +3390,7 @@ fn device_label(device: PortDevice) -> &'static str {
         PortDevice::PowerPad => "Power Pad",
         PortDevice::FamilyTrainer => "Family Trainer",
         PortDevice::FamilyKeyboard => "Family BASIC keyboard",
+        PortDevice::SuborKeyboard => "Subor keyboard",
         PortDevice::FourScore => "Four Score (4 players)",
         PortDevice::Microphone => "Famicom microphone",
         PortDevice::Tape => "Family BASIC data recorder",
@@ -3308,6 +3410,7 @@ fn device_combo(ui: &mut egui::Ui, id: &str, device: &mut PortDevice) {
                 PortDevice::PowerPad,
                 PortDevice::FamilyTrainer,
                 PortDevice::FamilyKeyboard,
+                PortDevice::SuborKeyboard,
                 PortDevice::FourScore,
                 PortDevice::Microphone,
                 PortDevice::Tape,

@@ -370,6 +370,7 @@ impl Core for AccuracyCore {
                 PortDevice::PowerPad => crate::system::PortDevice::PowerPad,
                 PortDevice::FamilyTrainer => crate::system::PortDevice::FamilyTrainer,
                 PortDevice::FamilyKeyboard => crate::system::PortDevice::FamilyKeyboard,
+                PortDevice::SuborKeyboard => crate::system::PortDevice::SuborKeyboard,
                 PortDevice::FourScore => crate::system::PortDevice::FourScore,
                 PortDevice::Microphone => crate::system::PortDevice::Microphone,
                 PortDevice::Tape => crate::system::PortDevice::Tape,
@@ -406,6 +407,12 @@ impl Core for AccuracyCore {
     fn set_power_pad(&mut self, port: usize, buttons: u16) {
         if let Some(system) = self.system.as_mut() {
             system.set_power_pad(port, buttons);
+        }
+    }
+
+    fn set_subor_keyboard(&mut self, rows: [u8; 13]) {
+        if let Some(system) = self.system.as_mut() {
+            system.set_subor_keyboard(rows);
         }
     }
 

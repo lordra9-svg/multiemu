@@ -186,6 +186,9 @@ pub enum PortDevice {
     /// Family BASIC keyboard: a 9-row x 8-column matrix scanned through
     /// `$4016` (column/clock/enable) and read active-low on `$4017` bits 1-4.
     FamilyKeyboard,
+    /// Subor/Dendy clone keyboard: 13 rows x 8 columns read four bits at a
+    /// time (lower/upper nibble) on `$4017` bits 1-4.
+    SuborKeyboard,
     /// Four Score adapter: both ports form a 24-read serial chain carrying
     /// players 1+3 (`$4016`) and 2+4 (`$4017`) plus an adapter signature.
     FourScore,
@@ -293,6 +296,7 @@ struct Peripherals {
     paddle: [Paddle; 2],
     power_pad: [PowerPad; 2],
     keyboard: FamilyKeyboard,
+    subor: SuborKeyboard,
     /// Four Score serial read index per port (0..=24).
     four_score_index: [u8; 2],
     /// Four Score adapter signature shift registers (`$4016` = 0x08,
@@ -404,6 +408,40 @@ impl MiraclePiano {
             }
             PianoMode::Idle => 0,
         }
+    }
+}
+
+/// Subor/Dendy clone keyboard: 13 rows x 8 columns, read four bits at a
+/// time. `$4016` bit 2 enables the keyboard, bit 1 selects the upper nibble
+/// (a falling edge advances the row), and bit 0 resets the row counter.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct SuborKeyboard {
+    rows: [u8; 13],
+    scan: u8,
+    upper: bool,
+}
+
+impl SuborKeyboard {
+    fn write(&mut self, value: u8) {
+        if value & 0x04 == 0 {
+            return;
+        }
+        let upper = value & 0x02 != 0;
+        if self.upper && !upper {
+            self.scan = (self.scan + 1) % 13;
+        }
+        self.upper = upper;
+        if value & 0x01 != 0 {
+            self.scan = 0;
+        }
+    }
+
+    fn read(&self) -> u8 {
+        if self.scan >= 13 {
+            return 0x1E;
+        }
+        let nibble = (self.rows[usize::from(self.scan)] >> (u8::from(self.upper) * 4)) & 0x0F;
+        ((!nibble) & 0x0F) << 1
     }
 }
 
@@ -741,6 +779,11 @@ impl System {
     /// = column half 0, high nibble = half 1; a set bit means the key is held).
     pub fn set_family_keyboard(&mut self, keys: [u8; 9]) {
         self.peripherals.keyboard.keys = keys;
+    }
+
+    /// Replaces the Subor keyboard matrix (13 rows, active-high).
+    pub fn set_subor_keyboard(&mut self, rows: [u8; 13]) {
+        self.peripherals.subor.rows = rows;
     }
 
     /// Changes the output sample rate.
@@ -1367,6 +1410,9 @@ impl System {
             PortDevice::FamilyKeyboard => {
                 (self.open_bus & 0xE0) | 0x40 | self.peripherals.keyboard.read()
             }
+            PortDevice::SuborKeyboard => {
+                (self.open_bus & 0xE0) | 0x40 | self.peripherals.subor.read()
+            }
             PortDevice::FourScore => unreachable!("handled above"),
             PortDevice::Microphone => {
                 let bit = self.shift[port] & 1;
@@ -1971,6 +2017,7 @@ impl CpuBus for System {
                     }
                     self.strobe = value & 1 != 0;
                     self.peripherals.keyboard.write(value);
+                    self.peripherals.subor.write(value);
                     if self.strobe {
                         self.shift = [self.controllers[0], self.controllers[1]];
                         for port in 0..2 {
@@ -3121,6 +3168,27 @@ mod tests {
         }
         // 0x12 = 0001_0010, MSB-first and inverted.
         assert_eq!(bits, vec![1, 1, 1, 0, 1, 1, 0, 1]);
+    }
+
+    #[test]
+    fn subor_keyboard_scans_nibbles_and_resets() {
+        let mut system = System::from_ines(&synthetic_nrom(0)).expect("load");
+        system.set_port_device(1, PortDevice::SuborKeyboard);
+        let mut rows = [0u8; 13];
+        rows[0] = 0b0000_0101; // lower-nibble keys 0 and 2
+        system.set_subor_keyboard(rows);
+
+        system.write(0x4016, 0x04); // enabled, lower nibble
+        assert_eq!((system.read(0x4017) >> 1) & 0x0F, 0b1010);
+
+        // A 1 -> 0 transition on bit 1 advances to the next row.
+        system.write(0x4016, 0x06);
+        system.write(0x4016, 0x04);
+        assert_eq!((system.read(0x4017) >> 1) & 0x0F, 0b1111, "row 1 empty");
+
+        // Bit 0 resets the row counter.
+        system.write(0x4016, 0x05);
+        assert_eq!((system.read(0x4017) >> 1) & 0x0F, 0b1010);
     }
 
     #[test]
