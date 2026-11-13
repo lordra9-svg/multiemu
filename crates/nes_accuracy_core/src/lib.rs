@@ -15,6 +15,7 @@ pub mod cart;
 pub mod clock;
 pub mod cpu;
 pub mod nsf;
+pub(crate) mod palette;
 pub mod ppu;
 pub mod resampler;
 pub mod system;
@@ -130,6 +131,10 @@ fn palette_variant(palette: Palette) -> PaletteVariant {
         Palette::Rgb => PaletteVariant::Rgb,
         Palette::Monochrome => PaletteVariant::Monochrome,
         Palette::Custom => PaletteVariant::Custom,
+        Palette::Vivid => PaletteVariant::Vivid,
+        Palette::Soft => PaletteVariant::Soft,
+        Palette::Pal => PaletteVariant::Pal,
+        Palette::Studio => PaletteVariant::Studio,
     }
 }
 

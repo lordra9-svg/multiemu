@@ -1904,3 +1904,17 @@ writes), both behind `--features apu-trace`.
 Gates: fmt, clippy (with and without `apu-trace`), **439 tests**, and
 AccuracyCoin remains **146/151 with 0 failures** (199,320 frames) after the
 DMC DAC and 5B changes.
+
+### 2026-11-12 — generated display palettes and the UI batch state boundary
+
+Added four generated display models (Vivid, Soft, PAL-like, Studio) as
+parameter variations of the ares NTSC waveform colorimetry (ISC; see
+`NOTICE`), alongside the canonical/consumer/RGB/monochrome presets and the
+custom `.pal`/`.palette` import. They are display models, not hardware
+captures: the canonical table still drives oracle traces, and the PPU applies
+emphasis on top of whichever base table is selected.
+
+The custom palette table lives in the PPU (64 RGB triples), so the UI batch
+adds a serialized field after the audio work. The save-state magic moves
+again to **`UNKOST05`**; `UNKOST04` states are rejected with the normal
+bad-magic error rather than a decode failure.

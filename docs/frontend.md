@@ -167,13 +167,15 @@ platform toolchains.
   breakpoint instruction. Open it from `Emulation -> Debugger` or with
   `--debug`.
 - Video: Raw, Composite/NTSC and CRT (composite + scanlines + bloom)
-  filters, plus Canonical 2C02, Consumer TV, RGB monitor and Monochrome
-  palettes. Canonical + Raw is the default so reference traces stay
-  comparable. See Settings -> Graphics.
+  filters, plus Canonical 2C02, Consumer TV, RGB monitor, Monochrome, the
+  generated Vivid/Soft/PAL-like/Studio models and a Custom `.pal`/`.palette`
+  import. The generated models are parameter variations of the ares NTSC
+  waveform model (ISC), not hardware captures; Canonical + Raw is the default
+  so reference traces stay comparable. See Settings -> Graphics.
 - Recording: WAV audio, numbered PNG frames and animated GIF, written under
   `saves/recordings`; all encoders are pure Rust and work on every target.
 - State/SRAM: `saves/<rom>.<core>.slotN.state` and `saves/<rom>.sav`; the core
-  never touches the filesystem. States carry an `UNKOST04` header, a ROM
+  never touches the filesystem. States carry an `UNKOST05` header, a ROM
   fingerprint and the mapper state, so a state cannot be loaded into a
   different image or core. The former TetaNES state files are ignored.
 - Audio playback is active through cpal; the Audio page reports the actual

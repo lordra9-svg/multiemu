@@ -273,6 +273,14 @@ pub enum Palette {
     Monochrome,
     /// User-supplied 64-entry table (`.pal` / `.palette` import).
     Custom,
+    /// Generated high-saturation preset.
+    Vivid,
+    /// Generated low-saturation, warm preset.
+    Soft,
+    /// Generated PAL-like hue/level preset.
+    Pal,
+    /// Generated neutral studio-monitor preset.
+    Studio,
 }
 
 impl Palette {
@@ -285,6 +293,10 @@ impl Palette {
             Self::Rgb => "rgb",
             Self::Monochrome => "mono",
             Self::Custom => "custom",
+            Self::Vivid => "vivid",
+            Self::Soft => "soft",
+            Self::Pal => "pal",
+            Self::Studio => "studio",
         }
     }
 
@@ -296,6 +308,10 @@ impl Palette {
             "rgb" => Self::Rgb,
             "mono" | "monochrome" | "grayscale" => Self::Monochrome,
             "custom" => Self::Custom,
+            "vivid" => Self::Vivid,
+            "soft" => Self::Soft,
+            "pal" => Self::Pal,
+            "studio" => Self::Studio,
             _ => Self::Canonical,
         }
     }

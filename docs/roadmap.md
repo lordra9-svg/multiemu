@@ -126,8 +126,9 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] Display aspect Fit/4:3/8:7, fixed 1-6x integer scale, 1-3x output
       supersampling, built-in output shader presets and window-size presets.
 - [x] Palette `.pal`/`.palette` import (192/768-byte binary and text) with a
-      custom table; the broad built-in hardware palette set awaits a
-      license-clean source.
+      custom table, plus Vivid/Soft/PAL-like/Studio display models generated
+      from the ares NTSC colorimetry (ISC). Exact hardware tables remain
+      import-only; the canonical table is unchanged for oracle parity.
 - [x] Audio device via `cpal`; 15-250 ms target buffer with startup prefill, stall trimming and decayed underrun recovery; Fast/Standard/High resampler kernels and NES RF/Crisp/Warm/Linear/custom output filters.
 - [x] Local capture: WAV, PNG sequence and GIF.
 - [x] Input display, touch controller, auto-fire and per-game gamepad profiles.
@@ -152,7 +153,7 @@ The main effort is now the reference-parity accuracy core. Details in
       Arkanoid paddle (inverted MSB-first position + fire, mouse steering),
       Power Pad / Family Trainer (12-button two-bit serial read with an
       on-screen mat) and the Family BASIC keyboard (9x8 matrix with the
-      documented host-key mapping). Device state is part of `UNKOST04` save
+      documented host-key mapping). Device state is part of `UNKOST05` save
       states; the Controllers tab selects a device per port.
 - [ ] FDS (BIOS supplied by the user, never bundled), Vs. System.
 - [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation

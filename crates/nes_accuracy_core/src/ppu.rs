@@ -1487,6 +1487,8 @@ impl Ppu {
                     .get(usize::from(colour))
                     .copied()
                     .unwrap_or(NES_PALETTE[usize::from(colour)])
+            } else if let Some(table) = crate::palette::generated_table(self.palette_variant) {
+                table[usize::from(colour)]
             } else {
                 palette_colour(self.palette_variant, NES_PALETTE[usize::from(colour)])
             };
@@ -2517,6 +2519,14 @@ pub enum PaletteVariant {
     Monochrome,
     /// User-supplied 64-entry table.
     Custom,
+    /// Generated high-saturation preset.
+    Vivid,
+    /// Generated low-saturation, warm preset.
+    Soft,
+    /// Generated PAL-like hue/level preset.
+    Pal,
+    /// Generated neutral studio-monitor preset.
+    Studio,
 }
 
 /// Applies a display palette preset to a canonical 2C02 colour.
@@ -2545,7 +2555,11 @@ fn palette_colour(variant: PaletteVariant, base: [u8; 3]) -> [u8; 3] {
             let luma = 0.299 * r + 0.587 * g + 0.114 * b;
             [clamp(luma); 3]
         }
-        PaletteVariant::Custom => base,
+        PaletteVariant::Custom
+        | PaletteVariant::Vivid
+        | PaletteVariant::Soft
+        | PaletteVariant::Pal
+        | PaletteVariant::Studio => base,
     }
 }
 
@@ -2704,6 +2718,20 @@ mod tests {
         assert!(warm[0] > warm[2], "consumer palette is warm");
         let saturated = palette_colour(PaletteVariant::Rgb, [200, 40, 10]);
         assert!(saturated[0] > 200, "RGB palette boosts saturation");
+    }
+
+    #[test]
+    fn generated_palettes_change_the_display_table() {
+        let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], false, false);
+        let canonical = ppu.debug_palette_rgb();
+        ppu.set_palette_variant(PaletteVariant::Vivid);
+        let vivid = ppu.debug_palette_rgb();
+        assert_ne!(canonical, vivid);
+        ppu.set_palette_variant(PaletteVariant::Studio);
+        let studio = ppu.debug_palette_rgb();
+        assert_ne!(vivid, studio);
+        ppu.set_palette_variant(PaletteVariant::Canonical);
+        assert_eq!(ppu.debug_palette_rgb(), canonical, "canonical is restored");
     }
 
     #[test]

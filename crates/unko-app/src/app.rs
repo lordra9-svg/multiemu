@@ -2317,6 +2317,10 @@ fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings, ctx: &egui::Context)
                     unko_core::Palette::Consumer,
                     unko_core::Palette::Rgb,
                     unko_core::Palette::Monochrome,
+                    unko_core::Palette::Vivid,
+                    unko_core::Palette::Soft,
+                    unko_core::Palette::Pal,
+                    unko_core::Palette::Studio,
                     unko_core::Palette::Custom,
                 ] {
                     ui.selectable_value(&mut settings.palette, palette, palette_label(palette));
@@ -2413,6 +2417,10 @@ fn palette_label(palette: unko_core::Palette) -> &'static str {
         unko_core::Palette::Rgb => "RGB monitor (saturated)",
         unko_core::Palette::Monochrome => "Monochrome",
         unko_core::Palette::Custom => "Custom (.pal)",
+        unko_core::Palette::Vivid => "Vivid (generated)",
+        unko_core::Palette::Soft => "Soft (generated)",
+        unko_core::Palette::Pal => "PAL-like (generated)",
+        unko_core::Palette::Studio => "Studio (generated)",
     }
 }
 
@@ -2960,7 +2968,7 @@ fn advanced_tab(ui: &mut egui::Ui) {
     ui.heading("Advanced");
     ui.add_space(8.0);
     ui.label("Core: Unko NES accuracy core");
-    ui.label("State format: UNKOST04, ROM-fingerprinted and core-tagged");
+    ui.label("State format: UNKOST05, ROM-fingerprinted and core-tagged");
     ui.label("Settings file: unko.conf");
     ui.add_space(8.0);
     ui.label(

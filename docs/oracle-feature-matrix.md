@@ -42,7 +42,7 @@ emulator's scope.
 | Movies / TAS | trace | movie recording | rich TAS editor + movies | movie recording | movie recording | No | TAStudio + movie import | No (WAV/PNG/GIF only) |
 | Debugger | memory editor, tracer | full debugger suite | full (RAM search, trace, hex, PPU/nametable) | no | full (breakpoints, viewers, palette) | no | conditional bp, watchpoints, hex, callstack | **CPU/PPU/APU + hex + PC breakpoints** |
 | Video filters / shaders | slang shaders | NTSC, xBRZ, HD packs | NTSC filters, palettes | Blargg NTSC, HQx, scanlines | palette editor, scanlines | many (NTSC, CRT, xBRZ, hqNx) | NTSC + CRT shader stack | **raw/composite/CRT + scanline/LCD/CRT output presets** |
-| Palettes | several | many + custom | many + `.pal` | many + `.pal`, palette editor | palette editor + custom | many + editor + Raw | `.pal` + generated NTSC | **4 presets + `.pal`/`.palette` import** |
+| Palettes | several | many + custom | many + `.pal` | many + `.pal`, palette editor | palette editor + custom | many + editor + Raw | `.pal` + generated NTSC | **8 presets + `.pal`/`.palette` import** |
 | HD packs | No | Yes | No | No | No | No | Yes | No |
 | Lua / scripting | No | debugger scripting | Yes (Lua 5.1) | No | No | No | Yes (sandboxed Lua 5.4) | No |
 | RetroAchievements | No | Yes (libretro) | No | No | No | No | Yes | No |
@@ -123,7 +123,7 @@ Ordered by player impact and fit with the existing architecture.
    persistence, enable/disable. Unko has no cheat path today.
 2. **Speed control**: fast-forward (hold/toggle), speed presets, frame
    advance as a normal control, and a **rewind ring** built on the existing
-   deterministic `UNKOST04` states (states are 0.7–1.5 MB, so the ring needs a
+   deterministic `UNKOST05` states (states are 0.7–1.5 MB, so the ring needs a
    memory budget or delta compression).
 3. **Audio**: per-channel volume/mute (5 APU channels + expansion), sample
    rate and buffer latency options, optional audio filters; first fix any
