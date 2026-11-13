@@ -101,6 +101,8 @@ pub struct App {
     datach_code: String,
     confirm_reset: bool,
     window_generation: u32,
+    #[cfg(not(target_os = "ios"))]
+    gpu_shader: Option<crate::gpu_shader::Handle>,
 }
 
 /// Command-line overrides.
@@ -147,6 +149,11 @@ impl App {
             audio.set_muted(settings.muted);
         }
         let active_mapping = settings.pad_mapping;
+        #[cfg(not(target_os = "ios"))]
+        let gpu_shader = cc.gl.as_ref().and_then(|gl| {
+            crate::gpu_shader::GpuShader::new(gl)
+                .map(|shader| std::sync::Arc::new(std::sync::Mutex::new(shader)))
+        });
         let mut app = Self {
             settings,
             library,
@@ -183,6 +190,8 @@ impl App {
             datach_code: String::new(),
             confirm_reset: false,
             window_generation: 0,
+            #[cfg(not(target_os = "ios"))]
+            gpu_shader,
         };
         app.status_until = Some(Instant::now() + Duration::from_secs(6));
         if args.settings {
@@ -2188,6 +2197,8 @@ impl eframe::App for App {
                     scale: self.settings.scale,
                     supersample: self.settings.supersample,
                     shader: self.settings.shader,
+                    brightness: self.settings.brightness,
+                    sharpness: self.settings.sharpness,
                     overscan: self.settings.overscan,
                     mask_edges: self.settings.mask_edges,
                     zapper_port,
@@ -2197,6 +2208,8 @@ impl eframe::App for App {
                     show_input: self.settings.show_input_display,
                     show_touch: self.settings.show_touch_controls,
                 },
+                #[cfg(not(target_os = "ios"))]
+                self.gpu_shader.as_ref(),
             );
             player.set_touch(view.touch);
             if let (Some(port), Some((position, fire))) = (paddle_port, view.paddle) {
@@ -2254,8 +2267,13 @@ impl eframe::App for App {
     }
 
     #[cfg(not(target_os = "ios"))]
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
         self.shutdown();
+        if let (Some(gl), Some(shader)) = (gl, &self.gpu_shader) {
+            if let Ok(mut shader) = shader.lock() {
+                shader.destroy(gl);
+            }
+        }
     }
 
     #[cfg(target_os = "ios")]
@@ -2391,6 +2409,7 @@ fn paint_shader(ui: &egui::Ui, target: Rect, shader: ShaderPreset) {
                 );
             }
         }
+        ShaderPreset::NtscBudget | ShaderPreset::NtscPremium => {}
         ShaderPreset::Lcd => {
             let painter = ui.painter();
             let color = Color32::from_black_alpha(48);
@@ -2421,6 +2440,8 @@ struct ViewportOptions {
     scale: u32,
     supersample: u32,
     shader: ShaderPreset,
+    brightness: f32,
+    sharpness: f32,
     overscan: Overscan,
     mask_edges: MaskEdges,
     zapper_port: Option<usize>,
@@ -2438,7 +2459,12 @@ struct ViewportInput {
     power_pad: Option<u16>,
 }
 
-fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions) -> ViewportInput {
+fn viewport(
+    ctx: &egui::Context,
+    player: &mut Player,
+    options: &ViewportOptions,
+    #[cfg(not(target_os = "ios"))] gpu: Option<&crate::gpu_shader::Handle>,
+) -> ViewportInput {
     let ViewportOptions {
         integer_scale,
         linear_filter,
@@ -2446,6 +2472,8 @@ fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions)
         scale,
         supersample,
         shader,
+        brightness,
+        sharpness,
         overscan,
         mask_edges,
         zapper_port,
@@ -2519,9 +2547,39 @@ fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions)
                     egui::pos2(f32::from(vx) / 256.0, f32::from(vy) / 240.0),
                     egui::pos2(f32::from(vx + vw) / 256.0, f32::from(vy + vh) / 240.0),
                 );
-                ui.painter().image(id, target, uv, Color32::WHITE);
+                #[cfg(not(target_os = "ios"))]
+                let gpu_drawn = if shader.is_gpu() {
+                    match (gpu, player.frame_rgba()) {
+                        (Some(gpu), Some((pixels, width, height))) => {
+                            crate::gpu_shader::GpuShader::queue(
+                                gpu,
+                                ui,
+                                target,
+                                uv,
+                                crate::gpu_shader::ShaderParams {
+                                    preset: shader.shader_index(),
+                                    brightness,
+                                    sharpness,
+                                    linear: linear_filter || supersample > 1,
+                                },
+                                pixels,
+                                width,
+                                height,
+                            );
+                            true
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                #[cfg(target_os = "ios")]
+                let gpu_drawn = false;
+                if !gpu_drawn {
+                    ui.painter().image(id, target, uv, Color32::WHITE);
+                    paint_shader(ui, target, shader);
+                }
                 paint_mask(ui, target, mask_edges);
-                paint_shader(ui, target, shader);
             } else {
                 ui.painter().text(
                     available.center(),
@@ -3155,11 +3213,32 @@ fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings, ctx: &egui::Context)
                     ShaderPreset::Scanlines,
                     ShaderPreset::Lcd,
                     ShaderPreset::Crt,
+                    ShaderPreset::NtscBudget,
+                    ShaderPreset::NtscPremium,
                 ] {
                     ui.selectable_value(&mut settings.shader, shader, shader.label());
                 }
             });
     });
+    ui.add(
+        egui::Slider::new(&mut settings.brightness, 0.5..=1.5)
+            .text("Brightness")
+            .fixed_decimals(2),
+    );
+    ui.add(
+        egui::Slider::new(&mut settings.sharpness, 0.0..=1.0)
+            .text("Sharpness")
+            .fixed_decimals(2),
+    );
+    ui.label(
+        RichText::new(
+            "Scanline, LCD, CRT and NTSC presets run in a GPU fragment shader. \
+             NTSC Budget uses a 3-tap chroma filter, Premium a 7-tap filter; \
+             brightness and sharpness apply to every preset.",
+        )
+        .weak()
+        .small(),
+    );
     ui.add_space(8.0);
     ui.label(
         RichText::new(

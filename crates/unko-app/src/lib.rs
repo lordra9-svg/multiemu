@@ -18,6 +18,9 @@ mod audio;
 mod cheats;
 mod debugger;
 mod gamepad;
+#[cfg(not(target_os = "ios"))]
+#[allow(unsafe_code)] // OpenGL shader setup is inherently unsafe
+mod gpu_shader;
 mod library;
 mod movie;
 mod player;

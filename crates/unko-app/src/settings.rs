@@ -227,6 +227,10 @@ pub enum ShaderPreset {
     Lcd,
     /// Scanlines plus a soft vignette.
     Crt,
+    /// Composite NTSC look with a short chroma filter (3 taps).
+    NtscBudget,
+    /// Composite NTSC look with a wider chroma filter (7 taps).
+    NtscPremium,
 }
 
 impl ShaderPreset {
@@ -238,6 +242,8 @@ impl ShaderPreset {
             Self::Scanlines => "scanlines",
             Self::Lcd => "lcd",
             Self::Crt => "crt",
+            Self::NtscBudget => "ntsc-budget",
+            Self::NtscPremium => "ntsc-premium",
         }
     }
 
@@ -248,6 +254,8 @@ impl ShaderPreset {
             "scanlines" => Self::Scanlines,
             "lcd" => Self::Lcd,
             "crt" => Self::Crt,
+            "ntsc-budget" | "ntsc" => Self::NtscBudget,
+            "ntsc-premium" => Self::NtscPremium,
             _ => Self::Off,
         }
     }
@@ -260,7 +268,28 @@ impl ShaderPreset {
             Self::Scanlines => "Scanlines",
             Self::Lcd => "LCD grid",
             Self::Crt => "CRT (scanlines + vignette)",
+            Self::NtscBudget => "NTSC Budget (composite)",
+            Self::NtscPremium => "NTSC Premium (composite)",
         }
+    }
+
+    /// Fragment-shader preset index used by the GPU pipeline.
+    #[must_use]
+    pub const fn shader_index(self) -> u32 {
+        match self {
+            Self::Off => 0,
+            Self::Scanlines => 1,
+            Self::Lcd => 2,
+            Self::Crt => 3,
+            Self::NtscBudget => 4,
+            Self::NtscPremium => 5,
+        }
+    }
+
+    /// Whether the preset needs the GPU shader pipeline.
+    #[must_use]
+    pub const fn is_gpu(self) -> bool {
+        !matches!(self, Self::Off)
     }
 }
 
@@ -396,6 +425,10 @@ pub struct Settings {
     pub supersample: u32,
     /// Output post-process preset.
     pub shader: ShaderPreset,
+    /// Output brightness multiplier (0.5-1.5).
+    pub brightness: f32,
+    /// Horizontal luma sharpening (0-1).
+    pub sharpness: f32,
     /// Remembered Settings OS-window geometry `(x, y, width, height)`.
     pub layout_settings: Option<[f32; 4]>,
     /// Remembered Devices OS-window geometry.
@@ -464,6 +497,8 @@ impl Default for Settings {
             scale: 0,
             supersample: 1,
             shader: ShaderPreset::Off,
+            brightness: 1.0,
+            sharpness: 0.0,
             layout_settings: None,
             layout_devices: None,
             layout_debugger: None,
@@ -618,6 +653,12 @@ impl Settings {
                     settings.supersample = value.parse::<u32>().unwrap_or(1).clamp(1, 3)
                 }
                 "shader" => settings.shader = ShaderPreset::from_name(value),
+                "brightness" => {
+                    settings.brightness = value.parse::<f32>().unwrap_or(1.0).clamp(0.5, 1.5)
+                }
+                "sharpness" => {
+                    settings.sharpness = value.parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0)
+                }
                 "layout_settings" => settings.layout_settings = parse_layout(value),
                 "layout_devices" => settings.layout_devices = parse_layout(value),
                 "layout_debugger" => settings.layout_debugger = parse_layout(value),
@@ -700,6 +741,8 @@ impl Settings {
 rom_dir={}
 save_dir={}
 speed_percent={}
+rewind_mb={}
+run_ahead={}
 region={}
 filter={}
 sample_rate={}
@@ -746,6 +789,8 @@ aspect={}
 scale={}
 supersample={}
 shader={}
+brightness={}
+sharpness={}
 layout_settings={}
 layout_devices={}
 layout_debugger={}
@@ -754,6 +799,8 @@ layout_cheats={}
             self.rom_dir.display(),
             self.save_dir.display(),
             self.speed_percent,
+            self.rewind_mb,
+            self.run_ahead,
             region_name(self.region),
             filter_name(self.filter),
             self.sample_rate,
@@ -823,6 +870,8 @@ layout_cheats={}
             self.scale,
             self.supersample,
             self.shader.name(),
+            self.brightness,
+            self.sharpness,
             layout_text(self.layout_settings),
             layout_text(self.layout_devices),
             layout_text(self.layout_debugger),

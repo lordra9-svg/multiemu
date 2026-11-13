@@ -65,7 +65,7 @@ Key interaction rules worth keeping:
 | ToolBar | Open, Refresh, Play/Pause, Stop, Reset, Fullscreen, Shot, Config | now |
 | RenderWidget | `egui` texture viewport, aspect-correct | now |
 | Settings: General/Interface | theme, pause on focus loss, confirm stop, detachable windows, reset-all | now |
-| Settings: Graphics | filter, palette + `.pal` import, aspect, integer scale, supersampling, output shader, window presets | now |
+| Settings: Graphics | filter, palette + `.pal` import, aspect, integer scale, supersampling, GPU output shaders (scanlines/LCD/CRT/NTSC Budget/Premium, brightness/sharpness), window presets | now |
 | Settings: Audio | sample rate, latency target, resampler quality, output filter, volume/mute, per-channel mixer | now |
 | Settings: Controllers | fixed keyboard map, rebinding UI | partial |
 | Settings: Paths | ROM dir, save dir, per-system library roots | now |
@@ -115,9 +115,13 @@ platform toolchains.
 - Video: the core's RGBA frame is uploaded to a texture each frame. The
   viewport offers Fit, 4:3 and 8:7 aspect modes, an automatic or fixed 1-6x
   integer scale, and 1-3x output supersampling (the frame is upscaled before
-  the linear downscale to the window; the PPU stays 256x240). Output shader
-  presets (scanlines, LCD grid, CRT vignette) are painted over the image, on
-  top of the core's Raw/Composite/CRT filters.
+  the linear downscale to the window; the PPU stays 256x240). The output
+  shader presets (scanlines, LCD grid, CRT vignette, NTSC Budget and NTSC
+  Premium) run in a custom glow fragment shader: the frame is copied into a
+  private GL texture and drawn as a fullscreen triangle into the viewport
+  callback, with brightness/sharpness uniforms. NTSC Budget uses a 3-tap
+  chroma filter, Premium a 7-tap filter, both with a light scanline blend.
+  iOS keeps the egui texture path and its overlay fallback.
 - Accuracy options mirroring MiSTer: PPU reset behaviour (Famicom/NES),
   work-RAM clear (Keep/$00/$FF/Random) on soft reset, audio source
   (Both/Internal/Expansion/None), overscan cropping, software-mask edge

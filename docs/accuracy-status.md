@@ -2079,3 +2079,20 @@ run-ahead to one, and asserts the committed states stay byte-identical every
 10 frames. Release measurements on the synthetic ROM: save 172 us, load
 237 us, frame 1.28 ms, so 4-frame run-ahead remains inside the 16.6 ms frame
 budget.
+
+### 2026-11-13 — GPU output shaders and NTSC presets
+
+Added a glow fragment-shader pipeline for the viewport. The RGBA frame is
+copied into a private GL texture and drawn as a fullscreen triangle inside an
+`egui_glow` paint callback; the callback sets its own viewport/scissor and
+restores blend/depth state, and egui_glow re-establishes its program after
+each callback. Presets: scanlines, LCD grid, CRT (scanlines + vignette), NTSC
+Budget (3-tap chroma) and NTSC Premium (7-tap chroma), plus brightness
+(0.5-1.5) and sharpness (0-1) uniforms. iOS keeps the egui texture path and
+the overlay fallback because its eframe build uses wgpu.
+
+The shaders compile and run with a synthetic 32 KiB NROM under the desktop
+build for 10 seconds without a shader or GL error. The settings file persists
+`shader`, `brightness`, `sharpness`, `rewind_mb` and `run_ahead`; supersampling
+still applies to the egui path, while GPU presets sample the 256x240 texture
+at display resolution.

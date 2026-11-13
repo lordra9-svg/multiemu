@@ -41,7 +41,7 @@ emulator's scope.
 | Netplay | No | Yes | experimental (2.7) | Yes | No | Yes | rollback, 2–4p | No |
 | Movies / TAS | trace | movie recording | rich TAS editor + movies | movie recording | movie recording | No | TAStudio + movie import | No (WAV/PNG/GIF only) |
 | Debugger | memory editor, tracer | full debugger suite | full (RAM search, trace, hex, PPU/nametable) | no | full (breakpoints, viewers, palette) | no | conditional bp, watchpoints, hex, callstack | **CPU/PPU/APU + hex + PC breakpoints** |
-| Video filters / shaders | slang shaders | NTSC, xBRZ, HD packs | NTSC filters, palettes | Blargg NTSC, HQx, scanlines | palette editor, scanlines | many (NTSC, CRT, xBRZ, hqNx) | NTSC + CRT shader stack | **raw/composite/CRT + scanline/LCD/CRT output presets** |
+| Video filters / shaders | slang shaders | NTSC, xBRZ, HD packs | NTSC filters, palettes | Blargg NTSC, HQx, scanlines | palette editor, scanlines | many (NTSC, CRT, xBRZ, hqNx) | NTSC + CRT shader stack | **raw/composite/CRT + GPU scanline/LCD/CRT/NTSC Budget/NTSC Premium presets with brightness/sharpness** |
 | Palettes | several | many + custom | many + `.pal` | many + `.pal`, palette editor | palette editor + custom | many + editor + Raw | `.pal` + generated NTSC | **8 presets + `.pal`/`.palette` import** |
 | HD packs | No | Yes | No | No | No | No | Yes | No |
 | Lua / scripting | No | debugger scripting | Yes (Lua 5.1) | No | No | No | Yes (sandboxed Lua 5.4) | No |
@@ -142,12 +142,14 @@ matrix above is the comparison; this list is the work queue.
    per-frame 4-port inputs in the `UNKOMOV1` format. Run-ahead (0-4 frames)
    commits one frame, draws prediction frames and restores the committed
    state.
-3. **GPU shader pass**: built-in output presets exist, but arbitrary
-   GLSL/WGSL/slang shaders and MiSTer-style HQ2x/CRT-25/50/75 scanline
-   scaling are not implemented.
-4. **NTSC filter fidelity**: the core Composite/CRT filters are a 1-2-1
-   blend + scanlines. MiSTer offers Budget TV/Premium TV, brightness and
-   sharpness controls; Mesen/FCEUX/Nestopia have full NTSC models.
+3. **GPU shader pass**: the built-in presets now run as glow fragment
+   shaders (scanlines/LCD/CRT/NTSC Budget/NTSC Premium). Arbitrary
+   GLSL/WGSL/slang shader loading and MiSTer-style HQ2x/CRT-25/50/75
+   scanline scaling are still not implemented.
+4. **NTSC filter fidelity**: the GPU NTSC Budget/Premium presets use 3- and
+   7-tap chroma filters with a scanline blend, not a full composite signal
+   model. The core Composite/CRT filters remain a 1-2-1 blend + scanlines;
+   Mesen/FCEUX/Nestopia have deeper NTSC models.
 5. **IPS/BPS soft-patching and a NES 2.0 header editor/repair database**
    (MiSTer warns and points at an external repair tool; Unko now warns but
    has no editor).

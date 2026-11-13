@@ -958,6 +958,28 @@ impl Player {
         (video.width, video.height)
     }
 
+    /// Copies the current frame as tightly packed RGBA (for GPU upload).
+    #[must_use]
+    pub fn frame_rgba(&self) -> Option<(Vec<u8>, u32, u32)> {
+        let video = self.core.video();
+        let width = video.width as usize;
+        let height = video.height as usize;
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let pixels = if video.stride == width * 4 {
+            video.data.to_vec()
+        } else {
+            let mut packed = Vec::with_capacity(width * height * 4);
+            for row in 0..height {
+                let start = row * video.stride;
+                packed.extend_from_slice(&video.data[start..start + width * 4]);
+            }
+            packed
+        };
+        Some((pixels, video.width, video.height))
+    }
+
     /// Core name/version for the status bar.
     #[must_use]
     pub fn core_label(&self) -> String {
