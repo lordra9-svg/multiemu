@@ -2024,3 +2024,11 @@ into a save state; the canonical/no-cheat output is unchanged.
 The decoder is pinned by the published `SXIOPO` (`$91D9 = $AD`) and
 `YYKPOYZZ` (`$9F41 = $77` if `$22`) examples. Tests cover decoding, compare
 gating, immediate/frame RAM writes and the cheat-file round trip.
+
+### 2026-11-13 — Family Trainer
+
+Added `PortDevice::FamilyTrainer` as the Japanese Power Pad variant. It uses
+the same 12-button two-bit serial matrix and strobe, so the existing mat
+overlay and `set_power_pad` path drive it; only the device label and the
+strobe reload condition differed. A test reuses the documented Power Pad
+button order through the Family Trainer device.

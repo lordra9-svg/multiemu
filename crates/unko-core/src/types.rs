@@ -221,6 +221,8 @@ pub enum PortDevice {
     Paddle,
     /// Power Pad / Family Trainer mat (12 membrane buttons).
     PowerPad,
+    /// Family Trainer variant of the Power Pad (same serial protocol).
+    FamilyTrainer,
     /// Family BASIC keyboard matrix (9 rows x 8 columns).
     FamilyKeyboard,
     /// Four Score adapter (four controllers across both ports).
@@ -242,6 +244,7 @@ impl PortDevice {
             Self::Zapper => "zapper",
             Self::Paddle => "paddle",
             Self::PowerPad => "powerpad",
+            Self::FamilyTrainer => "familytrainer",
             Self::FamilyKeyboard => "keyboard",
             Self::FourScore => "fourscore",
             Self::Microphone => "microphone",
@@ -257,6 +260,7 @@ impl PortDevice {
             "zapper" => Self::Zapper,
             "paddle" => Self::Paddle,
             "powerpad" => Self::PowerPad,
+            "familytrainer" | "family-trainer" => Self::FamilyTrainer,
             "keyboard" => Self::FamilyKeyboard,
             "fourscore" => Self::FourScore,
             "microphone" | "mic" => Self::Microphone,

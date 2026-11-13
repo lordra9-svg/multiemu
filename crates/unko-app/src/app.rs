@@ -1991,13 +1991,14 @@ impl eframe::App for App {
             } else {
                 None
             };
-            let power_pad_port = if port1 == PortDevice::PowerPad {
-                Some(0)
-            } else if port2 == PortDevice::PowerPad {
-                Some(1)
-            } else {
-                None
-            };
+            let power_pad_port =
+                if port1 == PortDevice::PowerPad || port1 == PortDevice::FamilyTrainer {
+                    Some(0)
+                } else if port2 == PortDevice::PowerPad || port2 == PortDevice::FamilyTrainer {
+                    Some(1)
+                } else {
+                    None
+                };
             if port1 == PortDevice::FamilyKeyboard || port2 == PortDevice::FamilyKeyboard {
                 player.set_family_keyboard(family_keyboard_matrix(ctx));
             }
@@ -3129,7 +3130,8 @@ fn controllers_tab(
                 .weak()
                 .small(),
         ),
-        (PortDevice::PowerPad, _) | (_, PortDevice::PowerPad) => ui.label(
+        (PortDevice::PowerPad | PortDevice::FamilyTrainer, _)
+        | (_, PortDevice::PowerPad | PortDevice::FamilyTrainer) => ui.label(
             RichText::new("Power Pad: click the 12-pad overlay in the viewport.")
                 .weak()
                 .small(),
@@ -3285,6 +3287,7 @@ fn device_label(device: PortDevice) -> &'static str {
         PortDevice::Zapper => "Zapper",
         PortDevice::Paddle => "Paddle",
         PortDevice::PowerPad => "Power Pad",
+        PortDevice::FamilyTrainer => "Family Trainer",
         PortDevice::FamilyKeyboard => "Family BASIC keyboard",
         PortDevice::FourScore => "Four Score (4 players)",
         PortDevice::Microphone => "Famicom microphone",
@@ -3303,6 +3306,7 @@ fn device_combo(ui: &mut egui::Ui, id: &str, device: &mut PortDevice) {
                 PortDevice::Zapper,
                 PortDevice::Paddle,
                 PortDevice::PowerPad,
+                PortDevice::FamilyTrainer,
                 PortDevice::FamilyKeyboard,
                 PortDevice::FourScore,
                 PortDevice::Microphone,

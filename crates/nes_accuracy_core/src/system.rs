@@ -181,6 +181,8 @@ pub enum PortDevice {
     /// Power Pad / Family Trainer mat: 12 membrane buttons read two bits at a
     /// time on bits 3 (low half) and 4 (high half).
     PowerPad,
+    /// Family Trainer variant (same serial protocol and matrix as Power Pad).
+    FamilyTrainer,
     /// Family BASIC keyboard: a 9-row x 8-column matrix scanned through
     /// `$4016` (column/clock/enable) and read active-low on `$4017` bits 1-4.
     FamilyKeyboard,
@@ -1352,7 +1354,7 @@ impl System {
                 paddle.shift = (paddle.shift << 1) | serial;
                 (self.open_bus & 0xE0) | 0x40 | (data << 4) | (u8::from(paddle.fire) << 3)
             }
-            PortDevice::PowerPad => {
+            PortDevice::PowerPad | PortDevice::FamilyTrainer => {
                 let pad = &mut self.peripherals.power_pad[port];
                 if self.strobe {
                     pad.reload();
@@ -1976,7 +1978,10 @@ impl CpuBus for System {
                                 self.peripherals.paddle[port].shift =
                                     self.peripherals.paddle[port].position;
                             }
-                            if self.devices[port] == PortDevice::PowerPad {
+                            if matches!(
+                                self.devices[port],
+                                PortDevice::PowerPad | PortDevice::FamilyTrainer
+                            ) {
                                 self.peripherals.power_pad[port].reload();
                             }
                         }
@@ -3116,6 +3121,24 @@ mod tests {
         }
         // 0x12 = 0001_0010, MSB-first and inverted.
         assert_eq!(bits, vec![1, 1, 1, 0, 1, 1, 0, 1]);
+    }
+
+    #[test]
+    fn family_trainer_uses_the_power_pad_matrix() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_port_device(1, PortDevice::FamilyTrainer);
+        system.set_power_pad(1, 0b0000_1001);
+        strobe(&mut system);
+        let lows: Vec<u8> = (0..8)
+            .map(|_| (CpuBus::read(&mut system, 0x4017) >> 3) & 1)
+            .collect();
+        assert_eq!(lows, vec![0, 1, 0, 0, 0, 0, 0, 0]);
+        strobe(&mut system);
+        let highs: Vec<u8> = (0..8)
+            .map(|_| (CpuBus::read(&mut system, 0x4017) >> 4) & 1)
+            .collect();
+        assert_eq!(highs, vec![1, 0, 0, 0, 1, 1, 1, 1]);
     }
 
     #[test]

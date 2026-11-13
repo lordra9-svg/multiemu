@@ -154,8 +154,8 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] Zapper (core sensor + app mouse aiming/trigger).
 - [x] Other input devices: Four Score (4-player chain with adapter signature),
       Arkanoid paddle (inverted MSB-first position + fire, mouse steering),
-      Power Pad / Family Trainer (12-button two-bit serial read with an
-      on-screen mat), the Family BASIC keyboard (9x8 matrix with the
+      Power Pad and the Family Trainer variant (12-button two-bit serial read
+      with an on-screen mat), the Family BASIC keyboard (9x8 matrix with the
       documented host-key mapping), the Famicom microphone (`$4016` D2) and
       the Family BASIC data recorder (cassette loopback on `$4016`), the
       Miracle Piano MIDI transport (port 1) and the Datach barcode scanner

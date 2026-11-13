@@ -153,7 +153,8 @@ platform toolchains.
   shows any combination of system, file, size, region, mapper and modified
   columns.
 - Controller-port devices: each port can be a gamepad, Zapper, Arkanoid
-  paddle (mouse steering + fire), Power Pad (on-screen 12-pad mat), Family
+  paddle (mouse steering + fire), Power Pad or the Family Trainer variant
+  (on-screen 12-pad mat), Family
   BASIC keyboard (host keys map to the documented 9x8 matrix), a Four Score
   adapter (four players across both ports), the Famicom microphone (`$4016`
   D2, held from the Devices window) or the Family BASIC data recorder

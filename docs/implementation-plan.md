@@ -26,7 +26,7 @@ Scope decisions from this pass:
 |---|---|---|---|---|---|
 | 1 | 25-300% speed presets, hold-FF (Tab), frame advance | 1 | Easy | – | **done** |
 | 2 | Cheats: Game Genie + raw RAM, 32 slots, per-game persistence, Cheats window | 1 | Easy-medium | – | **done** |
-| 3 | Quick peripherals: Family Trainer, Subor keyboard, Famicom 3D glasses, mouse | 2 | Easy-medium | protocol notes | queued |
+| 3 | Quick peripherals: Family Trainer, Subor keyboard, Famicom 3D glasses, mouse | 2 | Easy-medium | protocol notes | **partial (Family Trainer done)** |
 | 4 | Rewind ring (configurable 64-256 MB) + 1-4 frame run-ahead | 1 | Medium-hard | deterministic states | queued |
 | 5 | GPU shader pipeline (glow/wgpu) and built-in presets | 1 | Hard | renderer abstraction | queued |
 | 6 | NTSC Budget/Premium + brightness/sharpness as shader presets | 1 | Hard | #5 | queued |

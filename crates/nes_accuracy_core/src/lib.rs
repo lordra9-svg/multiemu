@@ -368,6 +368,7 @@ impl Core for AccuracyCore {
                 PortDevice::Zapper => crate::system::PortDevice::Zapper,
                 PortDevice::Paddle => crate::system::PortDevice::Paddle,
                 PortDevice::PowerPad => crate::system::PortDevice::PowerPad,
+                PortDevice::FamilyTrainer => crate::system::PortDevice::FamilyTrainer,
                 PortDevice::FamilyKeyboard => crate::system::PortDevice::FamilyKeyboard,
                 PortDevice::FourScore => crate::system::PortDevice::FourScore,
                 PortDevice::Microphone => crate::system::PortDevice::Microphone,
