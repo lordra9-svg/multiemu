@@ -15,6 +15,8 @@ without notice. All of them expect the test ROMs to be supplied locally under
 | `accoin_trace` | Trace per-row results across a run. |
 | `inspect` | Boot a ROM for N frames headlessly and print display/scanline diagnostics. |
 | `apudump` | Per-CPU-cycle APU channel trace for one frame; requires `--features apu-trace`. Compares directly with the reference oracle's `APU_TRACE` records. |
+| `exectrace` | Per-instruction `(CPU cycle, PC)` trace for one frame; requires `--features apu-trace`. Compares with the oracle's `TRACE_AT_FRAME`/`TRACE_WINDOW` records. |
+| `expwrites` | Per-cycle expansion-port and APU register write trace (`$4000-$4017`, `$4020-$FFFF`) for one frame; requires `--features apu-trace`. |
 
 Typical invocation:
 

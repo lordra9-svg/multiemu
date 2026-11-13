@@ -15,6 +15,14 @@ apu-trace = []
 name = "apudump"
 required-features = ["apu-trace"]
 
+[[example]]
+name = "exectrace"
+required-features = ["apu-trace"]
+
+[[example]]
+name = "expwrites"
+required-features = ["apu-trace"]
+
 [dependencies]
 unko-core.workspace = true
 serde = { version = "1", features = ["derive", "rc"] }

@@ -14,7 +14,14 @@ feature-level survey.
   a port/tweak of the MiSTer work; the community fork by Terminator2K2 now
   ships two cores selected by a mapper chip to cover "all" MiSTer mappers, but
   without FDS or NSF support.
-- **TriCNES** — a TAS-oriented FPGA NES core (not intended for normal play).
+- **TriCNES** (`100thCoin/TriCNES`) — a TAS-oriented NES emulator written in
+  C# (MIT), useful as a CPU/DMA timing reference for its mapper set
+  (NROM/MMC1/2/3/4/7/9/69 and partial FDS). **It produces no audio**, so it is
+  not an audio oracle; the wiki describes its DMC state machine as the source
+  of one of RustyNES's DMC phase details.
+
+Local checkouts used for comparison live under `refs/mister-nes`,
+`refs/openfpga-nes` and `refs/tricnes` (not part of the repository).
 
 ## Feature inventory (NES_MiSTer)
 

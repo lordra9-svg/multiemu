@@ -44,6 +44,14 @@ pub struct System {
     /// `start_apu_trace` and `take_apu_trace` (feature `apu-trace`).
     #[cfg(feature = "apu-trace")]
     apu_trace: Option<ApuTrace>,
+    /// Debug: per-instruction CPU program counters collected between
+    /// `start_exec_trace` and `take_exec_trace` (feature `apu-trace`).
+    #[cfg(feature = "apu-trace")]
+    exec_trace: Option<Vec<(u64, u16)>>,
+    /// Debug: expansion-port `$4020-$FFFF` writes collected between
+    /// `start_expansion_trace` and `take_expansion_trace`.
+    #[cfg(feature = "apu-trace")]
+    expansion_trace: Option<Vec<(u64, u16, u8)>>,
     strobe: bool,
     /// Regional timing (NTSC/PAL/Dendy).
     timing: Timing,
@@ -422,6 +430,10 @@ impl System {
             zapper_present: false,
             #[cfg(feature = "apu-trace")]
             apu_trace: None,
+            #[cfg(feature = "apu-trace")]
+            exec_trace: None,
+            #[cfg(feature = "apu-trace")]
+            expansion_trace: None,
             strobe: false,
             timing,
             ppu_credit: 0,
@@ -757,6 +769,10 @@ impl System {
         let start = self.ppu.frames;
         let mut steps = 0u32;
         while self.ppu.frames == start && steps < 2_000_000 {
+            #[cfg(feature = "apu-trace")]
+            if let Some(trace) = &mut self.exec_trace {
+                trace.push((self.cpu.cycles, self.cpu.registers.pc));
+            }
             let mut cpu = self.cpu;
             let cycles = cpu.step(self);
             self.cpu = cpu;
@@ -795,6 +811,32 @@ impl System {
     #[must_use]
     pub fn take_apu_trace(&mut self) -> ApuTrace {
         self.apu_trace.take().unwrap_or_default()
+    }
+
+    /// Starts collecting `(CPU cycle, PC)` per executed instruction.
+    #[cfg(feature = "apu-trace")]
+    pub fn start_exec_trace(&mut self) {
+        self.exec_trace = Some(Vec::new());
+    }
+
+    /// Takes the per-instruction execution trace.
+    #[cfg(feature = "apu-trace")]
+    #[must_use]
+    pub fn take_exec_trace(&mut self) -> Vec<(u64, u16)> {
+        self.exec_trace.take().unwrap_or_default()
+    }
+
+    /// Starts collecting expansion-port writes as `(CPU cycle, address, byte)`.
+    #[cfg(feature = "apu-trace")]
+    pub fn start_expansion_trace(&mut self) {
+        self.expansion_trace = Some(Vec::new());
+    }
+
+    /// Takes the expansion-port write trace.
+    #[cfg(feature = "apu-trace")]
+    #[must_use]
+    pub fn take_expansion_trace(&mut self) -> Vec<(u64, u16, u8)> {
+        self.expansion_trace.take().unwrap_or_default()
     }
 
     /// Current audio sample rate.
@@ -1560,6 +1602,10 @@ impl CpuBus for System {
                 }
             }
             0x4000..=0x4013 | 0x4015 | 0x4017 => {
+                #[cfg(feature = "apu-trace")]
+                if let Some(trace) = &mut self.expansion_trace {
+                    trace.push((self.cycle_count, address, value));
+                }
                 // `self.phase` has already toggled to the next cycle, so the
                 // write cycle is a get when it is set.
                 self.apu.write_get = Some(self.phase);
@@ -1610,6 +1656,10 @@ impl CpuBus for System {
                 }
             }
             0x4020..=0xFFFF => {
+                #[cfg(feature = "apu-trace")]
+                if let Some(trace) = &mut self.expansion_trace {
+                    trace.push((self.cycle_count, address, value));
+                }
                 self.cart.set_cpu_cycle(self.cycle_count);
                 self.cart.cpu_write(address, value);
                 if self.cart.chr_mapping_write(address) {

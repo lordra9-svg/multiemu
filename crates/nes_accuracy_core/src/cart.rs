@@ -25008,18 +25008,23 @@ struct YmNoise {
 
 impl Default for YmNoise {
     fn default() -> Self {
+        // The AY/YM noise LFSR powers up at 1 (MAME `ay8910_reset_ym` and the
+        // MiSTer Sunsoft HDL both use 1, not the AY8930's all-ones state).
         Self { phase: 0, lfsr: 1 }
     }
 }
 
 impl YmNoise {
     fn clock(&mut self, period: u16) {
+        // The phase counter runs at CPU/16; a new random bit appears every
+        // 32 * period CPU cycles (so every second call here).
+        self.phase += 1;
         if self.phase >= period.max(1) {
             self.phase = 0;
-            let bit = (self.lfsr ^ (self.lfsr >> 3)) & 1;
-            self.lfsr = (self.lfsr >> 1) | (bit << 16);
-        } else {
-            self.phase += 1;
+            // 17-bit LFSR; the shift input is bit 0 XOR bit 3 and bit 0 is
+            // the output (MAME `ay8910.cpp`, verified on AY/YM hardware).
+            let feedback = (self.lfsr ^ (self.lfsr >> 3)) & 1;
+            self.lfsr = (self.lfsr >> 1) | (feedback << 16);
         }
     }
 
@@ -25059,8 +25064,8 @@ impl YmEnvelope {
         if !self.running {
             return;
         }
+        self.phase += 1;
         if self.phase < self.period.max(1) {
-            self.phase += 1;
             return;
         }
         self.phase = 0;
@@ -25080,14 +25085,19 @@ impl YmEnvelope {
 
     fn boundary(&mut self) {
         if !self.continue_ {
+            // One ramp only: hold at the end it reached (0 when decaying,
+            // 31 when attacking).
+            self.running = false;
+        } else if self.hold {
+            if self.alternate {
+                // "The value at the end of the attack is immediately flipped
+                // before holding": $0B holds at 31, $0F holds at 0.
+                self.value = if self.attack { 0 } else { 31 };
+            }
             self.running = false;
         } else if self.alternate {
+            // Continuous triangle: reverse direction at each end.
             self.attack = !self.attack;
-            if self.hold {
-                self.running = self.alternate;
-            }
-        } else if self.hold {
-            self.running = false;
         } else {
             // Continuous sawtooth: wrap to the opposite end.
             self.value = if self.attack { 0 } else { 31 };
@@ -25118,6 +25128,10 @@ struct Sunsoft5b {
     noise: YmNoise,
     envelope: YmEnvelope,
     prescaler: u8,
+    /// Counts 16-cycle prescaler ticks; the noise LFSR shifts every second
+    /// one, giving a new bit every 32 CPU cycles at period 0/1.
+    #[serde(default)]
+    noise_phase: u8,
 }
 
 impl Sunsoft5b {
@@ -25164,19 +25178,26 @@ impl Sunsoft5b {
         for channel in 0..3 {
             let period = self.tone_period(channel).max(1);
             let tone = &mut self.tone[channel];
+            // The phase counter reaches the period, flips and resets: a
+            // half-period lasts exactly 16 * period CPU cycles (no +1).
+            tone.phase += 1;
             if tone.phase >= period {
                 tone.phase = 0;
                 tone.output = !tone.output;
-            } else {
-                tone.phase += 1;
             }
         }
-        self.noise.clock(self.noise_period());
+        self.noise_phase += 1;
+        if self.noise_phase >= 2 {
+            self.noise_phase = 0;
+            self.noise.clock(self.noise_period());
+        }
         self.envelope.clock();
     }
 
     fn channel_output(&self, channel: usize) -> i32 {
         let mixer = self.registers[0x07];
+        // `$07` is active low with the standard AY layout `--CB Acba`:
+        // tone A/B/C in bits 0/1/2, noise A/B/C in bits 3/4/5.
         let tone_disabled = mixer & (1 << channel) != 0;
         let noise_disabled = mixer & (1 << (channel + 3)) != 0;
         let tone = self.tone[channel].output;
@@ -41369,6 +41390,130 @@ mod tests {
             saw_high |= (sample - one_tone).abs() < 1e-4;
         }
         assert!(saw_low && saw_high, "noise did not toggle");
+    }
+
+    #[test]
+    fn sunsoft5b_tone_half_period_is_16_times_the_period() {
+        let mut chip = Sunsoft5b::default();
+        // Channel A period 10: the square toggles every 16 * 10 CPU cycles.
+        chip.registers[0x00] = 10;
+        chip.registers[0x01] = 0;
+        for _ in 0..(16 * 10 - 1) {
+            chip.tick();
+        }
+        assert!(!chip.tone[0].output, "toggled one cycle early");
+        chip.tick();
+        assert!(chip.tone[0].output, "did not toggle at 16 * period");
+        for _ in 0..(16 * 10 - 1) {
+            chip.tick();
+        }
+        assert!(chip.tone[0].output);
+        chip.tick();
+        assert!(!chip.tone[0].output);
+    }
+
+    #[test]
+    fn sunsoft5b_noise_shifts_every_32_cycles_and_starts_at_one() {
+        let mut chip = Sunsoft5b::default();
+        assert_eq!(chip.noise.lfsr, 1, "LFSR powers up at 1, not all ones");
+        chip.registers[0x06] = 1;
+        let initial = chip.noise.lfsr;
+        // The prescaler ticks at 16, 32, ...; the first LFSR shift is at 32.
+        for _ in 0..31 {
+            chip.tick();
+        }
+        assert_eq!(chip.noise.lfsr, initial, "shifted before 32 cycles");
+        chip.tick();
+        assert_ne!(chip.noise.lfsr, initial, "no shift at 32 cycles");
+        let shifted = chip.noise.lfsr;
+        for _ in 0..31 {
+            chip.tick();
+        }
+        assert_eq!(chip.noise.lfsr, shifted);
+        chip.tick();
+        assert_ne!(chip.noise.lfsr, shifted);
+    }
+
+    #[test]
+    fn sunsoft5b_mixer_uses_the_ay_tone_and_noise_bit_layout() {
+        let mut chip = Sunsoft5b::default();
+        for channel in 0..3 {
+            chip.registers[0x08 + channel] = 0x0F;
+        }
+        // Keep the noise output low so the tone path is unambiguous.
+        chip.noise.lfsr = 0x1_0000;
+        for channel in 0..3 {
+            chip.tone[channel].output = true;
+            // Tone A/B/C are bits 0/1/2; noise A/B/C are bits 3/4/5.
+            // Disabling tone alone (noise enabled, currently low) is silent.
+            chip.registers[0x07] = 1 << channel;
+            assert_eq!(chip.channel_output(channel), 0, "tone bit {channel}");
+            // Disabling noise alone leaves the high tone audible.
+            chip.registers[0x07] = 1 << (channel + 3);
+            assert_eq!(
+                chip.channel_output(channel),
+                SUNSOFT5B_LOG_VOL[15],
+                "noise bit for channel {channel} must not silence the tone"
+            );
+            // Both disabled holds the channel at its volume.
+            chip.registers[0x07] = (1 << channel) | (1 << (channel + 3));
+            assert_eq!(chip.channel_output(channel), SUNSOFT5B_LOG_VOL[15]);
+            chip.tone[channel].output = false;
+            chip.registers[0x07] = 0;
+        }
+    }
+
+    #[test]
+    fn sunsoft5b_envelope_shapes_hold_at_the_documented_level() {
+        // One ramps of 31 steps plus the boundary clock.
+        let settle = |shape: u8| {
+            let mut envelope = YmEnvelope::default();
+            envelope.period = 1;
+            envelope.reset(shape);
+            for _ in 0..32 {
+                envelope.clock();
+            }
+            let held = envelope.level();
+            for _ in 0..16 {
+                envelope.clock();
+            }
+            (held, envelope.level())
+        };
+        // $09: continue, decay, hold at 0.
+        assert_eq!(settle(0x09), (0, 0));
+        // $0B: continue, decay, alternate + hold -> flip to 31 and hold.
+        assert_eq!(settle(0x0B), (31, 31));
+        // $0D: continue, attack, hold at 31.
+        assert_eq!(settle(0x0D), (31, 31));
+        // $0F: continue, attack, alternate + hold -> flip to 0 and hold.
+        assert_eq!(settle(0x0F), (0, 0));
+        // $04: no continue, attack -> one ramp then hold at 31.
+        assert_eq!(settle(0x04), (31, 31));
+        // $08: continuous decay sawtooth wraps to 31 after reaching 0 and
+        // keeps ramping down (so sixteen clocks later it is at 15).
+        assert_eq!(settle(0x08), (31, 15));
+    }
+
+    #[test]
+    fn sunsoft5b_envelope_steps_every_16_cycles_times_the_period() {
+        let mut chip = Sunsoft5b::default();
+        chip.select(0x0B);
+        chip.write(2);
+        chip.select(0x0C);
+        chip.write(0);
+        chip.select(0x0D);
+        chip.write(0x0C); // continue + attack: ramp up from 0
+        assert_eq!(chip.envelope.level(), 0);
+        for _ in 0..(16 * 2 - 1) {
+            chip.tick();
+        }
+        assert_eq!(chip.envelope.level(), 0, "stepped one cycle early");
+        chip.tick();
+        assert_eq!(chip.envelope.level(), 1);
+        for _ in 0..(16 * 2) {
+            chip.tick();
+        }
+        assert_eq!(chip.envelope.level(), 2);
     }
 
     #[test]

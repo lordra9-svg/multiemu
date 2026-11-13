@@ -28,8 +28,12 @@ RustyNES:
 | MMC5 | *Just Breed*, frame 300 | all five APU channels, expansion mix and total match on 29,780/29,780 cycles |
 | Namco 163 | *Erika to Satoru no Yume Bouken*, frame 400 | exact on 29,781/29,781 cycles |
 | VRC7 | *Lagrange Point*, frame 400 | exact on 29,780/29,780 cycles |
-| VRC6 | *Akumajou Densetsu*, frame 400 | APU pulse 1/triangle/noise/DMC exact; pulse 2 diverges from cycle 2035 and the expansion mix by one unit |
-| Sunsoft 5B | *Gimmick!*, frame 400 | APU noise exact; pulse 1/2 and DMC diverge; one 5B channel is gated differently from cycle 13 |
+| VRC6 | *Akumajou Densetsu*, frame 400 | APU pulse 1/triangle/noise/DMC exact; pulse 2 differs on ~12% of cycles and the expansion mix by one raw unit |
+| Sunsoft 5B | *Gimmick!* frames 20 and 400 | frame 20 exact on every APU channel and the expansion mix; later frames diverge because of the oracle errors listed below |
+
+As a control, **Batman (Japan)** (FME-7 without expansion audio) matches all
+five APU channels, the mix and the total at frame 400, so the DMC and mapper
+changes do not depend on the 5B.
 
 The probe found and fixed a real mapper bug: **Sunsoft FME-7 (mapper 69)**
 command 8 was decoded as a PRG bank instead of the `$6000` window's
@@ -43,6 +47,47 @@ The VRC6 sawtooth difference is recorded rather than matched: RustyNES adds
 the accumulator on seven steps per 14-step sweep, while the NESdev wiki and
 Mesen add on six (even) steps and reset on the 14th. Unko follows the
 wiki/Mesen schedule.
+
+### 5B mixer and noise: the oracle is wrong
+
+The same probe exposed three independent RustyNES errors in its Sunsoft 5B
+model. Unko follows the AY-3-8910/YM2149 datasheet, the NESdev wiki and the
+MiSTer `Sunsoft.sv` HDL, which agree:
+
+1. **Mixer `$07` bit layout.** The register is `--CB Acba`: tone A/B/C in bits
+   0/1/2 and noise A/B/C in bits 3/4/5, active low. RustyNES decodes it as
+   interleaved tone bits 0/2/4 and noise bits 1/3/5. *Gimmick!* writes `$F8`
+   (all three tones on, all noise off); RustyNES therefore enables noise A and
+   its expansion output flickers at the noise rate, while Unko's three-tone
+   output is steady. The project's earlier code used the correct layout; it
+   was only briefly changed while comparing against the oracle and is back on
+   the documented mapping.
+2. **Noise clock.** A 5B tone toggles every `16 * period` CPU cycles and the
+   noise LFSR shifts every `32 * period` cycles. RustyNES shifts the noise LFSR
+   every `16 * period`, twice as fast. Unko matches the wiki/HDL/MAME.
+3. **Noise LFSR reset.** The AY/YM noise register powers up at 1 (MAME
+   `ay8910_reset_ym`, MiSTer HDL `17'h1`). Unko now uses 1 and the hardware
+   shift input, bit 0 XOR bit 3 of the 17-bit register.
+
+The envelope shape state machine now also follows the wiki's ten shapes:
+`continue=0` holds at the end of its single ramp, `hold` freezes at the reached
+level, and `alternate+hold` flips to the opposite end before holding (`$0B`
+ends at 31, `$0F` at 0). The only commercial 5B game leaves the envelope off,
+so this matters for homebrew work rather than *Gimmick!*.
+
+Unit tests pin the tone half-period, the 32-cycle noise shift, the LFSR reset
+value, the `--CB Acba` mixer mapping, the envelope step interval and the
+hold/alternate shapes.
+
+### DMC DAC mixing
+
+The DMC's 7-bit counter output always reaches the mixer, "regardless the
+channel is enabled or not"; `$4011` also updates it while automatic playback
+is off (NESdev APU DMC; Mesen's `AddOutput` path does the same). Unko muted the
+DAC when `$4015` bit 4 was clear or the buffer was empty, so *Gimmick!*'s
+`$4011 = 2` produced 0 instead of 2. After the fix the whole of frame 20
+(pulse 1/2, triangle, noise, DMC, expansion mix and total) matches the oracle
+cycle-for-cycle.
 
 ## Known residual differences (no test failures)
 
@@ -67,13 +112,26 @@ These do not fail any suite and are documented exceptions under the charter.
   the integer dot scheduler is kept. Closing this difference needs a hardware
   capture of the exact frame wrap, which is not available locally.
 
-- **Gimmick! expansion/DMC audio.** After the FME-7 boot fix, *Gimmick!*
-  video matches the oracle but its audio still diverges: pulse 2 and the
-  triangle/DMC latches hold different values at the same frame, and one 5B
-  channel is gated differently from cycle 13 of frame 400. The APU model is
-  exact for other titles and the 5B DAC tables/scale match the documented
-  curve, so this is an open investigation (sound-driver state or DMC/frame
-  IRQ interaction) rather than a known register bug.
+- **Gimmick! DMC reload-chain phase (4 cycles).** At the start of a sample
+  Unko's second output update lands four CPU cycles before RustyNES's
+  (`$4015` enable at frame 23, rate index C: gaps of 731 vs 735 cycles, then
+  identical 106-cycle intervals and identical DAC values). RustyNES models the
+  TriCNES detail that a load DMA's get completes three cycles before the byte
+  timer boundary, so the boundary consumes the buffer and arms a four-cycle
+  reload DMA; Unko does not insert that stall. The shift is 2.2 microseconds
+  and inaudible, and no test ROM covers it; closing it needs a hardware
+  capture or a direct port of the TriCNES DMC state machine, not a guess.
+- **Gimmick! CPU wait-loop phase.** The sound driver waits on `$F0` in a
+  two-instruction loop and its mapper-IRQ return address alternates between
+  the loop head and the branch target. Unko and RustyNES take the interrupt
+  after different loop instructions on alternating frames (a one-instruction,
+  2-3 cycle phase difference), although the handler entry cycles and frame
+  boundaries match. This changes when later APU register writes land relative
+  to the frame, so the 5B and DMC traces drift after frame 22 even though the
+  per-cycle channel model agrees at frame 20. The FME-7 counter itself follows
+  the wiki (decrement per CPU cycle, `$0000 -> $FFFF` assert, write to `$D`
+  acknowledges); the remaining difference is the CPU's interrupt-poll position
+  inside a taken/not-taken branch, which needs a hardware trace to resolve.
 
 ## Recently closed (2026-11-12)
 

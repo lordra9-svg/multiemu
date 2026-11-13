@@ -1855,3 +1855,52 @@ cover FME-7 banking/mirroring/IRQ and the VRC6 sawtooth sweep.
 Gates: fmt, clippy (with and without `apu-trace`), 433 tests. The 20-frame
 library audit improved to **3,904 rendering / 3,169 blank** (8 more images
 draw, all mapper 69); AccuracyCoin remains **146/151 with 0 failures**.
+
+### 2026-11-12 — 5B/MAME/HDL alignment and DMC DAC mixing
+
+Continued the *Gimmick!* audio investigation with the MiSTer Sunsoft HDL
+(`refs/mister-nes/rtl/mappers/Sunsoft.sv`), the NESdev wiki, MAME's
+`ay8910.cpp` and RustyNES as cross-checks.
+
+- **DMC DAC (real fix).** The 7-bit counter output always feeds the mixer,
+  regardless of `$4015` bit 4 or an empty sample buffer (NESdev APU DMC;
+  Mesen's `AddOutput` path). Unko muted it, so *Gimmick!*'s `$4011 = 2` read as
+  0. With the fix the entire frame 20 matches the oracle cycle-for-cycle
+  (pulse 1/2, triangle, noise, DMC, expansion mix and total), and *Batman
+  (Japan)*, an FME-7 title without expansion audio, matches all channels and
+  the mix at frame 400.
+- **5B mixer `$07` (oracle bug, ours correct).** The datasheet/wiki/HDL layout
+  is `--CB Acba` (tone bits 0/1/2, noise bits 3/4/5). RustyNES uses
+  interleaved tone 0/2/4 and noise 1/3/5, so it enables noise A from
+  *Gimmick!*'s `$F8` write and its expansion output flickers at the noise
+  rate. Unko keeps the documented layout; the project's earlier brief change
+  to the oracle's layout was reverted.
+- **5B noise (oracle bug, ours correct).** The wiki, MiSTer HDL and MAME agree
+  that the 5B noise LFSR shifts every `32 * period` CPU cycles (half the AY
+  speed); RustyNES uses `16 * period`. Unko already used 32; the phase
+  compare-after-increment now makes the first shift land at cycle 32 and the
+  LFSR powers up at 1 with the hardware bit-0 XOR bit-3 input, matching MAME
+  and the HDL.
+- **5B tone/envelope timing.** The phase counters now compare after
+  incrementing, so a half-period is exactly `16 * period` CPU cycles with no
+  `+1`; the envelope steps on the same `16 * period` cadence. The envelope
+  shape state machine now follows the wiki's ten shapes: `continue=0` holds at
+  the end of its single ramp, `hold` freezes at the reached level, and
+  `alternate+hold` flips to the opposite end before holding ($0B ends at 31,
+  $0F at 0). New unit tests pin the tone half-period, the 32-cycle noise shift
+  and reset value, the mixer bit layout, the envelope step interval and the
+  hold/alternate shapes.
+- **Still open:** the DMC reload chain starts four CPU cycles before RustyNES
+  (the reference models a three-cycles-before-boundary get plus a four-cycle
+  reload DMA), and *Gimmick!*'s wait-loop/IRQ phase moves later APU register
+  writes by one instruction on alternating frames. Both are recorded in
+  `docs/accuracy-divergences.md`; neither is audible and neither fails a test
+  ROM.
+
+New differential tooling in `crates/nes_accuracy_core/examples`: `exectrace`
+(per-instruction CPU cycle/PC) and `expwrites` (per-cycle APU and expansion
+writes), both behind `--features apu-trace`.
+
+Gates: fmt, clippy (with and without `apu-trace`), **439 tests**, and
+AccuracyCoin remains **146/151 with 0 failures** (199,320 frames) after the
+DMC DAC and 5B changes.

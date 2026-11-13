@@ -665,11 +665,11 @@ impl Dmc {
     }
 
     fn output(&self) -> f32 {
-        if !self.enabled || self.silence {
-            0.0
-        } else {
-            f32::from(self.level)
-        }
+        // The 7-bit DAC output reaches the mixer regardless of the `$4015`
+        // enable bit; only the automatic playback unit is gated. An empty
+        // sample buffer stops the counter from changing, it does not mute it.
+        // Games silence the channel by writing `$4011` instead.
+        f32::from(self.level)
     }
 }
 
@@ -1187,6 +1187,23 @@ mod tests {
         assert!(changes.len() >= 3, "sequencer did not advance: {changes:?}");
         let interval = changes[2] - changes[1];
         assert_eq!(interval, 10, "duty step interval was {interval} cycles");
+    }
+
+    #[test]
+    fn dmc_dac_always_feeds_the_mixer() {
+        // NESdev APU DMC: the 7-bit counter output "is sent to the mixer
+        // regardless the channel is enabled or not", and a $4011 write
+        // updates it even with automatic playback deactivated.
+        let mut apu = Apu::new();
+        apu.write(0x4011, 0x40);
+        assert_eq!(apu.channel_outputs()[4], 64.0);
+        assert!(apu.mix() > 0.0, "the DAC bypassed the mixer");
+        apu.write(0x4015, 0x00);
+        apu.tick();
+        assert_eq!(apu.channel_outputs()[4], 64.0);
+        assert!(apu.mix() > 0.0, "the disabled channel was muted");
+        apu.write(0x4011, 0x7F);
+        assert_eq!(apu.channel_outputs()[4], 127.0);
     }
 
     #[test]
