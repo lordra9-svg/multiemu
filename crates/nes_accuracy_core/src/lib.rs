@@ -386,6 +386,18 @@ impl Core for AccuracyCore {
             .is_some_and(|system| system.set_datach_barcode(code))
     }
 
+    fn datach_eeprom(&self) -> Vec<u8> {
+        self.system
+            .as_ref()
+            .map_or_else(Vec::new, crate::system::System::datach_eeprom)
+    }
+
+    fn load_datach_eeprom(&mut self, bytes: &[u8]) {
+        if let Some(system) = self.system.as_mut() {
+            system.load_datach_eeprom(bytes);
+        }
+    }
+
     fn set_microphone(&mut self, pressed: bool) {
         if let Some(system) = self.system.as_mut() {
             system.set_microphone(pressed);

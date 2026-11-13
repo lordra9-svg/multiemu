@@ -277,6 +277,12 @@ impl Player {
         if let Ok(sram) = fs::read(&sram_path) {
             core.load_sram(&sram).map_err(|err| err.to_string())?;
         }
+        // The Datach X24C02 lives in the adapter, so one file is shared by
+        // every Datach game rather than keyed by ROM.
+        let eeprom_path = save_dir.join("datach.eeprom");
+        if let Ok(eeprom) = fs::read(&eeprom_path) {
+            core.load_datach_eeprom(&eeprom);
+        }
 
         let core_id = core.info().id.to_string();
         let mut message = String::new();
@@ -1273,6 +1279,10 @@ impl Player {
         let sram = self.core.sram().to_vec();
         if !sram.is_empty() {
             let _ = fs::write(self.save_dir.join(format!("{}.sav", self.stem)), sram);
+        }
+        let eeprom = self.core.datach_eeprom();
+        if !eeprom.is_empty() {
+            let _ = fs::write(self.save_dir.join("datach.eeprom"), eeprom);
         }
         let mut state = Vec::new();
         if self.core.save_state(&mut state).is_ok() {

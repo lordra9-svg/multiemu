@@ -719,6 +719,17 @@ impl System {
         self.cart.set_datach_barcode(code)
     }
 
+    /// Saves the Datach adapter's X24C02 contents (empty for other boards).
+    #[must_use]
+    pub fn datach_eeprom(&self) -> Vec<u8> {
+        self.cart.datach_eeprom()
+    }
+
+    /// Restores the Datach adapter's X24C02 contents.
+    pub fn load_datach_eeprom(&mut self, bytes: &[u8]) {
+        self.cart.load_datach_eeprom(bytes);
+    }
+
     /// Queues one byte for the Miracle Piano to return on the next poll.
     pub fn push_piano_rx(&mut self, byte: u8) {
         if self.peripherals.piano.rx.len() < 256 {

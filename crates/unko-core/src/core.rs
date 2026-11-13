@@ -87,6 +87,14 @@ pub trait Core {
         false
     }
 
+    /// Datach adapter X24C02 contents (256 bytes; empty when absent).
+    fn datach_eeprom(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// Restores the Datach adapter X24C02 contents.
+    fn load_datach_eeprom(&mut self, _bytes: &[u8]) {}
+
     /// Aims the Zapper attached to `port` and reports the trigger state.
     fn set_zapper(&mut self, _port: usize, _x: u8, _y: u8, _trigger: bool) {}
 

@@ -815,6 +815,14 @@ pub trait Mapper: fmt::Debug + MapperState {
         false
     }
 
+    /// Datach X24C02 contents (256 bytes; empty for other boards).
+    fn datach_eeprom(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// Restores the Datach X24C02 contents.
+    fn load_datach_eeprom(&mut self, _bytes: &[u8]) {}
+
     /// Raw per-channel expansion-audio outputs for differential debugging.
     ///
     /// The channel meaning is board-specific (VRC6: two pulses + saw, MMC5:
@@ -1416,6 +1424,17 @@ impl Cartridge {
     /// Loads a Datach barcode (mapper 157); returns false when unsupported.
     pub fn set_datach_barcode(&mut self, code: &str) -> bool {
         self.mapper.set_datach_barcode(code)
+    }
+
+    /// Datach X24C02 contents (256 bytes; empty for other boards).
+    #[must_use]
+    pub fn datach_eeprom(&self) -> Vec<u8> {
+        self.mapper.datach_eeprom()
+    }
+
+    /// Restores the Datach X24C02 contents.
+    pub fn load_datach_eeprom(&mut self, bytes: &[u8]) {
+        self.mapper.load_datach_eeprom(bytes);
     }
 
     /// Mapper number.
@@ -27092,18 +27111,191 @@ impl Bandai153 {
     }
 }
 
-/// Datach barcode scanner state (mapper 157).
+/// Xicor X24C02 256-byte I2C EEPROM, as fitted to the Datach adapter.
+///
+/// The bus is modelled at the bit level: SDA is open drain, the device samples
+/// it on SCL rising edges and changes it on falling edges, and every received
+/// byte is acknowledged on the ninth clock. The device address is `1010 000`
+/// with the low bit selecting read (`1`) or write (`0`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct X24c02 {
+    #[serde(with = "serde_big_array::BigArray")]
+    data: [u8; 256],
+    address: u8,
+    shift: u8,
+    /// Bits sampled in the current byte (0-7).
+    bit: u8,
+    /// The next clock is the ACK slot.
+    ack_clock: bool,
+    /// The device is pulling SDA low for an ACK.
+    ack: bool,
+    /// A START condition has been seen.
+    active: bool,
+    /// The device address matched.
+    addressed: bool,
+    /// The current transfer is a read.
+    reading: bool,
+    /// The byte currently being shifted out.
+    output: u8,
+    /// Bits already shifted out.
+    out_bits: u8,
+    /// The current output bit is zero (pull SDA low).
+    out_low: bool,
+    /// One word-address byte has been received in this write transaction.
+    word_received: bool,
+}
+
+impl Default for X24c02 {
+    fn default() -> Self {
+        Self {
+            data: [0xFF; 256],
+            address: 0,
+            shift: 0,
+            bit: 0,
+            ack_clock: false,
+            ack: false,
+            active: false,
+            addressed: false,
+            reading: false,
+            output: 0,
+            out_bits: 0,
+            out_low: false,
+            word_received: false,
+        }
+    }
+}
+
+impl X24c02 {
+    fn start(&mut self) {
+        self.active = true;
+        self.addressed = false;
+        self.reading = false;
+        self.shift = 0;
+        self.bit = 0;
+        self.ack_clock = false;
+        self.ack = false;
+        self.out_bits = 0;
+        self.out_low = false;
+        self.word_received = false;
+    }
+
+    fn stop(&mut self) {
+        self.active = false;
+        self.addressed = false;
+        self.ack = false;
+        self.ack_clock = false;
+        self.out_low = false;
+    }
+
+    fn process_byte(&mut self) {
+        if !self.addressed {
+            if self.shift & 0xFE == 0xA0 {
+                self.addressed = true;
+                self.reading = self.shift & 0x01 != 0;
+                self.word_received = false;
+                if self.reading {
+                    self.output = self.data[usize::from(self.address)];
+                    self.out_bits = 0;
+                    self.out_low = false;
+                }
+            }
+            return;
+        }
+        if self.reading {
+            return;
+        }
+        if self.word_received {
+            let index = usize::from(self.address);
+            self.data[index] = self.shift;
+            self.address = self.address.wrapping_add(1);
+        } else {
+            self.address = self.shift;
+            self.word_received = true;
+        }
+    }
+
+    /// SCL rising edge; `sda` is the host-driven data bit (or the value the
+    /// master presents during a read ACK).
+    fn rising(&mut self, sda: bool) {
+        if !self.active {
+            return;
+        }
+        if self.ack_clock {
+            self.ack_clock = false;
+            if self.addressed && self.reading {
+                if sda {
+                    // NACK ends the read.
+                    self.addressed = false;
+                } else if self.out_bits >= 8 {
+                    // Master ACK after a data byte: advance and continue.
+                    self.address = self.address.wrapping_add(1);
+                    self.output = self.data[usize::from(self.address)];
+                    self.out_bits = 0;
+                }
+            }
+            self.bit = 0;
+            return;
+        }
+        self.shift = (self.shift << 1) | u8::from(sda);
+        self.bit += 1;
+        if self.bit == 8 {
+            if !self.reading || !self.addressed {
+                self.process_byte();
+            }
+            self.bit = 0;
+            self.ack_clock = true;
+            // The device ACKs received bytes and the read address, but the
+            // master owns the ACK slot after an output data byte.
+            if self.addressed && (!self.reading || self.out_bits < 8) {
+                self.ack = true;
+            }
+        }
+    }
+
+    /// SCL falling edge: release the ACK and present the next output bit.
+    fn falling(&mut self) {
+        if !self.active {
+            return;
+        }
+        if self.ack_clock {
+            // The ACK slot stays low until the following falling edge.
+            return;
+        }
+        self.ack = false;
+        if self.addressed && self.reading && self.out_bits < 8 {
+            self.out_low = (self.output >> (7 - self.out_bits)) & 1 == 0;
+            self.out_bits += 1;
+        }
+    }
+
+    fn sda(&self, read_direction: bool, host_sda: bool) -> bool {
+        if self.ack || (self.addressed && self.reading && self.out_low) {
+            false
+        } else if read_direction {
+            true
+        } else {
+            host_sda
+        }
+    }
+}
+
+/// Datach barcode scanner and internal EEPROM (mapper 157).
 ///
 /// The scanner returns one pixel per 1000 CPU cycles on `$6000` bit 3
 /// (MAME's `datach.cpp` timer), framed by 61 white pixels before and after
-/// the barcode. The EEPROM data line is stubbed high (idle), matching the
-/// default MAME build.
+/// the barcode. `$800D` bit 5 is the internal X24C02 clock, bit 6 its data
+/// output and bit 7 the direction (1 = read); `$6000` bit 4 is its data
+/// input. The adapter's second (external) EEPROM is not modelled.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct Datach {
     pixels: Vec<bool>,
     index: usize,
     countdown: u32,
     latch: u8,
+    eeprom: X24c02,
+    scl: bool,
+    host_sda: bool,
+    read_direction: bool,
 }
 
 impl Datach {
@@ -27137,7 +27329,39 @@ impl Datach {
     }
 
     fn read(&self) -> u8 {
-        0x40 | self.latch
+        let sda = u8::from(self.eeprom.sda(self.read_direction, self.host_sda)) << 4;
+        0x40 | sda | self.latch
+    }
+
+    fn write_control(&mut self, value: u8) {
+        let scl = value & 0x20 != 0;
+        let sda = value & 0x40 != 0;
+        let read = value & 0x80 != 0;
+        if self.scl && scl {
+            if self.host_sda && !sda {
+                self.eeprom.start();
+            } else if !self.host_sda && sda {
+                self.eeprom.stop();
+            }
+        }
+        if scl && !self.scl {
+            self.eeprom.rising(sda);
+        }
+        if !scl && self.scl {
+            self.eeprom.falling();
+        }
+        self.scl = scl;
+        self.host_sda = sda;
+        self.read_direction = read;
+    }
+
+    fn eeprom_image(&self) -> &[u8; 256] {
+        &self.eeprom.data
+    }
+
+    fn load_eeprom(&mut self, bytes: &[u8]) {
+        let len = bytes.len().min(256);
+        self.eeprom.data[..len].copy_from_slice(&bytes[..len]);
     }
 }
 
@@ -27452,6 +27676,11 @@ impl Mapper for BandaiFcg {
                     self.irq_latch = (self.irq_latch & 0x00FF) | (u16::from(value) << 8);
                     self.irq_counter = self.irq_latch;
                 }
+                0x0D => {
+                    if let Some(datach) = &mut self.datach {
+                        datach.write_control(value);
+                    }
+                }
                 _ => {}
             }
             return;
@@ -27575,6 +27804,18 @@ impl Mapper for BandaiFcg {
         };
         datach.load(pixels);
         true
+    }
+
+    fn datach_eeprom(&self) -> Vec<u8> {
+        self.datach
+            .as_ref()
+            .map_or_else(Vec::new, |datach| datach.eeprom_image().to_vec())
+    }
+
+    fn load_datach_eeprom(&mut self, bytes: &[u8]) {
+        if let Some(datach) = &mut self.datach {
+            datach.load_eeprom(bytes);
+        }
     }
 
     fn acknowledge_irq(&mut self) {
@@ -35762,6 +36003,107 @@ mod tests {
         assert!(!cart.set_datach_barcode("123"));
         let mut nrom = Cartridge::from_ines(&synth_banked(0, 32, 8)).expect("nrom");
         assert!(!nrom.set_datach_barcode("012345678905"));
+    }
+
+    fn i2c_ctrl(scl: bool, sda: bool) -> u8 {
+        (u8::from(sda) << 6) | (u8::from(scl) << 5)
+    }
+
+    fn i2c_start(datach: &mut Datach) {
+        datach.write_control(i2c_ctrl(true, true));
+        datach.write_control(i2c_ctrl(true, false));
+    }
+
+    fn i2c_stop(datach: &mut Datach) {
+        datach.write_control(i2c_ctrl(true, false));
+        datach.write_control(i2c_ctrl(true, true));
+    }
+
+    /// Clocks one byte out, then samples the ACK slot (which must be low).
+    fn i2c_write(datach: &mut Datach, byte: u8) {
+        for bit in (0..8).rev() {
+            let sda = (byte >> bit) & 1 != 0;
+            datach.write_control(i2c_ctrl(false, sda));
+            datach.write_control(i2c_ctrl(true, sda));
+        }
+        // The master always ACKs an address/word/data byte (SDA low).
+        datach.write_control(i2c_ctrl(false, false));
+        datach.write_control(i2c_ctrl(true, false));
+        assert_eq!(datach.read() & 0x10, 0, "device must ACK its address/data");
+        datach.write_control(i2c_ctrl(false, false));
+    }
+
+    /// Clocks one byte in and returns it; `ack` drives the master ACK bit.
+    /// The caller must have left SCL low with the first data bit presented
+    /// (which `i2c_write` does after the read address byte).
+    fn i2c_read(datach: &mut Datach, ack: bool) -> u8 {
+        let mut byte = 0u8;
+        for bit in 0..8 {
+            datach.write_control(i2c_ctrl(true, true));
+            byte = (byte << 1) | u8::from(datach.read() & 0x10 != 0);
+            if bit < 7 {
+                datach.write_control(i2c_ctrl(false, true));
+            }
+        }
+        // Start and sample the master's ACK/NACK slot.
+        datach.write_control(i2c_ctrl(false, !ack));
+        datach.write_control(i2c_ctrl(true, !ack));
+        // The trailing falling edge presents the next byte's first bit (or
+        // ends the transfer after a NACK).
+        datach.write_control(i2c_ctrl(false, true));
+        byte
+    }
+
+    #[test]
+    fn datach_x24c02_round_trips_bytes_over_i2c() {
+        let mut datach = Datach::default();
+        // Write 0x5A to word address 0x10, then 0xA5 to 0x11.
+        i2c_start(&mut datach);
+        i2c_write(&mut datach, 0xA0);
+        i2c_write(&mut datach, 0x10);
+        i2c_write(&mut datach, 0x5A);
+        i2c_write(&mut datach, 0xA5);
+        i2c_stop(&mut datach);
+        assert_eq!(datach.eeprom.data[0x10], 0x5A);
+        assert_eq!(datach.eeprom.data[0x11], 0xA5);
+
+        // Random read from 0x10; the address counter must auto-increment.
+        i2c_start(&mut datach);
+        i2c_write(&mut datach, 0xA0);
+        i2c_write(&mut datach, 0x10);
+        i2c_stop(&mut datach);
+        i2c_start(&mut datach);
+        i2c_write(&mut datach, 0xA1);
+        assert_eq!(i2c_read(&mut datach, true), 0x5A);
+        assert_eq!(i2c_read(&mut datach, false), 0xA5);
+        i2c_stop(&mut datach);
+
+        // A non-matching device address is not acknowledged and must not
+        // disturb the stored data.
+        i2c_start(&mut datach);
+        for bit in (0..8).rev() {
+            let sda = (0xA2u8 >> bit) & 1 != 0;
+            datach.write_control(i2c_ctrl(false, sda));
+            datach.write_control(i2c_ctrl(true, sda));
+        }
+        datach.write_control(i2c_ctrl(false, true));
+        datach.write_control(i2c_ctrl(true, true));
+        assert_ne!(datach.read() & 0x10, 0, "foreign address is NACKed");
+        i2c_stop(&mut datach);
+        assert_eq!(datach.eeprom.data[0x10], 0x5A);
+    }
+
+    #[test]
+    fn datach_eeprom_survives_a_cartridge_snapshot() {
+        let rom = synth_banked(157, 256, 8);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        cart.load_datach_eeprom(&[0x42; 256]);
+        assert_eq!(cart.datach_eeprom(), vec![0x42; 256]);
+        let mut state = Vec::new();
+        cart.save_state(&mut state).expect("state");
+        let mut other = Cartridge::from_ines(&rom).expect("cart");
+        other.load_state(&state).expect("load");
+        assert_eq!(other.datach_eeprom(), vec![0x42; 256]);
     }
 
     #[test]

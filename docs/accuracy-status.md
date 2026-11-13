@@ -2096,3 +2096,19 @@ build for 10 seconds without a shader or GL error. The settings file persists
 `shader`, `brightness`, `sharpness`, `rewind_mb` and `run_ahead`; supersampling
 still applies to the egui path, while GPU presets sample the 256x240 texture
 at display resolution.
+
+### 2026-11-13 — Datach X24C02 EEPROM
+
+Replaced the stubbed-high EEPROM data line with a bit-level X24C02 model.
+`$800D` bit 5 is SCL, bit 6 is the host SDA output and bit 7 is the direction
+(1 = read); `$6000` bit 4 returns the open-drain SDA line. START/STOP are
+detected while SCL is high, bits are sampled on rising edges and shifted out
+on falling edges, the device address is `1010 000` plus the R/W bit, and the
+address counter auto-increments across write and sequential-read transfers.
+
+The 256-byte array is part of the mapper save state and is persisted to
+`<save dir>/datach.eeprom`, shared by every Datach game as on the real
+adapter. Tests bit-bang a write of two bytes, a random read with auto-
+increment, a foreign-address NACK and a save-state round trip. A 600-frame
+trace of Crayon Shin-chan (Datach) runs without errors. The external X24C01
+(Battle Rush) and the Miracle Piano MIDI replies remain unimplemented.
