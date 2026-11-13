@@ -14,6 +14,57 @@ drop point; the committed tests skip cleanly when it is absent.
 
 See `docs/accuracy-status.md` for the dated evidence.
 
+## Local reference trees
+
+`/var/home/Lordra/ai/refs` contains additional local assets; they are not
+committed.
+
+### BIOS (`refs/bios`)
+
+| File | Result |
+|---|---|
+| `disksys.rom` (8 KiB) | FDS BIOS, SHA-256 `99c18490…b0178` (matches MAME `rp2c33a-01a.bin`) |
+| `Batocera…/mame/bios/fc_disksys.zip` | Two revisions: `rp2c33-01.bin` (`fdc1a76e…12dd72`) and `rp2c33a-01a.bin` (`99c18490…b0178`) |
+| `Batocera…/fdsbios.zip` and `fc_disksys.zip` | `fdsbios.nes` is the same image as `disksys.rom` |
+| `Batocera…/mame/bios/playch10.zip` | PlayChoice-10 BIOS files (`pch1-c_8m`, `pch1-c_8te`, …); no PC10 games are present |
+| `Batocera…/mame/bios/nes_rob.zip` | R.O.B. firmware (`rfc-cpu10.ic1`) |
+| `Batocera…/gamegenie.nes` | Game Genie BIOS ROM |
+| `Batocera…/nes.pal` | NES palette file for display tests |
+| `Batocera…/MesenNesDB.txt`, `mame/hash/nes*.xml` | Game/mapper databases, not ROMs |
+
+The FDS BIOS revisions boot `fdsirqtestsV7_patched.fds` for 600 frames with
+identical traces, but *Akumajou Dracula* differs from frame 5 between
+`rp2c33-01` and `rp2c33a-01a`; the revision is observable and must be
+selectable.
+
+Still absent: **VS. System BIOS/palette dumps**, **PlayChoice-10 game ROMs**,
+**Miracle Piano firmware**, and the **Datach external X24C01** dump.
+
+### RustyNES test tree (`refs/rustynes/tests/roms`, 341 `.nes`)
+
+This adds the x0000 APU tests, `holy_mapperel`, `extra/{apu,cpu,mappers,ppu}`,
+`audio-tests`, `dap`, `mmc5`, `mmc1_a12`, `m22` and a full copy of the blargg
+suites. Latest probe run:
+
+- **146 passes**
+- **18 failures** (the 15 above plus `extra/apu/apu_test_2`, `apu_test_5`
+  and `apu_test_6`)
+- **177 without a machine-readable verdict**
+
+The three new APU failures are the exact-cycle frame-counter write-coincidence
+tests: our counter merges at 29830/29831 and 37282/37283 for some phases but
+not all of them.
+
+`holy_mapperel` runs to the title/menu path but produces a uniform frame in
+the headless probe, so it needs an input script or a screenshot oracle.
+
+### Commercial FDS images
+
+`refs/Minerva_Myrient/No-Intro/Nintendo - Family Computer Disk System (FDS)`
+and the `(QD)` folder contain FDS titles, including *Akumajou Dracula*.
+The core/CLI can boot them with a `--bios` path; the desktop app still has no
+`.fds` loader.
+
 ## NESdev archive (`christopherpow/nes-test-roms`, 263 `.nes`)
 
 Downloaded to a temporary directory and run with:

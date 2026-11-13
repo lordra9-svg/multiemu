@@ -26,6 +26,9 @@ None in AccuracyCoin. All non-DRAW rows pass.
   are corrupted (the other four DMC/read tests pass).
 - `pal_apu_tests` 04-08 and 10-11 — PAL APU/PPU phase; the length-counter,
   length-table and IRQ-flag tests pass in PAL mode.
+- `extra/apu/apu_test_2`, `apu_test_5`, `apu_test_6` — the exact-cycle
+  `$4017` write-coincidence tests: the frame counter's write-delay window is
+  one cycle too narrow at 29831 and at 37282/37283.
 - The `read_joy3/thorough_test` failure is input-dependent (no controller
   script is supplied).
 
