@@ -1865,10 +1865,10 @@ Continued the *Gimmick!* audio investigation with the MiSTer Sunsoft HDL
 - **DMC DAC (real fix).** The 7-bit counter output always feeds the mixer,
   regardless of `$4015` bit 4 or an empty sample buffer (NESdev APU DMC;
   Mesen's `AddOutput` path). Unko muted it, so *Gimmick!*'s `$4011 = 2` read as
-  0. With the fix the entire frame 20 matches the oracle cycle-for-cycle
-  (pulse 1/2, triangle, noise, DMC, expansion mix and total), and *Batman
-  (Japan)*, an FME-7 title without expansion audio, matches all channels and
-  the mix at frame 400.
+  0. With the fix the entire frame 20 matches the oracle after the documented
+  frame-origin alignment (pulse 1/2, triangle, noise, DMC, expansion mix and
+  total), and *Batman (Japan)*, an FME-7 title without expansion audio,
+  matches all channels and the mix at frame 400.
 - **5B mixer `$07` (oracle bug, ours correct).** The datasheet/wiki/HDL layout
   is `--CB Acba` (tone bits 0/1/2, noise bits 3/4/5). RustyNES uses
   interleaved tone 0/2/4 and noise 1/3/5, so it enables noise A from
