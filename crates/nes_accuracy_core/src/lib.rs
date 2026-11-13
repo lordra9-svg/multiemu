@@ -12,6 +12,7 @@ pub mod accuracycoin;
 pub mod apu;
 pub mod bus;
 pub mod cart;
+pub mod cheats;
 pub mod clock;
 pub mod cpu;
 pub mod nsf;
@@ -26,6 +27,7 @@ pub use accuracycoin::{
 pub use apu::Apu;
 pub use bus::{CpuBus, RamBus};
 pub use cart::{CartError, Cartridge, Header, Mapper, Mirroring};
+pub use cheats::{GameGenie, GenieError};
 pub use clock::{Region, Timing};
 pub use cpu::{Cpu, Registers, Status};
 pub use nsf::{Nsf, NsfError, NsfHeader};
@@ -35,10 +37,10 @@ pub use system::System;
 
 use crate::clock::Region as ClockRegion;
 use unko_core::{
-    Accuracy, ApuState, AudioBuffer, AudioFilterModel, AudioQuality, AudioSource, Core, CoreError,
-    CoreInfo, CoreRegistration, CpuState, DebugSpace, Disassembly, Features, FrameBuffer,
-    FrameStats, InputState, LoadOptions, Palette, PixelFormat, PortDevice, PpuResetBehavior,
-    PpuState, RamClear, Region as HostRegion, SystemId, VideoFilter,
+    Accuracy, ApuState, AudioBuffer, AudioFilterModel, AudioQuality, AudioSource, Cheat, Core,
+    CoreError, CoreInfo, CoreRegistration, CpuState, DebugSpace, Disassembly, Features,
+    FrameBuffer, FrameStats, InputState, LoadOptions, Palette, PixelFormat, PortDevice,
+    PpuResetBehavior, PpuState, RamClear, Region as HostRegion, SystemId, VideoFilter,
 };
 
 /// Stable id of this core implementation.
@@ -96,6 +98,7 @@ pub struct AccuracyCore {
     audio_source: AudioSource,
     ram_clear: RamClear,
     ppu_reset: PpuResetBehavior,
+    cheats: Vec<Cheat>,
 }
 
 impl AccuracyCore {
@@ -116,6 +119,7 @@ impl AccuracyCore {
             audio_source: AudioSource::Both,
             ram_clear: RamClear::Zero,
             ppu_reset: PpuResetBehavior::Famicom,
+            cheats: Vec::new(),
         }
     }
 }
@@ -222,6 +226,7 @@ impl Core for AccuracyCore {
         system.set_audio_source(self.audio_source);
         system.set_ram_clear(self.ram_clear);
         system.set_ppu_reset_behavior(self.ppu_reset);
+        system.set_cheats(&self.cheats);
         self.sample_rate = rate;
         self.system = Some(system);
         Ok(())
@@ -346,6 +351,13 @@ impl Core for AccuracyCore {
         self.ppu_reset = behavior;
         if let Some(system) = self.system.as_mut() {
             system.set_ppu_reset_behavior(behavior);
+        }
+    }
+
+    fn set_cheats(&mut self, cheats: &[Cheat]) {
+        self.cheats = cheats.to_vec();
+        if let Some(system) = self.system.as_mut() {
+            system.set_cheats(cheats);
         }
     }
 

@@ -388,6 +388,8 @@ pub struct Settings {
     pub layout_devices: Option<[f32; 4]>,
     /// Remembered Debugger OS-window geometry.
     pub layout_debugger: Option<[f32; 4]>,
+    /// Remembered Cheats OS-window geometry.
+    pub layout_cheats: Option<[f32; 4]>,
 }
 
 impl Default for Settings {
@@ -449,6 +451,7 @@ impl Default for Settings {
             layout_settings: None,
             layout_devices: None,
             layout_debugger: None,
+            layout_cheats: None,
         }
     }
 }
@@ -595,6 +598,7 @@ impl Settings {
                 "layout_settings" => settings.layout_settings = parse_layout(value),
                 "layout_devices" => settings.layout_devices = parse_layout(value),
                 "layout_debugger" => settings.layout_debugger = parse_layout(value),
+                "layout_cheats" => settings.layout_cheats = parse_layout(value),
                 "library_root" => {
                     if let Some((system, path)) = value.split_once('|') {
                         settings.library_roots.push(LibraryRoot {
@@ -722,6 +726,7 @@ shader={}
 layout_settings={}
 layout_devices={}
 layout_debugger={}
+layout_cheats={}
 ",
             self.rom_dir.display(),
             self.save_dir.display(),
@@ -798,6 +803,7 @@ layout_debugger={}
             layout_text(self.layout_settings),
             layout_text(self.layout_devices),
             layout_text(self.layout_debugger),
+            layout_text(self.layout_cheats),
         );
         for root in &self.library_roots {
             text.push_str(&format!(

@@ -5,8 +5,8 @@ use std::fmt;
 use crate::debug::{ApuState, CpuState, DebugSpace, Disassembly, PpuState};
 use crate::input::InputState;
 use crate::types::{
-    AudioBuffer, AudioFilterModel, AudioQuality, AudioSource, CoreInfo, FrameBuffer, FrameStats,
-    LoadOptions, Palette, PortDevice, PpuResetBehavior, RamClear, VideoFilter,
+    AudioBuffer, AudioFilterModel, AudioQuality, AudioSource, Cheat, CoreInfo, FrameBuffer,
+    FrameStats, LoadOptions, Palette, PortDevice, PpuResetBehavior, RamClear, VideoFilter,
 };
 
 /// Errors a core may return to the host.
@@ -126,6 +126,10 @@ pub trait Core {
 
     /// Selects the PPU register behaviour on a soft reset.
     fn set_ppu_reset_behavior(&mut self, _behavior: PpuResetBehavior) {}
+
+    /// Replaces the active cheat overlay. The core applies it as host
+    /// presentation state; it is never serialized.
+    fn set_cheats(&mut self, _cheats: &[Cheat]) {}
 
     /// Sets the per-channel mixer gains in
     /// `[pulse1, pulse2, triangle, noise, dmc, expansion]` order.

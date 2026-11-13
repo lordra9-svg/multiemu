@@ -707,3 +707,26 @@ impl MaskEdges {
         }
     }
 }
+
+/// One decoded cheat code. Host preferences, never part of a save state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cheat {
+    /// A Game Genie substitution on a PRG address (`$8000-$FFFF`).
+    GameGenie {
+        /// Original user-entered code, kept for editing/display.
+        code: String,
+        /// CPU address to intercept.
+        address: u16,
+        /// Value to return instead of the ROM byte.
+        value: u8,
+        /// Optional compare byte (8-character codes only).
+        compare: Option<u8>,
+    },
+    /// A raw RAM write applied before each frame.
+    Ram {
+        /// CPU address (`$0000-$07FF` for work RAM).
+        address: u16,
+        /// Value to write.
+        value: u8,
+    },
+}

@@ -16,6 +16,7 @@ use unko_core::{
 };
 
 use crate::audio::AudioOutput;
+use crate::cheats::{self, CheatEntry};
 use crate::debugger::{self, Action};
 use crate::gamepad::{
     button_name, mapping_from_text, mapping_to_text, Gamepads, NesButton, PadMapping,
@@ -90,6 +91,12 @@ pub struct App {
     paused_by_focus: bool,
     debug_on_start: bool,
     devices_open: bool,
+    cheats_open: bool,
+    cheats: Vec<CheatEntry>,
+    cheat_code: String,
+    cheat_addr: String,
+    cheat_value: String,
+    cheat_error: Option<String>,
     microphone: bool,
     datach_code: String,
     confirm_reset: bool,
@@ -166,6 +173,12 @@ impl App {
             paused_by_focus: false,
             debug_on_start: args.debug,
             devices_open: false,
+            cheats_open: false,
+            cheats: Vec::new(),
+            cheat_code: String::new(),
+            cheat_addr: String::new(),
+            cheat_value: String::new(),
+            cheat_error: None,
             microphone: false,
             datach_code: String::new(),
             confirm_reset: false,
@@ -258,6 +271,14 @@ impl App {
                 };
                 self.set_status(format!("Loaded {} — {}", entry.title, player.core_label()));
                 self.player = Some(player);
+                if let Some(player) = &self.player {
+                    let path = self
+                        .settings
+                        .save_dir
+                        .join(format!("{}.cheats", player.stem));
+                    self.cheats = cheats::load(&path);
+                }
+                self.apply_cheats();
                 if self.debug_on_start {
                     if let Some(player) = &mut self.player {
                         player.debug.open = true;
@@ -289,6 +310,34 @@ impl App {
         if let Some(mut player) = self.player.take() {
             player.shutdown();
             self.set_status(format!("Stopped {}", player.title));
+        }
+        self.cheats.clear();
+        self.cheats_open = false;
+        self.cheat_error = None;
+    }
+
+    fn apply_cheats(&mut self) {
+        let active: Vec<unko_core::Cheat> = self
+            .cheats
+            .iter()
+            .filter(|entry| entry.enabled)
+            .map(|entry| entry.cheat.clone())
+            .collect();
+        if let Some(player) = &mut self.player {
+            player.set_cheats(&active);
+        }
+    }
+
+    fn save_cheats(&mut self) {
+        let Some(player) = &self.player else {
+            return;
+        };
+        let path = self
+            .settings
+            .save_dir
+            .join(format!("{}.cheats", player.stem));
+        if let Err(err) = cheats::save(&path, &self.cheats) {
+            self.set_status(format!("Cheat save failed: {err}"));
         }
     }
 
@@ -666,6 +715,13 @@ impl App {
                     }
                     if ui.button("Devices").clicked() {
                         self.devices_open = true;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(self.player.is_some(), egui::Button::new("Cheats"))
+                        .clicked()
+                    {
+                        self.cheats_open = true;
                         ui.close_menu();
                     }
                     ui.separator();
@@ -1291,6 +1347,214 @@ impl App {
         }
     }
 
+    fn cheats_window(&mut self, ctx: &egui::Context) {
+        if !self.cheats_open {
+            return;
+        }
+        let mut open = self.cheats_open;
+        if self.detached_windows() {
+            let id = egui::ViewportId::from_hash_of(("unko-cheats", self.window_generation));
+            let mut builder = egui::ViewportBuilder::default()
+                .with_title("Cheats — Unko")
+                .with_min_inner_size([560.0, 360.0])
+                .with_resizable(true);
+            builder = if let Some([x, y, width, height]) = self.settings.layout_cheats {
+                builder
+                    .with_position([x, y])
+                    .with_inner_size([width, height])
+            } else {
+                builder.with_inner_size([700.0, 480.0])
+            };
+            let mut closed = false;
+            let mut layout = None;
+            ctx.show_viewport_immediate(id, builder, |ctx, _class| {
+                self.cheats_frame(ctx, false);
+                let info = ctx.input(|input| input.viewport().clone());
+                if let Some(outer) = info.outer_rect {
+                    let size = info.inner_rect.map_or(outer.size(), |rect| rect.size());
+                    layout = Some([outer.min.x, outer.min.y, size.x, size.y]);
+                }
+                if ctx.input(|input| input.viewport().close_requested()) {
+                    closed = true;
+                }
+            });
+            if let Some(layout) = layout {
+                self.settings.layout_cheats = Some(layout);
+            }
+            if closed {
+                open = false;
+                let _ = self.settings.save(&Settings::path());
+            }
+        } else {
+            self.cheats_frame(ctx, true);
+        }
+        self.cheats_open = open;
+    }
+
+    fn cheats_frame(&mut self, ctx: &egui::Context, embedded: bool) {
+        if self.player.is_none() {
+            if embedded {
+                egui::Window::new("Cheats").show(ctx, |ui| {
+                    ui.label("Load a game to edit its cheats.");
+                });
+            }
+            return;
+        }
+        let mut entries = self.cheats.clone();
+        let mut code = self.cheat_code.clone();
+        let mut address = self.cheat_addr.clone();
+        let mut value = self.cheat_value.clone();
+        let mut error = self.cheat_error.clone();
+        let mut add_genie = false;
+        let mut add_ram = false;
+        let mut changed = false;
+
+        let mut body = |ui: &mut egui::Ui| {
+            ui.heading("Cheats");
+            ui.label(
+                RichText::new(
+                    "Game Genie codes patch PRG reads; raw RAM writes apply before each frame. \
+                     Up to 32 entries, stored per game beside the save states.",
+                )
+                .weak()
+                .small(),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Game Genie");
+                ui.add(
+                    egui::TextEdit::singleline(&mut code)
+                        .hint_text("SXIOPO")
+                        .desired_width(140.0),
+                );
+                if ui
+                    .add_enabled(entries.len() < 32, egui::Button::new("Add"))
+                    .clicked()
+                {
+                    add_genie = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Raw RAM");
+                ui.add(
+                    egui::TextEdit::singleline(&mut address)
+                        .hint_text("0010")
+                        .desired_width(70.0),
+                );
+                ui.label("=");
+                ui.add(
+                    egui::TextEdit::singleline(&mut value)
+                        .hint_text("99")
+                        .desired_width(50.0),
+                );
+                if ui
+                    .add_enabled(entries.len() < 32, egui::Button::new("Add"))
+                    .clicked()
+                {
+                    add_ram = true;
+                }
+            });
+            if let Some(error) = &error {
+                ui.colored_label(Color32::from_rgb(0xE0, 0x80, 0x60), error);
+            }
+            ui.separator();
+            if entries.is_empty() {
+                ui.label(RichText::new("No cheats for this game.").weak());
+            }
+            let mut remove = None;
+            for (index, entry) in entries.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut entry.enabled, "").changed() {
+                        changed = true;
+                    }
+                    ui.label(entry.label());
+                    if ui.button("Remove").clicked() {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = remove {
+                entries.remove(index);
+                changed = true;
+            }
+        };
+
+        if embedded {
+            egui::Window::new("Cheats")
+                .default_width(680.0)
+                .default_height(420.0)
+                .resizable(true)
+                .show(ctx, |ui| body(ui));
+        } else {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.add_space(6.0);
+                body(ui);
+            });
+        }
+
+        if add_genie {
+            if entries.len() >= 32 {
+                error = Some("32 cheats maximum".into());
+            } else {
+                match nes_accuracy_core::GameGenie::parse(&code) {
+                    Ok(decoded) => {
+                        entries.push(CheatEntry {
+                            cheat: unko_core::Cheat::GameGenie {
+                                code: decoded.code().to_string(),
+                                address: decoded.address(),
+                                value: decoded.value(),
+                                compare: decoded.compare(),
+                            },
+                            enabled: true,
+                        });
+                        code.clear();
+                        error = None;
+                        changed = true;
+                    }
+                    Err(err) => error = Some(err.to_string()),
+                }
+            }
+        }
+        if add_ram {
+            if entries.len() >= 32 {
+                error = Some("32 cheats maximum".into());
+            } else {
+                let parse_address =
+                    u16::from_str_radix(address.trim().trim_start_matches("0x"), 16);
+                let parse_value = u8::from_str_radix(value.trim().trim_start_matches("0x"), 16);
+                match (parse_address, parse_value) {
+                    (Ok(addr), Ok(val)) if addr < 0x2000 => {
+                        entries.push(CheatEntry {
+                            cheat: unko_core::Cheat::Ram {
+                                address: addr,
+                                value: val,
+                            },
+                            enabled: true,
+                        });
+                        address.clear();
+                        value.clear();
+                        error = None;
+                        changed = true;
+                    }
+                    (Ok(_), Ok(_)) => {
+                        error = Some("Raw RAM cheats use $0000-$07FF".into());
+                    }
+                    _ => error = Some("Address and value must be hexadecimal".into()),
+                }
+            }
+        }
+
+        self.cheats = entries;
+        self.cheat_code = code;
+        self.cheat_addr = address;
+        self.cheat_value = value;
+        self.cheat_error = error;
+        if changed {
+            self.apply_cheats();
+            self.save_cheats();
+        }
+    }
+
     fn devices_window(&mut self, ctx: &egui::Context) {
         if !self.devices_open {
             return;
@@ -1796,6 +2060,7 @@ impl eframe::App for App {
 
         self.settings_window(ctx);
         self.devices_window(ctx);
+        self.cheats_window(ctx);
         self.about_window(ctx);
         self.open_rom_window(ctx);
         self.reset_confirmation(ctx);

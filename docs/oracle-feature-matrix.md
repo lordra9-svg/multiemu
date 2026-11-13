@@ -134,8 +134,8 @@ matrix above is the comparison; this list is the work queue.
   windows, Devices matrix and reset-all.
 
 **Still needed — player-facing**
-1. **Cheats**: Game Genie encode/decode plus raw RAM cheats, per-game
-   persistence, enable/disable. MiSTer supports 32 codes; Unko has none.
+1. **Cheats**: Game Genie (6/8-character with compare) and raw RAM, up to 32
+   entries per game, enable/disable and per-game persistence are implemented.
 2. **Speed and rewind**: fast-forward (hold), 25-300% presets and frame
    advance are implemented. The rewind ring over the deterministic
    `UNKOST06` states is still queued (states are 0.7–1.5 MB, so the ring needs

@@ -648,6 +648,11 @@ impl Player {
         self.core.set_microphone(pressed);
     }
 
+    /// Replaces the active cheat overlay.
+    pub fn set_cheats(&mut self, cheats: &[unko_core::Cheat]) {
+        self.core.set_cheats(cheats);
+    }
+
     /// Loads a Datach barcode (mapper 157); returns false for other boards.
     pub fn set_datach_barcode(&mut self, code: &str) -> bool {
         self.core.set_datach_barcode(code)

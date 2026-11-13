@@ -183,6 +183,11 @@ platform toolchains.
   import. The generated models are parameter variations of the ares NTSC
   waveform model (ISC), not hardware captures; Canonical + Raw is the default
   so reference traces stay comparable. See Settings -> Graphics.
+- Cheats: Game Genie (6/8-character, with compare) and raw RAM writes, up to
+  32 entries per game, enable/disable, stored as `<stem>.cheats` beside the
+  states. Open from Tools -> Cheats; Game Genie substitutions apply to PRG
+  reads and raw RAM writes apply before each frame. Cheats are host state and
+  never enter a save state.
 - Recording: WAV audio, numbered PNG frames and animated GIF, written under
   `saves/recordings`; all encoders are pure Rust and work on every target.
 - State/SRAM: `saves/<rom>.<core>.slotN.state` and `saves/<rom>.sav`; the core

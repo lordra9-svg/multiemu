@@ -2010,3 +2010,17 @@ Added 25/50/100/150/200/300% playback presets, hold-to-fast-forward (Tab,
 core is still driven one frame at a time and all accuracy gates are
 unchanged; audio is paused whenever the speed is not 100% so the output
 cannot drift or pitch-shift, and it flushes on return to normal speed.
+
+### 2026-11-13 — Game Genie and raw RAM cheats
+
+Added a per-game cheat engine: Game Genie 6-character substitutions and
+8-character substitutions with a compare byte, plus raw work-RAM writes.
+Game Genie patches are applied on both the CPU and DMA PRG read paths; raw
+RAM cheats are written before each frame and immediately on edit. Up to 32
+entries are stored as `<stem>.cheats`, with enable/disable and a detachable
+Cheats window. Cheats are host presentation state and are never serialized
+into a save state; the canonical/no-cheat output is unchanged.
+
+The decoder is pinned by the published `SXIOPO` (`$91D9 = $AD`) and
+`YYKPOYZZ` (`$9F41 = $77` if `$22`) examples. Tests cover decoding, compare
+gating, immediate/frame RAM writes and the cheat-file round trip.

@@ -11,7 +11,7 @@ use crate::clock::Timing;
 use crate::cpu::Cpu;
 use crate::ppu::Ppu;
 use unko_core::{
-    AudioFilterModel, AudioQuality, AudioSource, DebugSpace, PpuResetBehavior, RamClear,
+    AudioFilterModel, AudioQuality, AudioSource, Cheat, DebugSpace, PpuResetBehavior, RamClear,
 };
 
 /// CPU clock in Hz (NTSC).
@@ -78,6 +78,8 @@ pub struct System {
     ram_clear: RamClear,
     /// PPU register behaviour on soft reset.
     ppu_reset: PpuResetBehavior,
+    /// Active cheat overlay (host preference, not serialized).
+    cheats: Vec<Cheat>,
     open_bus: u8,
     /// Internal 2A03 data bus (drives $4015 bit 5, not the external bus).
     internal_bus: u8,
@@ -603,6 +605,7 @@ impl System {
             audio_source: AudioSource::Both,
             ram_clear: RamClear::Zero,
             ppu_reset: PpuResetBehavior::Famicom,
+            cheats: Vec::new(),
             open_bus: 0,
             internal_bus: 0,
             stall_cycles: 0,
@@ -655,6 +658,7 @@ impl System {
         if self.ppu_reset == PpuResetBehavior::Nes {
             self.ppu.soft_reset_registers();
         }
+        self.apply_ram_cheats();
     }
 
     /// Attaches a device to a controller port.
@@ -778,6 +782,41 @@ impl System {
     /// Selects the PPU register behaviour on a soft reset.
     pub fn set_ppu_reset_behavior(&mut self, behavior: PpuResetBehavior) {
         self.ppu_reset = behavior;
+    }
+
+    /// Replaces the cheat overlay and applies any raw RAM writes immediately.
+    pub fn set_cheats(&mut self, cheats: &[Cheat]) {
+        self.cheats = cheats.to_vec();
+        self.apply_ram_cheats();
+    }
+
+    /// Applies a Game Genie substitution to a PRG read.
+    fn genie_read(&self, address: u16, original: u8) -> u8 {
+        for cheat in &self.cheats {
+            if let Cheat::GameGenie {
+                address: code_address,
+                value,
+                compare,
+                ..
+            } = cheat
+            {
+                if *code_address == address && compare.is_none_or(|expected| expected == original) {
+                    return *value;
+                }
+            }
+        }
+        original
+    }
+
+    /// Writes raw RAM cheats before each frame.
+    fn apply_ram_cheats(&mut self) {
+        for cheat in &self.cheats {
+            if let Cheat::Ram { address, value } = cheat {
+                if *address < 0x2000 {
+                    self.ram[usize::from(*address) & 0x07FF] = *value;
+                }
+            }
+        }
     }
 
     /// Re-applies the host's audio preferences to a freshly built or restored
@@ -1011,6 +1050,7 @@ impl System {
     /// Runs one full display frame.
     pub fn run_frame(&mut self) -> u32 {
         self.sync_cartridge();
+        self.apply_ram_cheats();
         self.audio.clear();
         if self.first_frame_pending {
             self.first_frame_pending = false;
@@ -1753,7 +1793,7 @@ impl System {
                 }
             }
             0x8000..=0xFFFF => {
-                let rom = self.cart.cpu_read(address);
+                let rom = self.genie_read(address, self.cart.cpu_read(address));
                 // The APU registers are mirrored every $20 bytes; a DMA read
                 // whose low five bits select a controller port conflicts with
                 // it: bits 5-7 come from ROM, bits 0-4 from the controller.
@@ -1844,7 +1884,10 @@ impl CpuBus for System {
                     self.cart.cpu_read(address)
                 }
             }
-            0x8000..=0xFFFF => self.cart.cpu_read_io(address),
+            0x8000..=0xFFFF => {
+                let rom = self.cart.cpu_read_io(address);
+                self.genie_read(address, rom)
+            }
             _ => self.open_bus,
         };
         if drives_bus {
@@ -2275,6 +2318,41 @@ mod tests {
             "44.1 kHz frame produced {n} samples"
         );
         assert!(system.audio().iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn game_genie_patches_prg_reads_and_honors_compare() {
+        let mut system = System::from_ines(&synthetic_nrom(0)).expect("load");
+        let original = system.cart.cpu_read(0x8000);
+        let patched = original ^ 0xFF;
+        system.set_cheats(&[Cheat::GameGenie {
+            code: "SXIOPO".into(),
+            address: 0x8000,
+            value: patched,
+            compare: None,
+        }]);
+        assert_eq!(system.read(0x8000), patched);
+
+        system.set_cheats(&[Cheat::GameGenie {
+            code: "YYKPOYZZ".into(),
+            address: 0x8000,
+            value: patched,
+            compare: Some(original.wrapping_add(1)),
+        }]);
+        assert_eq!(system.read(0x8000), original, "compare must gate the patch");
+    }
+
+    #[test]
+    fn raw_ram_cheats_apply_immediately_and_before_frames() {
+        let mut system = System::from_ines(&synthetic_nrom(0)).expect("load");
+        system.set_cheats(&[Cheat::Ram {
+            address: 0x0010,
+            value: 0x99,
+        }]);
+        assert_eq!(system.ram[0x10], 0x99);
+        system.ram[0x10] = 0;
+        system.run_frame();
+        assert_eq!(system.ram[0x10], 0x99);
     }
 
     #[test]
