@@ -18,6 +18,19 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 
 None in AccuracyCoin. All non-DRAW rows pass.
 
+### NESdev screen-suite failures (2026-11-13)
+
+- `cpu_interrupts_v2/5-branch_delays_irq` — the branch-delay/IRQ table CRC
+  differs from the reference; the other four interrupt singles pass.
+- `dmc_dma_during_read4/dma_4016_read` — controller bit reads during DMC DMA
+  are corrupted (the other four DMC/read tests pass).
+- `ppu_open_bus` test 7 — a `$2002` read refreshes the low five bits of the
+  PPU I/O-bus decay value; they should keep decaying.
+- `pal_apu_tests` 04-08 and 10-11 — PAL APU/PPU phase; the length-counter,
+  length-table and IRQ-flag tests pass in PAL mode.
+- The `read_joy3/thorough_test` failure is input-dependent (no controller
+  script is supplied).
+
 ### MMC3 A12 timing (2026-11-13)
 
 The new PPU-A12 clocking is 5/6 in `mmc3_test_2` with the alternate-revision

@@ -31,6 +31,33 @@ fn result_text(system: &System) -> String {
     text
 }
 
+fn screen_text(system: &System) -> String {
+    let vram = &system.ppu.vram;
+    let mut out = String::new();
+    for table in 0..4 {
+        let base = table * 0x400;
+        for row in 0..30 {
+            let start = base + row * 32;
+            let line: String = vram[start..start + 32]
+                .iter()
+                .map(|byte| {
+                    if (0x20..0x7F).contains(byte) {
+                        char::from(*byte)
+                    } else {
+                        ' '
+                    }
+                })
+                .collect();
+            let trimmed = line.trim_end();
+            if trimmed.chars().any(|ch| ch.is_ascii_alphanumeric()) {
+                out.push_str(trimmed);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
 fn main() {
     let mut args = env::args().skip(1);
     let path = args.next().expect("usage: testrom <rom> [frames]");
@@ -42,6 +69,9 @@ fn main() {
     let mut system = System::from_ines(&rom).expect("load rom");
     if std::env::var_os("UNKO_MMC3_ALT").is_some() {
         system.set_mmc3_alternate(true);
+    }
+    if std::env::var("UNKO_REGION").as_deref() == Ok("pal") {
+        system.set_region(nes_accuracy_core::Region::Pal);
     }
     let mut text = String::new();
     let mut ran = 0;
@@ -71,4 +101,8 @@ fn main() {
         system.read_ram(0x00F8),
     );
     println!("6000: {}", text.trim());
+    let screen = screen_text(&system);
+    if !screen.trim().is_empty() {
+        println!("screen:\n{}", screen.trim_end());
+    }
 }

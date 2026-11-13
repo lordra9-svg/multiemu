@@ -670,6 +670,9 @@ impl System {
         }
         let mut cpu = system.cpu;
         cpu.reset(&mut system);
+        // Power-on leaves S at $FD; the three dummy stack reads of a *soft*
+        // reset are what decrement it (the cpu_reset suite checks both).
+        cpu.registers.sp = 0xFD;
         // The reference console leaves reset on cycle 8 (one cycle of phase
         // after the CPU's seven-cycle reset sequence), which aligns the PPU
         // frame boundary and the APU cycle parity with its captures.

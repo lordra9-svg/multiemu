@@ -96,7 +96,7 @@ impl Default for Registers {
             y: 0,
             sp: 0xFD,
             pc: 0,
-            p: Status::from_bits(Status::INTERRUPT),
+            p: Status::from_bits(Status::INTERRUPT | Status::BREAK),
         }
     }
 }
@@ -240,7 +240,8 @@ impl Cpu {
 
     /// Performs the 7-cycle reset sequence.
     pub fn reset(&mut self, bus: &mut impl CpuBus) {
-        self.registers.p = Status::from_bits(Status::INTERRUPT);
+        // Reset sets I but leaves the other flags, including B/unused, alone.
+        self.registers.p = Status::from_bits(self.registers.p.bits() | Status::INTERRUPT);
         self.registers.pc = 0;
 
         self.read(bus, 0);
@@ -1485,6 +1486,16 @@ mod tests {
         assert_eq!(cpu.step(&mut bus), 4);
         assert_eq!(bus.memory[0x1234], 0x42);
         assert_eq!(cpu.cycles, 6);
+    }
+
+    #[test]
+    fn power_on_registers_match_the_reference() {
+        let registers = Registers::default();
+        assert_eq!(registers.a, 0);
+        assert_eq!(registers.x, 0);
+        assert_eq!(registers.y, 0);
+        assert_eq!(registers.sp, 0xFD);
+        assert_eq!(registers.p.bits(), 0x34);
     }
 
     #[test]
