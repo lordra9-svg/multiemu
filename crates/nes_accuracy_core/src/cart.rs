@@ -810,6 +810,11 @@ pub trait Mapper: fmt::Debug + MapperState {
         false
     }
 
+    /// Loads a Datach barcode (mapper 157); returns false when unsupported.
+    fn set_datach_barcode(&mut self, _code: &str) -> bool {
+        false
+    }
+
     /// Raw per-channel expansion-audio outputs for differential debugging.
     ///
     /// The channel meaning is board-specific (VRC6: two pulses + saw, MMC5:
@@ -1406,6 +1411,11 @@ impl Cartridge {
     #[must_use]
     pub fn mirroring(&self) -> Mirroring {
         self.mapper.mirroring()
+    }
+
+    /// Loads a Datach barcode (mapper 157); returns false when unsupported.
+    pub fn set_datach_barcode(&mut self, code: &str) -> bool {
+        self.mapper.set_datach_barcode(code)
     }
 
     /// Mapper number.
@@ -27082,6 +27092,150 @@ impl Bandai153 {
     }
 }
 
+/// Datach barcode scanner state (mapper 157).
+///
+/// The scanner returns one pixel per 1000 CPU cycles on `$6000` bit 3
+/// (MAME's `datach.cpp` timer), framed by 61 white pixels before and after
+/// the barcode. The EEPROM data line is stubbed high (idle), matching the
+/// default MAME build.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct Datach {
+    pixels: Vec<bool>,
+    index: usize,
+    countdown: u32,
+    latch: u8,
+}
+
+impl Datach {
+    fn load(&mut self, code: Vec<bool>) {
+        self.pixels.clear();
+        self.pixels.extend(std::iter::repeat_n(true, 61));
+        self.pixels.extend(code);
+        self.pixels.extend(std::iter::repeat_n(true, 61));
+        self.index = 0;
+        self.countdown = 0;
+        self.latch = 0x08; // first leading white pixel
+        self.index = 1.min(self.pixels.len());
+    }
+
+    fn tick(&mut self) {
+        if self.pixels.is_empty() {
+            self.latch = 0;
+            return;
+        }
+        self.countdown += 1;
+        if self.countdown < 1000 {
+            return;
+        }
+        self.countdown = 0;
+        if self.index < self.pixels.len() {
+            self.latch = if self.pixels[self.index] { 0x08 } else { 0 };
+            self.index += 1;
+        } else {
+            self.latch = 0;
+        }
+    }
+
+    fn read(&self) -> u8 {
+        0x40 | self.latch
+    }
+}
+
+// EAN-13/UPC-A modules (1 = white). Tables from the public EAN specification.
+const EAN_LEFT_ODD: [[bool; 7]; 10] = [
+    [true, true, true, false, false, true, false],
+    [true, true, false, false, true, true, false],
+    [true, true, false, true, true, false, false],
+    [true, false, false, false, false, true, false],
+    [true, false, true, true, true, false, false],
+    [true, false, false, true, true, true, false],
+    [true, false, true, false, false, false, false],
+    [true, false, false, false, true, false, false],
+    [true, false, false, true, false, false, false],
+    [true, true, true, false, true, false, false],
+];
+const EAN_LEFT_EVEN: [[bool; 7]; 10] = [
+    [true, false, true, true, false, false, false],
+    [true, false, false, true, true, false, false],
+    [true, true, false, false, true, false, false],
+    [true, false, true, true, true, true, false],
+    [true, true, false, false, false, true, false],
+    [true, false, false, false, true, true, false],
+    [true, true, true, true, false, true, false],
+    [true, true, false, true, true, true, false],
+    [true, true, true, false, true, true, false],
+    [true, true, false, true, false, false, false],
+];
+const EAN_RIGHT: [[bool; 7]; 10] = [
+    [false, false, false, true, true, false, true],
+    [false, false, true, true, false, false, true],
+    [false, false, true, false, false, true, true],
+    [false, true, true, true, true, false, true],
+    [false, true, false, false, false, true, true],
+    [false, true, true, false, false, false, true],
+    [false, true, false, true, true, true, true],
+    [false, true, true, true, false, true, true],
+    [false, true, true, false, true, true, true],
+    [false, false, false, true, false, true, true],
+];
+const EAN_PARITY: [[bool; 6]; 10] = [
+    [true, true, true, true, true, true],
+    [true, true, false, true, false, false],
+    [true, true, false, false, true, false],
+    [true, true, false, false, false, true],
+    [true, false, true, true, false, false],
+    [true, false, false, true, true, false],
+    [true, false, false, false, true, true],
+    [true, false, true, false, true, false],
+    [true, false, true, false, false, true],
+    [true, false, false, true, false, true],
+];
+
+/// Converts a 12-digit UPC-A or 13-digit EAN-13 code into the 95 modules the
+/// scanner reports. The final digit is recomputed as the standard checksum.
+fn datach_pixels(code: &str) -> Option<Vec<bool>> {
+    let digits: Vec<u8> = code
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .map(|character| character as u8 - b'0')
+        .collect();
+    let ean: Vec<u8> = match digits.len() {
+        12 => {
+            let mut ean = vec![0];
+            ean.extend_from_slice(&digits);
+            ean
+        }
+        13 => digits,
+        _ => return None,
+    };
+    let mut sum = 0u32;
+    for (index, digit) in ean.iter().take(12).enumerate() {
+        sum += if index & 1 == 1 {
+            u32::from(*digit) * 3
+        } else {
+            u32::from(*digit)
+        };
+    }
+    let check = ((10 - (sum % 10)) % 10) as usize;
+    let mut pixels = Vec::with_capacity(95);
+    pixels.extend_from_slice(&[false, true, false]);
+    for index in 1..7 {
+        let table = if EAN_PARITY[usize::from(ean[0])][index - 1] {
+            &EAN_LEFT_ODD
+        } else {
+            &EAN_LEFT_EVEN
+        };
+        pixels.extend_from_slice(&table[usize::from(ean[index])]);
+    }
+    pixels.extend_from_slice(&[true, false, true, false, true]);
+    for index in 7..12 {
+        pixels.extend_from_slice(&EAN_RIGHT[usize::from(ean[index])]);
+    }
+    pixels.extend_from_slice(&EAN_RIGHT[check]);
+    pixels.extend_from_slice(&[false, true, false]);
+    Some(pixels)
+}
+
 /// Bandai FCG / LZ93D50 (mapper 16): 16 KiB PRG banks, eight 1 KiB CHR
 /// banks, mirroring control and a 16-bit CPU-cycle down-counter IRQ.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -27102,6 +27256,8 @@ pub struct BandaiFcg {
     /// Mapper 153 battery-backed 8 KiB WRAM and its `$800D` enable bit.
     wram: Vec<u8>,
     wram_enabled: bool,
+    /// Datach barcode scanner state (mapper 157).
+    datach: Option<Datach>,
 }
 
 impl BandaiFcg {
@@ -27129,6 +27285,11 @@ impl BandaiFcg {
                 Vec::new()
             },
             wram_enabled: false,
+            datach: if number == 157 {
+                Some(Datach::default())
+            } else {
+                None
+            },
         }
     }
 
@@ -27171,6 +27332,21 @@ impl Mapper for BandaiFcg {
                 }
                 0xC000..=0xFFFF => {
                     let bank = (0x0F | outer) % banks;
+                    self.prg[bank * 0x4000 + usize::from(address & 0x3FFF)]
+                }
+                _ => 0,
+            };
+        }
+        if self.number == 157 {
+            return match address {
+                0x6000..=0x7FFF => self.datach.as_ref().map_or(0x40, Datach::read),
+                0x8000..=0xBFFF => {
+                    let banks = self.prg_bank_count();
+                    let bank = usize::from(self.prg_bank) % banks;
+                    self.prg[bank * 0x4000 + usize::from(address & 0x3FFF)]
+                }
+                0xC000..=0xFFFF => {
+                    let bank = self.prg_bank_count() - 1;
                     self.prg[bank * 0x4000 + usize::from(address & 0x3FFF)]
                 }
                 _ => 0,
@@ -27374,6 +27550,9 @@ impl Mapper for BandaiFcg {
     }
 
     fn clock_cpu(&mut self) {
+        if let Some(datach) = &mut self.datach {
+            datach.tick();
+        }
         if !self.irq_enabled {
             return;
         }
@@ -27385,6 +27564,17 @@ impl Mapper for BandaiFcg {
                 self.irq_pending = true;
             }
         }
+    }
+
+    fn set_datach_barcode(&mut self, code: &str) -> bool {
+        let Some(datach) = &mut self.datach else {
+            return false;
+        };
+        let Some(pixels) = datach_pixels(code) else {
+            return false;
+        };
+        datach.load(pixels);
+        true
     }
 
     fn acknowledge_irq(&mut self) {
@@ -35536,6 +35726,44 @@ impl Mapper for Benshieng286 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn datach_barcode_generates_ean_modules_and_scans_them() {
+        let pixels = datach_pixels("012345678905").expect("upc-a");
+        assert_eq!(pixels.len(), 95);
+        assert_eq!(&pixels[0..3], &[false, true, false], "start guard");
+        assert_eq!(&pixels[92..95], &[false, true, false], "end guard");
+        assert!(datach_pixels("123").is_none());
+
+        let mut scanner = Datach::default();
+        scanner.load(pixels);
+        assert_ne!(scanner.read() & 0x08, 0, "first leading white pixel");
+        for _ in 0..61_000 {
+            scanner.tick();
+        }
+        assert_eq!(scanner.read() & 0x08, 0, "start guard is black");
+        for _ in 0..1000 {
+            scanner.tick();
+        }
+        assert_ne!(scanner.read() & 0x08, 0, "guard space is white");
+    }
+
+    #[test]
+    fn datach_cartridge_exposes_the_scanner_register() {
+        let rom = synth_banked(157, 256, 8);
+        let mut cart = Cartridge::from_ines(&rom).expect("cart");
+        assert_eq!(cart.mapper(), 157);
+        assert!(cart.set_datach_barcode("012345678905"));
+        assert_ne!(cart.cpu_read(0x6000) & 0x08, 0);
+        for _ in 0..61_000 {
+            cart.clock_cpu();
+        }
+        assert_eq!(cart.cpu_read(0x6000) & 0x08, 0);
+        // Invalid codes are rejected, and non-Datach boards report false.
+        assert!(!cart.set_datach_barcode("123"));
+        let mut nrom = Cartridge::from_ines(&synth_banked(0, 32, 8)).expect("nrom");
+        assert!(!nrom.set_datach_barcode("012345678905"));
+    }
+
     #[test]
     fn fme7_banks_prg_mirrors_and_counts_irq_cycles() {
         // 256 KiB PRG (32 x 8 KiB), 64 KiB CHR (64 x 1 KiB).

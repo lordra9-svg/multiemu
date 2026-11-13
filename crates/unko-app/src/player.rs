@@ -585,6 +585,11 @@ impl Player {
         self.core.set_microphone(pressed);
     }
 
+    /// Loads a Datach barcode (mapper 157); returns false for other boards.
+    pub fn set_datach_barcode(&mut self, code: &str) -> bool {
+        self.core.set_datach_barcode(code)
+    }
+
     /// Supplies the 64-entry table used by the custom palette.
     pub fn set_palette_table(&mut self, table: [[u8; 3]; 64]) {
         self.core.set_palette_table(table);

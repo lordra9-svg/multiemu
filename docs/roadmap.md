@@ -154,10 +154,13 @@ The main effort is now the reference-parity accuracy core. Details in
       Power Pad / Family Trainer (12-button two-bit serial read with an
       on-screen mat), the Family BASIC keyboard (9x8 matrix with the
       documented host-key mapping), the Famicom microphone (`$4016` D2) and
-      the Family BASIC data recorder (cassette loopback on `$4016`). Miracle
-      Piano and Datach remain queued until their protocol ROMs are available.
-      Device state is part of `UNKOST05` save states; the Controllers tab
-      selects a device per port.
+      the Family BASIC data recorder (cassette loopback on `$4016`), the
+      Miracle Piano MIDI transport (port 1) and the Datach barcode scanner
+      (mapper 157, UPC-A/EAN-13 modules at the documented 1000-cycle rate).
+      The piano's MIDI replies and the Datach EEPROM need their real-ROM
+      validation; both transports have synthetic tests. Device state is part
+      of `UNKOST05` save states; the Controllers tab selects a device per
+      port.
 - [ ] FDS (BIOS supplied by the user, never bundled), Vs. System.
 - [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation
       pending).

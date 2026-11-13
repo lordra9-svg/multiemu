@@ -330,9 +330,16 @@ impl Core for AccuracyCore {
                 PortDevice::FourScore => crate::system::PortDevice::FourScore,
                 PortDevice::Microphone => crate::system::PortDevice::Microphone,
                 PortDevice::Tape => crate::system::PortDevice::Tape,
+                PortDevice::MiraclePiano => crate::system::PortDevice::MiraclePiano,
             };
             system.set_port_device(port, device);
         }
+    }
+
+    fn set_datach_barcode(&mut self, code: &str) -> bool {
+        self.system
+            .as_mut()
+            .is_some_and(|system| system.set_datach_barcode(code))
     }
 
     fn set_microphone(&mut self, pressed: bool) {

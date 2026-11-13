@@ -183,6 +183,9 @@ pub enum PortDevice {
     /// Family BASIC data recorder: a cassette loopback on `$4016` bit 0.
     /// Bit 0 of a write is the DAC output and bit 1 enables readback.
     Tape,
+    /// Miracle Piano MIDI transport (controller port 1): OUT0 direction is
+    /// selected by the strobe duration and each read clocks one serial bit.
+    MiraclePiano,
 }
 
 /// Arkanoid paddle state for one port.
@@ -289,6 +292,107 @@ struct Peripherals {
     microphone: bool,
     /// Family BASIC data recorder loopback.
     tape: TapeRecorder,
+    /// Miracle Piano transport state.
+    piano: MiraclePiano,
+}
+
+/// Miracle Piano serial transport. The published interface gives no way to
+/// synthesise the piano's MIDI replies without its firmware, so received
+/// bytes are injected (tests/UI) and transmitted bytes are logged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+enum PianoMode {
+    #[default]
+    Idle,
+    Poll,
+    Send,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct MiraclePiano {
+    out_high: bool,
+    rise_cycle: u64,
+    mode: PianoMode,
+    /// OUT0 level set by the most recent write (the bit clocked in on read).
+    data_bit: bool,
+    tx_shift: u8,
+    tx_bits: u8,
+    /// Bytes the piano would return (MSB-first, inverted on the wire).
+    rx: std::collections::VecDeque<u8>,
+    rx_shift: u8,
+    rx_bits: u8,
+    status_ready: bool,
+    /// Bytes clocked in from the software, for diagnostics/tests.
+    tx_log: Vec<u8>,
+}
+
+impl MiraclePiano {
+    fn write(&mut self, value: u8, cycle: u64) {
+        let high = value & 1 != 0;
+        self.data_bit = high;
+        if self.mode == PianoMode::Send {
+            // After the long strobe, writes carry data bits until eight reads
+            // have clocked them out.
+            return;
+        }
+        if high && !self.out_high {
+            self.out_high = true;
+            self.rise_cycle = cycle;
+        } else if !high && self.out_high {
+            self.out_high = false;
+            let duration = cycle.saturating_sub(self.rise_cycle);
+            if duration >= 64 {
+                // Long strobe: the next eight writes carry a MIDI byte.
+                self.mode = PianoMode::Send;
+                self.tx_shift = 0;
+                self.tx_bits = 0;
+            } else if duration >= 6 {
+                // Short strobe: read a status bit, then (if set) eight bits.
+                self.mode = PianoMode::Poll;
+                self.rx_bits = 0;
+                self.status_ready = !self.rx.is_empty();
+            } else {
+                self.mode = PianoMode::Idle;
+            }
+        }
+    }
+
+    fn read(&mut self) -> u8 {
+        match self.mode {
+            PianoMode::Send => {
+                self.tx_shift = (self.tx_shift << 1) | u8::from(self.data_bit);
+                self.tx_bits += 1;
+                if self.tx_bits == 8 {
+                    if self.tx_log.len() < 256 {
+                        self.tx_log.push(self.tx_shift);
+                    }
+                    self.tx_bits = 0;
+                    self.tx_shift = 0;
+                }
+                u8::from(self.data_bit)
+            }
+            PianoMode::Poll => {
+                if self.rx_bits == 0 {
+                    if !self.status_ready {
+                        self.mode = PianoMode::Idle;
+                        return 0;
+                    }
+                    self.status_ready = false;
+                    self.rx_shift = self.rx.pop_front().unwrap_or(0);
+                    self.rx_bits = 8;
+                    return 1;
+                }
+                let bit = (self.rx_shift >> 7) & 1;
+                self.rx_shift <<= 1;
+                self.rx_bits -= 1;
+                if self.rx_bits == 0 {
+                    self.mode = PianoMode::Idle;
+                }
+                // The eight data bits are inverted on the wire.
+                bit ^ 1
+            }
+            PianoMode::Idle => 0,
+        }
+    }
 }
 
 /// Loopback for the Family BASIC data recorder. The wiki notes that an
@@ -536,6 +640,24 @@ impl System {
     /// Sets the Famicom microphone report (`$4016` bit 2).
     pub fn set_microphone(&mut self, pressed: bool) {
         self.peripherals.microphone = pressed;
+    }
+
+    /// Loads a Datach barcode for a mapper 157 cartridge.
+    pub fn set_datach_barcode(&mut self, code: &str) -> bool {
+        self.cart.set_datach_barcode(code)
+    }
+
+    /// Queues one byte for the Miracle Piano to return on the next poll.
+    pub fn push_piano_rx(&mut self, byte: u8) {
+        if self.peripherals.piano.rx.len() < 256 {
+            self.peripherals.piano.rx.push_back(byte);
+        }
+    }
+
+    /// Bytes clocked in from the Miracle Piano software (diagnostics).
+    #[must_use]
+    pub fn piano_tx_log(&self) -> &[u8] {
+        &self.peripherals.piano.tx_log
     }
 
     /// Sets the Zapper's aim and trigger for a port.
@@ -1173,6 +1295,9 @@ impl System {
                 value
             }
             PortDevice::Tape => (self.open_bus & 0xE0) | 0x40 | self.peripherals.tape.read(),
+            PortDevice::MiraclePiano => {
+                (self.open_bus & 0xE0) | 0x40 | self.peripherals.piano.read()
+            }
             PortDevice::Gamepad => {
                 let bit = self.shift[port] & 1;
                 let value = (self.open_bus & 0xE0) | 0x40 | bit;
@@ -1737,6 +1862,9 @@ impl CpuBus for System {
                     if self.devices.contains(&PortDevice::Tape) {
                         self.peripherals.tape.write(value);
                     }
+                    if self.devices.contains(&PortDevice::MiraclePiano) {
+                        self.peripherals.piano.write(value, self.cycle_count);
+                    }
                     self.strobe = value & 1 != 0;
                     self.peripherals.keyboard.write(value);
                     if self.strobe {
@@ -2101,6 +2229,40 @@ mod tests {
         assert_ne!(system.read(0x4016) & 0x04, 0);
         system.set_microphone(false);
         assert_eq!(system.read(0x4016) & 0x04, 0);
+    }
+
+    #[test]
+    fn miracle_piano_polls_and_sends_midi_bytes() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_port_device(0, PortDevice::MiraclePiano);
+
+        // Poll: a short OUT0 pulse, then a status bit and eight inverted bits.
+        system.push_piano_rx(0x5A);
+        system.write(0x4016, 1);
+        for _ in 0..12 {
+            system.cycle_count += 1;
+        }
+        system.write(0x4016, 0);
+        assert_eq!(system.read(0x4016) & 1, 1, "no status bit");
+        let mut received = 0u8;
+        for _ in 0..8 {
+            received = (received << 1) | ((system.read(0x4016) & 1) ^ 1);
+        }
+        assert_eq!(received, 0x5A);
+
+        // Send: a long OUT0 pulse, then eight writes+reads per byte.
+        system.write(0x4016, 1);
+        for _ in 0..80 {
+            system.cycle_count += 1;
+        }
+        system.write(0x4016, 0);
+        for bit in 0..8 {
+            let value = (0xA5 >> (7 - bit)) & 1;
+            system.write(0x4016, value);
+            system.read(0x4016);
+        }
+        assert_eq!(system.piano_tx_log(), &[0xA5]);
     }
 
     #[test]

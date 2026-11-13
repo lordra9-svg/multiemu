@@ -1935,3 +1935,22 @@ Both are save-state fields. Miracle Piano and Datach remain queued until
 protocol test ROMs are available; VS. System/PlayChoice-10 remains blocked on
 ROM and palette/security data. Tests: microphone bit 2, tape loopback and
 readback-disable, device settings round-trip.
+
+### 2026-11-13 — Miracle Piano and Datach transports
+
+- **Miracle Piano**: port 1 MIDI transport from the published interface — a
+  short `OUT0` pulse requests a status bit followed by eight inverted data
+  bits, and a long pulse selects the eight-bit transmit phase, with each
+  `$4016` read clocking one bit. Received bytes are injected through
+  `push_piano_rx` because the piano firmware is not reproduced; transmitted
+  bytes are logged. Synthetic test covers a poll of `$5A` and a send of
+  `$A5`.
+- **Datach**: mapper 157 gains the barcode scanner register at `$6000` bit 3,
+  advancing one pixel every 1000 CPU cycles with the 61/95/61 white framing,
+  plus UPC-A/EAN-13 module generation (checksum recomputed). The EEPROM data
+  line is stubbed high like MAME's default build. The Devices window accepts a
+  barcode and the test covers the generated guards, scan timing, invalid
+  codes and non-Datach boards.
+
+Both are synthetic-validated; real Miracle Piano and Datach ROMs are still
+needed before claiming parity.

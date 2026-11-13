@@ -88,6 +88,7 @@ pub struct App {
     debug_on_start: bool,
     devices_open: bool,
     microphone: bool,
+    datach_code: String,
     confirm_reset: bool,
     window_generation: u32,
 }
@@ -163,6 +164,7 @@ impl App {
             debug_on_start: args.debug,
             devices_open: false,
             microphone: false,
+            datach_code: String::new(),
             confirm_reset: false,
             window_generation: 0,
         };
@@ -1275,6 +1277,9 @@ impl App {
         let gamepad_error = self.gamepad_error.clone();
         let mut settings = self.settings.clone();
         let mut microphone = self.microphone;
+        let mut datach_code = self.datach_code.clone();
+        let mut datach_scan = false;
+        let has_player = self.player.is_some();
         let mut body = |ui: &mut egui::Ui| {
             ui.heading("NES ports");
             ui.label(
@@ -1369,6 +1374,42 @@ impl App {
             ui.label("Keyboard and touch: player 1 (unless port 1 is disabled).");
             ui.label("Gamepads: routed through the matrix above.");
             ui.label("Zapper, paddle, Power Pad and Family BASIC use the port's device.");
+            ui.add_space(10.0);
+            ui.separator();
+            ui.heading("Datach barcode");
+            ui.label(
+                RichText::new(
+                    "Mapper 157 only. Enter a 12-digit UPC-A or 13-digit EAN-13 code; the \
+                     scanner returns it as the documented bar pattern.",
+                )
+                .weak()
+                .small(),
+            );
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut datach_code)
+                        .hint_text("012345678905")
+                        .desired_width(190.0),
+                );
+                if ui
+                    .add_enabled(has_player, egui::Button::new("Scan"))
+                    .clicked()
+                {
+                    datach_scan = true;
+                }
+            });
+            if settings.port1_device == PortDevice::MiraclePiano
+                || settings.port2_device == PortDevice::MiraclePiano
+            {
+                ui.label(
+                    RichText::new(
+                        "Miracle Piano: the MIDI transport is modelled; received bytes are \
+                         injected by tests because the piano firmware is not available.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            }
         };
 
         if embedded {
@@ -1383,6 +1424,18 @@ impl App {
             });
         }
         self.microphone = microphone;
+        self.datach_code = datach_code;
+        if datach_scan {
+            let result = self
+                .player
+                .as_mut()
+                .map(|player| player.set_datach_barcode(&self.datach_code));
+            match result {
+                Some(true) => self.set_status("Datach barcode scanned"),
+                Some(false) => self.set_status("Barcode invalid or not a Datach cartridge"),
+                None => {}
+            }
+        }
         if settings != self.settings {
             let old = self.settings.clone();
             self.settings = settings;
@@ -2810,6 +2863,7 @@ fn device_label(device: PortDevice) -> &'static str {
         PortDevice::FourScore => "Four Score (4 players)",
         PortDevice::Microphone => "Famicom microphone",
         PortDevice::Tape => "Family BASIC data recorder",
+        PortDevice::MiraclePiano => "Miracle Piano (MIDI)",
     }
 }
 
@@ -2827,6 +2881,7 @@ fn device_combo(ui: &mut egui::Ui, id: &str, device: &mut PortDevice) {
                 PortDevice::FourScore,
                 PortDevice::Microphone,
                 PortDevice::Tape,
+                PortDevice::MiraclePiano,
             ] {
                 if ui
                     .selectable_label(*device == option, device_label(option))

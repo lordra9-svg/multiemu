@@ -82,6 +82,11 @@ pub trait Core {
     /// Reports the Famicom microphone state (`$4016` bit 2).
     fn set_microphone(&mut self, _pressed: bool) {}
 
+    /// Loads a Datach barcode for a mapper 157 cartridge.
+    fn set_datach_barcode(&mut self, _code: &str) -> bool {
+        false
+    }
+
     /// Aims the Zapper attached to `port` and reports the trigger state.
     fn set_zapper(&mut self, _port: usize, _x: u8, _y: u8, _trigger: bool) {}
 

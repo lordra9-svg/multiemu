@@ -229,6 +229,8 @@ pub enum PortDevice {
     Microphone,
     /// Family BASIC data recorder (cassette loopback on `$4016`).
     Tape,
+    /// Miracle Piano MIDI transport (`$4016`, controller port 1).
+    MiraclePiano,
 }
 
 impl PortDevice {
@@ -244,6 +246,7 @@ impl PortDevice {
             Self::FourScore => "fourscore",
             Self::Microphone => "microphone",
             Self::Tape => "tape",
+            Self::MiraclePiano => "piano",
         }
     }
 
@@ -258,6 +261,7 @@ impl PortDevice {
             "fourscore" => Self::FourScore,
             "microphone" | "mic" => Self::Microphone,
             "tape" | "recorder" => Self::Tape,
+            "piano" | "miraclepiano" | "miracle-piano" => Self::MiraclePiano,
             _ => Self::Gamepad,
         }
     }
