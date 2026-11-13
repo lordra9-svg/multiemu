@@ -2112,3 +2112,21 @@ adapter. Tests bit-bang a write of two bytes, a random read with auto-
 increment, a foreign-address NACK and a save-state round trip. A 600-frame
 trace of Crayon Shin-chan (Datach) runs without errors. The external X24C01
 (Battle Rush) and the Miracle Piano MIDI replies remain unimplemented.
+
+### 2026-11-13 — shader/EEPROM/movie regression pass
+
+- AccuracyCoin isolated battery: **146/151 passed, 0 failed, 5 DRAW skips,
+  0 unrun** (199,320 frames), identical to the previous run.
+- 20-frame library audit over the 7,101-image NES set: **7,073 loaded,
+  3,904 rendering, 3,169 blank, 0 unsupported mapper, 28 load/run failures**
+  — byte-for-byte the same totals as the last audit, so the GPU shader,
+  movie, run-ahead and Datach EEPROM changes did not alter core output.
+- CI budget: `unko bench --synthetic 3000 --min-fps 300` measured **784.7 fps**
+  (13.06x real time, 1.274 ms/frame), well above the 300 fps floor.
+- Save-state/rewind cost: 417,054-byte state, **172 us** save and **237 us**
+  restore in release; a 30-frame rew/rewind keyframe costs 0.17 ms every half
+  second and 4-frame run-ahead costs about 5.5 ms of the 16.6 ms frame. No
+  further optimization was needed.
+- A 600-frame trace of Crayon Shin-chan (Datach) completes cleanly with the
+  new X24C02 model; the Datach EEPROM protocol is covered by bit-banged I2C
+  tests.

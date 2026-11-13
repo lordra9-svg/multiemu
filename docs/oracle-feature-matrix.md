@@ -20,7 +20,7 @@ emulator's scope.
 | Accuracy model | cycle-level, per-dot PPU | cycle-level, per-dot | older cycle-ish core, TAS-oriented | cycle-accurate CPU, dot PPU | cycle-accurate, quirk-focused | cycle-accurate (2nd to Mesen on test-ROM rankings) | one master clock, per-half-cycle | dot-locked CPU/PPU, per-cycle bus |
 | AccuracyCoin | — (not claimed) | 100% claimed (v2.x) | not claimed | not claimed | test-ROM reference testbed | ranked high | 146/146 | **146/151 (5 DRAW)** |
 | Mappers | many boards; NES core subset | 290+ | broad | broad + NstDatabase | NRS: all NES 2.0 mappers | broad + UNIF | 208 families | **245 implementations incl. 446** |
-| FDS | Yes | Yes | Yes | Yes | Yes | Yes (QD too) | Yes (real BIOS) | **Yes (real BIOS)** |
+| FDS | Yes | Yes | Yes | Yes | Yes | Yes (QD too) | Yes (real BIOS) | **core/CLI trace only (real BIOS); app loader queued** |
 | VS. System / PlayChoice | VS | VS | VS (fixed list) | VS + PlayChoice-10 | VS | VS Uni + Dual | VS + PlayChoice-10 | **No** |
 | PAL / Dendy | region models | Yes | Yes (NTSC-PAL hybrid too) | Yes | Yes | Yes | Yes | **Yes** |
 | Expansion audio | VRC6/7, MMC5, N163, 5B, FDS, EPSM | VRC6/7, MMC5, N163, 5B, FDS, EPSM | VRC6/7, MMC5, N163, 5B, FDS | VRC6/7, MMC5, N163, 5B, FDS | VRC7, MMC5, N163, 5B, FDS (DLLs) | VRC6/7, MMC5, N163, 5B, FDS | VRC6/7, MMC5, N163, 5B, FDS | **VRC6/7, MMC5, N163, 5B, FDS** |

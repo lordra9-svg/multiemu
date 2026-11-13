@@ -12,7 +12,7 @@ Measured on the development machine with the release profile:
 |---|---|
 | MMC2 title, 2,000 frames | ~375-416 fps (6.2-6.9x real-time) |
 | MMC5 title, 1,200 frames | ~355-360 fps (5.9-6.0x real-time) |
-| Synthetic NROM, 3,000 frames | ~813-819 fps (13.5-13.6x real-time) |
+| Synthetic NROM, 3,000 frames | 784.7 fps (13.06x real-time, 1.274 ms/frame) |
 | 7,101-image audit, 20 frames | ~43-45 s wall, parallel |
 | Same audit with 8 CPU hogs | ~62 s wall, identical totals |
 
@@ -27,6 +27,13 @@ boards that do not implement them, expansion-audio mixing is skipped for boards
 without audio hardware, and the PPU CHR cache is refreshed only when a mapper
 write invalidates it. Pausing on focus loss drops the shell to 4 Hz when the
 window is inactive.
+
+Save-state cost (release, synthetic NROM): 417,054-byte state, **172 us** to
+serialize, **237 us** to restore, 1.28 ms per frame. A rew/rewind keyframe every
+30 frames therefore costs about 0.17 ms every half second, and 4-frame
+run-ahead costs two state operations plus three extra frames, about 5.5 ms per
+displayed frame; both stay inside the 16.6 ms budget. The GPU shader path adds
+one 256x240 RGBA upload and a fullscreen triangle, not a CPU post-process.
 
 ## Worst-case load
 
@@ -61,8 +68,8 @@ per second, and the per-frame ceilings above**.
 `unko bench --synthetic [frames] --min-fps N` runs a self-contained rendering
 NROM (no ROM file or copyrighted content) and fails when throughput falls below
 the budget. CI requires **300 fps** for 3,000 frames on the shared Linux runner;
-the current development machine measures about **813-819 fps** (13.5x
-real-time) for the same workload. This catches gross per-cycle regressions
+the current development machine measures **784.7 fps** (13.06x real-time)
+for the same workload. This catches gross per-cycle regressions
 without making CI dependent on a commercial ROM.
 
 ## PGO

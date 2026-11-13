@@ -1045,6 +1045,24 @@ mod tests {
     }
 
     #[test]
+    fn shader_and_rewind_settings_round_trip() {
+        let path = std::env::temp_dir().join("unko-settings-video.conf");
+        let settings = Settings {
+            shader: ShaderPreset::NtscPremium,
+            brightness: 1.25,
+            sharpness: 0.4,
+            rewind_mb: 256,
+            run_ahead: 3,
+            ..Settings::default()
+        };
+        settings.save(&path).expect("writes");
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded, settings);
+        assert_eq!(loaded.shader, ShaderPreset::NtscPremium);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn mister_accuracy_options_round_trip() {
         let path = std::env::temp_dir().join("unko-settings-mister.conf");
         let settings = Settings {
