@@ -32,7 +32,7 @@ Scope decisions from this pass:
 | 6 | NTSC Budget/Premium + brightness/sharpness as shader presets | 1 | Hard | #5 | queued |
 | 7 | FDS disk speed and automatic side swap | 2 | Hard | local `disksys.rom` | queued |
 | 8 | Miracle Piano MIDI replies and Datach EEPROM (X24C02) | 2 | Hard | real test ROMs | queued |
-| 9 | Input movies/TAS recording and playback | 3 | Medium-hard | rewind input log | queued |
+| 9 | Input movies/TAS recording and playback | 3 | Medium-hard | rewind input log | **done** |
 | 10 | Lua scripting (sandboxed 5.4) | 3 | Hard | scripting host API | queued |
 | 11 | RetroAchievements | 3 | Hard | network + memory hashes | queued |
 | 12 | HD packs | 3 | Very hard | graphics pack loader | queued |

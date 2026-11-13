@@ -138,6 +138,12 @@ platform toolchains.
   replayed exactly; the ring budget is 64/128/256 MiB (default 64, tens of
   seconds depending on the mapper). Recording and non-100% speeds suspend the
   buffer. Run-ahead is still queued.
+- Input movies: Emulation -> Movie records the four controller ports from the
+  current machine state and writes `<save dir>/recordings/<stem>.movie`
+  (`UNKOMOV1`: stem, full start state, one 4x u16 input word per frame).
+  Playback reloads the start state first, so a movie can be captured or
+  resumed mid-game. The status bar shows `MOVIE REC n` while recording and
+  `MOVIE n/total` during playback; playback stops and pauses at the end.
 - Pacing: a `Duration`-based accumulator targets 60.0988 Hz and runs at most
   four catch-up frames per repaint; vsync is left to the windowing backend.
   The UI sleeps until the next frame deadline (`request_repaint_after`), so an

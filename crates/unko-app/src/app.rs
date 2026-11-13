@@ -575,6 +575,100 @@ impl App {
                             }
                         }
                     });
+                    ui.menu_button("Movie", |ui| {
+                        let has_game = self.player.is_some();
+                        let recording = self
+                            .player
+                            .as_ref()
+                            .is_some_and(|player| player.movie_recording());
+                        let playing = self
+                            .player
+                            .as_ref()
+                            .is_some_and(|player| player.movie_progress().is_some());
+                        if ui
+                            .add_enabled(
+                                has_game && !recording && !playing,
+                                egui::Button::new("Record movie"),
+                            )
+                            .clicked()
+                        {
+                            if let Some(player) = &mut self.player {
+                                match player.start_movie_recording() {
+                                    Ok(()) => self.set_status("Recording input movie"),
+                                    Err(err) => self.set_status(format!("Movie: {err}")),
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(recording, egui::Button::new("Stop recording"))
+                            .clicked()
+                        {
+                            if let Some(player) = &mut self.player {
+                                let path = player
+                                    .save_dir
+                                    .join("recordings")
+                                    .join(format!("{}.movie", player.stem));
+                                match player.stop_movie_recording(&path) {
+                                    Ok(()) => {
+                                        self.set_status(format!(
+                                            "Saved movie to {}",
+                                            path.display()
+                                        ));
+                                    }
+                                    Err(err) => self.set_status(format!("Movie: {err}")),
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui
+                            .add_enabled(
+                                has_game && !recording && !playing,
+                                egui::Button::new("Play movie..."),
+                            )
+                            .clicked()
+                        {
+                            let start = self
+                                .player
+                                .as_ref()
+                                .map(|player| player.save_dir.join("recordings"));
+                            let mut dialog = rfd::FileDialog::new()
+                                .add_filter("Unko input movie", &["movie"])
+                                .set_title("Play input movie");
+                            if let Some(directory) = start {
+                                dialog = dialog.set_directory(directory);
+                            }
+                            if let Some(path) = dialog.pick_file() {
+                                match crate::movie::Movie::load(&path) {
+                                    Ok(movie) => {
+                                        if let Some(player) = &mut self.player {
+                                            match player.start_movie_playback(movie) {
+                                                Ok(()) => self.set_status(format!(
+                                                    "Playing {}",
+                                                    path.display()
+                                                )),
+                                                Err(err) => {
+                                                    self.set_status(format!("Movie: {err}"));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(err) => self.set_status(format!("Movie: {err}")),
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(playing, egui::Button::new("Stop playback"))
+                            .clicked()
+                        {
+                            if let Some(player) = &mut self.player {
+                                player.stop_movie_playback();
+                            }
+                            ui.close_menu();
+                        }
+                    });
                     ui.menu_button("Speed", |ui| {
                         for percent in [25, 50, 100, 150, 200, 300] {
                             if ui
@@ -950,6 +1044,21 @@ impl App {
                             ui.label(
                                 RichText::new(format!("REC {}", player.recording_frames()))
                                     .color(Color32::from_rgb(0xE0, 0x60, 0x60)),
+                            );
+                        }
+                        if player.movie_recording() {
+                            ui.separator();
+                            let frames = player.movie_recorded_frames();
+                            ui.label(
+                                RichText::new(format!("MOVIE REC {frames}"))
+                                    .color(Color32::from_rgb(0xE0, 0x60, 0x60)),
+                            );
+                        }
+                        if let Some((index, total)) = player.movie_progress() {
+                            ui.separator();
+                            ui.label(
+                                RichText::new(format!("MOVIE {index}/{total}"))
+                                    .color(Color32::from_rgb(0x60, 0xC0, 0xE0)),
                             );
                         }
                     }

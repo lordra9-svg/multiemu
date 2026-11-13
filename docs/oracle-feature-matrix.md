@@ -136,9 +136,10 @@ matrix above is the comparison; this list is the work queue.
 **Still needed — player-facing**
 1. **Cheats**: Game Genie (6/8-character with compare) and raw RAM, up to 32
    entries per game, enable/disable and per-game persistence are implemented.
-2. **Speed and rewind**: fast-forward (hold), 25-300% presets, frame advance
-   and the rewind ring (30-frame keyframes + input log, 64-256 MiB) are
-   implemented. Run-ahead is still queued.
+2. **Speed, rewind and movies**: fast-forward (hold), 25-300% presets, frame
+   advance and the rewind ring (30-frame keyframes + input log, 64-256 MiB)
+   are implemented. Input movies (TAS) record the full start state plus
+   per-frame 4-port inputs in the `UNKOMOV1` format. Run-ahead is still queued.
 3. **GPU shader pass**: built-in output presets exist, but arbitrary
    GLSL/WGSL/slang shaders and MiSTer-style HQ2x/CRT-25/50/75 scanline
    scaling are not implemented.

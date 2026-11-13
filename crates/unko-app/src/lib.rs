@@ -19,6 +19,7 @@ mod cheats;
 mod debugger;
 mod gamepad;
 mod library;
+mod movie;
 mod player;
 mod recording;
 mod settings;

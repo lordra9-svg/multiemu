@@ -198,6 +198,9 @@ pub struct Player {
     last_input: [InputState; 4],
     rewind: RewindBuffer,
     rewind_enabled: bool,
+    movie_record: Option<Vec<[u16; 4]>>,
+    movie_state: Option<Vec<u8>>,
+    movie_playback: Option<(Vec<[u16; 4]>, usize)>,
     sample_rate: f32,
     gamepad: [InputState; 4],
     touch: InputState,
@@ -299,6 +302,9 @@ impl Player {
             last_input: [InputState::empty(); 4],
             rewind: RewindBuffer::new(settings.rewind_mb),
             rewind_enabled: true,
+            movie_record: None,
+            movie_state: None,
+            movie_playback: None,
         };
         player.push_rewind_keyframe();
         Ok(player)
@@ -325,8 +331,14 @@ impl Player {
 
         let mut done = 0;
         while done < ran {
+            if !self.consume_movie_input() {
+                break;
+            }
             if self.rewind_enabled {
                 self.rewind.push_input(self.frames + 1, self.last_input);
+            }
+            if let Some(record) = &mut self.movie_record {
+                record.push(self.last_input.map(unko_core::InputState::bits));
             }
             if self.debug.breakpoints.is_empty() || !self.core.debug_supported() {
                 if let Err(err) = self.core.run_frame() {
@@ -385,8 +397,116 @@ impl Player {
         }
     }
 
+    /// Consumes one movie input (playback) and applies it to the core.
+    /// Returns false when a playback ended this frame.
+    fn consume_movie_input(&mut self) -> bool {
+        let Some((inputs, index)) = &mut self.movie_playback else {
+            return true;
+        };
+        let Some(input) = inputs.get(*index).copied() else {
+            self.movie_playback = None;
+            self.paused = true;
+            self.next_repaint = Duration::from_millis(250);
+            self.message = "Movie finished".to_string();
+            return false;
+        };
+        *index += 1;
+        for (port, bits) in input.iter().enumerate() {
+            self.last_input[port] = InputState::from_bits(*bits);
+            self.core.set_input(port, self.last_input[port]);
+        }
+        true
+    }
+
+    /// Starts recording an input movie from the current machine state.
+    pub fn start_movie_recording(&mut self) -> Result<(), String> {
+        if self.movie_playback.is_some() {
+            return Err("stop movie playback first".into());
+        }
+        let mut state = Vec::new();
+        self.core
+            .save_state(&mut state)
+            .map_err(|err| err.to_string())?;
+        self.movie_record = Some(Vec::new());
+        self.movie_state = Some(state);
+        self.message = "Recording input movie".to_string();
+        Ok(())
+    }
+
+    /// Stops recording and writes the movie.
+    pub fn stop_movie_recording(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let Some(inputs) = self.movie_record.take() else {
+            return Err("not recording a movie".into());
+        };
+        let Some(state) = self.movie_state.take() else {
+            return Err("missing movie start state".into());
+        };
+        crate::movie::Movie {
+            stem: self.stem.clone(),
+            state,
+            inputs,
+        }
+        .save(path)
+        .map_err(|err| err.to_string())?;
+        self.message = format!("Saved input movie to {}", path.display());
+        Ok(())
+    }
+
+    /// Loads a movie state and starts playback.
+    pub fn start_movie_playback(&mut self, movie: crate::movie::Movie) -> Result<(), String> {
+        if self.movie_record.is_some() {
+            return Err("stop recording first".into());
+        }
+        if movie.stem != self.stem {
+            return Err("movie belongs to another game".into());
+        }
+        self.core
+            .load_state(&movie.state)
+            .map_err(|err| err.to_string())?;
+        self.movie_playback = Some((movie.inputs, 0));
+        self.paused = false;
+        self.pacer.reset();
+        self.next_repaint = Duration::ZERO;
+        self.rewind.clear();
+        self.frames = 0;
+        self.message = "Playing input movie".to_string();
+        Ok(())
+    }
+
+    /// Stops movie playback and leaves the machine paused.
+    pub fn stop_movie_playback(&mut self) {
+        if self.movie_playback.take().is_some() {
+            self.paused = true;
+            self.message = "Movie playback stopped".to_string();
+        }
+    }
+
+    /// Whether an input movie is being recorded.
+    #[must_use]
+    pub fn movie_recording(&self) -> bool {
+        self.movie_record.is_some()
+    }
+
+    /// Number of frames captured by the active movie recording.
+    #[must_use]
+    pub fn movie_recorded_frames(&self) -> usize {
+        self.movie_record.as_ref().map_or(0, Vec::len)
+    }
+
+    /// Playback progress `(current, total)` when a movie is playing.
+    #[must_use]
+    pub fn movie_progress(&self) -> Option<(usize, usize)> {
+        self.movie_playback
+            .as_ref()
+            .map(|(inputs, index)| (*index, inputs.len()))
+    }
+
     fn update_rewind_enabled(&mut self) {
-        let enabled = self.speed_percent == 100 && !self.fast_forward && !self.recording();
+        let enabled = self.speed_percent == 100
+            && !self.fast_forward
+            && !self.recording()
+            && self.movie_record.is_none()
+            && self.movie_playback.is_none();
         if enabled == self.rewind_enabled {
             return;
         }
@@ -799,8 +919,14 @@ impl Player {
 
     /// Runs exactly one frame while paused and refreshes the texture.
     pub fn advance_frame(&mut self, ctx: &egui::Context) {
+        if !self.consume_movie_input() {
+            return;
+        }
         if self.rewind_enabled {
             self.rewind.push_input(self.frames + 1, self.last_input);
+        }
+        if let Some(record) = &mut self.movie_record {
+            record.push(self.last_input.map(unko_core::InputState::bits));
         }
         if let Err(err) = self.core.run_frame() {
             self.message = err.to_string();

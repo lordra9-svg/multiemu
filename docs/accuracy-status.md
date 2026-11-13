@@ -2053,3 +2053,16 @@ replayed state at frame 45 byte-for-byte against the live state. The buffer is
 suspended while recording or when the speed is not 100%, cleared on reset and
 manual state load, and the status bar shows the available rewind depth.
 Run-ahead is queued next.
+
+### 2026-11-13 — input movies (TAS)
+
+Added the `UNKOMOV1` input movie format: an 8-byte magic, the save stem, the
+full `UNKOST06` state at the start of the recording together with the 4-port
+`u16` input words for every frame. The player pauses/suspends the rewind ring
+while recording or playing back, captures `Player::last_input` (the same
+authoritative value rewind uses), reloads the stored state before playback,
+and stops with the machine paused at the final frame. The Emulation -> Movie
+menu exposes record, stop, play (file picker rooted in
+`<save dir>/recordings`) and stop playback; the status bar shows the capture
+length and playback progress. Round-trip and truncation tests cover the file
+format.
