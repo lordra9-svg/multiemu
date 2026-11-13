@@ -46,11 +46,14 @@ filter, the low-time threshold is three CPU cycles (nine NTSC PPU dots), and
 sprite fetches are restricted to visible and pre-render lines. All MMC3
 variants forward the shared A12 detector.
 
-`mmc3_test_2` results: **4/6** — `1-clocking`, `2-details`, `3-A12_clocking`
-and `5-MMC3` pass; `4-scanline_timing` fails only the line-239
-`$2000=$10` boundary (test 12), and `6-MMC3_alt` needs an alternate-revision
-selector (the ROM carries no NES 2.0 submapper). The combined `mmc3_test`
-suite also fails `6-MMC6` on MMC6-specific IRQ behavior. AccuracyCoin remains
+`mmc3_test_2` results: **5/6** with the alternate-revision selector —
+`1-clocking`, `2-details`, `3-A12_clocking`, `5-MMC3` and `6-MMC3_alt` pass.
+Without the selector the default MMC3B/C behavior fails the alternate row, as
+expected. `4-scanline_timing` fails only the line-239 `$2000=$10` boundary
+(test 12). The combined `mmc3_test` suite's `6-MMC6` also passes with the
+alternate selector. The selector is exposed as
+`Settings -> Advanced -> Alternate MMC3 IRQ revision` (and
+`Core::set_mmc3_alternate`). AccuracyCoin remains
 **146/146 non-DRAW**, and the 20/120-frame library audit is unchanged
 (3,904/6,499 rendering).
 

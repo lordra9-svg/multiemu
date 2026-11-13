@@ -29,21 +29,19 @@ missing result is not a failure.
 Latest run:
 
 - **17 machine-readable passes**
-- **4 machine-readable failures**, in two unique tests:
+- **1 unique machine-readable failure**:
   - `mmc3_test_2/rom_singles/4-scanline_timing.nes` — test 12, line-239
     `$2000=$10` boundary (duplicated by `mmc3_test/4-scanline_timing.nes`)
-  - `mmc3_test_2/rom_singles/6-MMC3_alt.nes` — alternate-revision behavior;
-    the ROM has no NES 2.0 submapper, so a revision selector is required
-  - `mmc3_test/6-MMC6.nes` — MMC6 IRQ behavior (the combined `mmc3_test`
-    suite)
+- With the alternate MMC3 revision selected (`UNKO_MMC3_ALT=1` in the probe,
+  or `Settings -> Advanced`), `6-MMC3_alt` and the combined suite's
+  `6-MMC6` also pass.
 - **242 without a machine-readable result**: visual, audio, input-driven or
   screen-only tests. They load and run without panic; verdicts need a
   screenshot/audio oracle or a controller script.
 
 The MMC3 A12 work (see `docs/accuracy-status.md`) fixed
-`1-clocking`, `2-details`, `3-A12_clocking`, `5-MMC3` and the same subtests in
-`mmc3_test`. The suite is now 4/6 for the MMC3 subtests and 4/6 including the
-MMC6/alternate-revision variants.
+`1-clocking`, `2-details`, `3-A12_clocking`, `5-MMC3`, `6-MMC3_alt` and
+`6-MMC6`; only the line-239 one-dot boundary remains.
 
 ## Still needed
 

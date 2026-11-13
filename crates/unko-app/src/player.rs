@@ -262,6 +262,7 @@ impl Player {
         core.set_audio_source(settings.audio_source);
         core.set_ram_clear(settings.ram_clear);
         core.set_ppu_reset_behavior(settings.ppu_reset);
+        core.set_mmc3_alternate(settings.mmc3_alternate);
         if settings.palette == unko_core::Palette::Custom {
             if let Some(table) = crate::settings::load_palette(&settings.custom_palette) {
                 core.set_palette_table(table);
@@ -613,6 +614,11 @@ impl Player {
         if self.core.save_state(&mut state).is_ok() {
             self.rewind.push_keyframe(self.frames, state);
         }
+    }
+
+    /// Selects the alternate MMC3A/NEC IRQ revision.
+    pub fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.core.set_mmc3_alternate(alternate);
     }
 
     /// Changes the rewind budget (64, 128 or 256 MiB).

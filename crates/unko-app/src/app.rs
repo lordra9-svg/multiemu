@@ -400,6 +400,9 @@ impl App {
             if self.settings.ppu_reset != old.ppu_reset {
                 player.set_ppu_reset_behavior(self.settings.ppu_reset);
             }
+            if self.settings.mmc3_alternate != old.mmc3_alternate {
+                player.set_mmc3_alternate(self.settings.mmc3_alternate);
+            }
         }
         if let Some(audio) = &self.audio {
             audio.set_volume(self.settings.volume);
@@ -3859,6 +3862,17 @@ fn advanced_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 }
             });
     });
+    ui.checkbox(
+        &mut settings.mmc3_alternate,
+        "Alternate MMC3 IRQ revision (MMC3A/NEC)",
+    );
+    ui.label(
+        RichText::new(
+            "Use for boards that raise a single IRQ when reloading to zero (some Crystalis/MMC6 dumps). Normal MMC3B/C behavior is the default.",
+        )
+        .weak()
+        .small(),
+    );
     ui.horizontal(|ui| {
         ui.label("RAM clear");
         egui::ComboBox::from_id_salt("ram-clear")

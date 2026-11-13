@@ -726,6 +726,11 @@ impl System {
         self.cart.set_datach_barcode(code)
     }
 
+    /// Selects the alternate MMC3A/NEC IRQ revision for this machine.
+    pub fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.cart.set_mmc3_alternate(alternate);
+    }
+
     /// Saves the Datach adapter's X24C02 contents (empty for other boards).
     #[must_use]
     pub fn datach_eeprom(&self) -> Vec<u8> {

@@ -138,6 +138,9 @@ pub trait Core {
     /// Selects the PPU register behaviour on a soft reset.
     fn set_ppu_reset_behavior(&mut self, _behavior: PpuResetBehavior) {}
 
+    /// Selects the alternate MMC3A/NEC IRQ revision for MMC3-family boards.
+    fn set_mmc3_alternate(&mut self, _alternate: bool) {}
+
     /// Replaces the active cheat overlay. The core applies it as host
     /// presentation state; it is never serialized.
     fn set_cheats(&mut self, _cheats: &[Cheat]) {}

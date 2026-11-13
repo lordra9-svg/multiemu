@@ -40,6 +40,9 @@ fn main() {
         .unwrap_or(600);
     let rom = fs::read(&path).expect("read rom");
     let mut system = System::from_ines(&rom).expect("load rom");
+    if std::env::var_os("UNKO_MMC3_ALT").is_some() {
+        system.set_mmc3_alternate(true);
+    }
     let mut text = String::new();
     let mut ran = 0;
     for _ in 0..budget {

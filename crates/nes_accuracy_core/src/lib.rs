@@ -98,6 +98,7 @@ pub struct AccuracyCore {
     audio_source: AudioSource,
     ram_clear: RamClear,
     ppu_reset: PpuResetBehavior,
+    mmc3_alternate: bool,
     cheats: Vec<Cheat>,
 }
 
@@ -119,6 +120,7 @@ impl AccuracyCore {
             audio_source: AudioSource::Both,
             ram_clear: RamClear::Zero,
             ppu_reset: PpuResetBehavior::Famicom,
+            mmc3_alternate: false,
             cheats: Vec::new(),
         }
     }
@@ -200,6 +202,7 @@ impl Core for AccuracyCore {
 
     fn load(&mut self, rom: &[u8], options: &LoadOptions) -> Result<(), CoreError> {
         let mut system = System::from_ines(rom).map_err(map_err)?;
+        system.set_mmc3_alternate(self.mmc3_alternate);
         // `Auto` keeps the timing the header declares; an explicit choice
         // overrides it.
         match options.region {
@@ -351,6 +354,13 @@ impl Core for AccuracyCore {
         self.ppu_reset = behavior;
         if let Some(system) = self.system.as_mut() {
             system.set_ppu_reset_behavior(behavior);
+        }
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.mmc3_alternate = alternate;
+        if let Some(system) = self.system.as_mut() {
+            system.set_mmc3_alternate(alternate);
         }
     }
 

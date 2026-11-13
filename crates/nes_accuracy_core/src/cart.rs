@@ -678,6 +678,9 @@ pub trait Mapper: fmt::Debug + MapperState {
     /// Drains filtered A12 edges into the mapper's IRQ counter.
     fn sync_a12(&mut self) {}
 
+    /// Selects the alternate MMC3 IRQ revision.
+    fn set_mmc3_alternate(&mut self, _alternate: bool) {}
+
     /// Pops a pending cartridge DMA request (UM6578).
     fn take_dma(&mut self) -> Option<DmaRequest> {
         None
@@ -1602,6 +1605,11 @@ impl Cartridge {
         self.mapper.sync_a12();
     }
 
+    /// Selects the alternate MMC3 IRQ revision.
+    pub fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.mapper.set_mmc3_alternate(alternate);
+    }
+
     /// Pops a pending cartridge DMA request.
     pub fn take_dma(&mut self) -> Option<DmaRequest> {
         self.mapper.take_dma()
@@ -2322,6 +2330,10 @@ impl Mapper for Waixing195 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -2433,6 +2445,10 @@ impl Mapper for Mmc3_197 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -4675,6 +4691,10 @@ impl Mapper for Mmc3_254 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -5372,6 +5392,10 @@ impl Mapper for Unl158B {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -5522,6 +5546,10 @@ impl Mapper for Mmc3_219 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -5653,6 +5681,10 @@ impl Mapper for Mmc3_208 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -6278,6 +6310,10 @@ impl Mapper for Mmc3_262 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -7835,6 +7871,12 @@ impl Mapper for Inner446 {
         }
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        if let Self::Board(board) = self {
+            board.set_mmc3_alternate(alternate);
+        }
+    }
+
     fn irq_possible(&self) -> bool {
         true
     }
@@ -9039,6 +9081,10 @@ impl Mapper for Techline351 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -10723,6 +10769,10 @@ impl Mapper for DragonFighter292 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -12026,6 +12076,10 @@ impl Mapper for Mapper594 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -13556,6 +13610,10 @@ impl Mapper for NeSEvent2_555 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -14364,6 +14422,10 @@ impl Mapper for Hsk007 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -14459,6 +14521,10 @@ impl Mapper for Mmc3_334 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -15881,6 +15947,10 @@ impl Mapper for Mmc3_12 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -16522,6 +16592,10 @@ impl Mapper for Tec9719 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -18502,6 +18576,10 @@ impl Mapper for Mmc3Outer {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -20136,6 +20214,10 @@ impl Mapper for Mmc3_313 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -21474,6 +21556,10 @@ impl Mapper for Mmc3 {
         Some(self.a12.clone())
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.irq_alternate = alternate;
+    }
+
     fn sync_a12(&mut self) {
         for _ in 0..self.a12.borrow_mut().take() {
             let old = self.irq_counter;
@@ -21631,6 +21717,10 @@ impl Mapper for Mmc3_123 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -21786,6 +21876,10 @@ impl Mapper for Mmc3_187 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -21890,6 +21984,10 @@ impl Mapper for Mmc3_245 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -22000,6 +22098,10 @@ impl Mapper for Mmc3_198 {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -22082,6 +22184,10 @@ impl Mapper for Mmc3_263 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -22197,6 +22303,10 @@ impl Mapper for Mmc3_37 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -22366,6 +22476,10 @@ impl Mapper for Ga23c {
         self.inner.irq_line()
     }
 
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
+    }
+
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
         self.inner.mmc3_a12()
     }
@@ -22510,6 +22624,10 @@ impl Mapper for Mmc3_199 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
@@ -23081,6 +23199,10 @@ impl Mapper for Mmc3_249 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn set_mmc3_alternate(&mut self, alternate: bool) {
+        self.inner.set_mmc3_alternate(alternate);
     }
 
     fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {

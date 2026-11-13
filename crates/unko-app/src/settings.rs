@@ -359,6 +359,8 @@ pub struct Settings {
     pub ram_clear: RamClear,
     /// PPU register behaviour on a soft reset.
     pub ppu_reset: PpuResetBehavior,
+    /// Select the alternate MMC3A/NEC IRQ revision.
+    pub mmc3_alternate: bool,
     /// Keep integer pixel scaling when possible.
     pub integer_scale: bool,
     /// Use linear texture filtering (smooth scaling) instead of nearest.
@@ -464,6 +466,7 @@ impl Default for Settings {
             mask_edges: MaskEdges::Off,
             ram_clear: RamClear::Zero,
             ppu_reset: PpuResetBehavior::Famicom,
+            mmc3_alternate: false,
             integer_scale: true,
             linear_filter: false,
             zapper_port2: false,
@@ -593,6 +596,7 @@ impl Settings {
                 "mask_edges" => settings.mask_edges = MaskEdges::from_name(value),
                 "ram_clear" => settings.ram_clear = RamClear::from_name(value),
                 "ppu_reset" => settings.ppu_reset = PpuResetBehavior::from_name(value),
+                "mmc3_alternate" => settings.mmc3_alternate = value == "true" || value == "1",
                 "integer_scale" => settings.integer_scale = parse_bool(value),
                 "linear_filter" => settings.linear_filter = parse_bool(value),
                 "zapper_port2" => settings.zapper_port2 = parse_bool(value),
@@ -758,6 +762,7 @@ overscan={}
 mask_edges={}
 ram_clear={}
 ppu_reset={}
+mmc3_alternate={}
 integer_scale={}
 linear_filter={}
 palette={}
@@ -824,6 +829,7 @@ layout_cheats={}
             self.mask_edges.name(),
             self.ram_clear.name(),
             self.ppu_reset.name(),
+            self.mmc3_alternate,
             self.integer_scale,
             self.linear_filter,
             self.palette.name(),
@@ -1053,6 +1059,7 @@ mod tests {
             sharpness: 0.4,
             rewind_mb: 256,
             run_ahead: 3,
+            mmc3_alternate: true,
             ..Settings::default()
         };
         settings.save(&path).expect("writes");
