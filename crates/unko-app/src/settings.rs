@@ -30,17 +30,23 @@ pub enum HotkeyAction {
     Screenshot,
     /// Reset the console.
     Reset,
+    /// Hold to fast-forward.
+    FastForward,
+    /// Advance one frame while paused.
+    FrameAdvance,
 }
 
 impl HotkeyAction {
     /// Every action, in display order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Pause,
         Self::Save,
         Self::Load,
         Self::Fullscreen,
         Self::Screenshot,
         Self::Reset,
+        Self::FastForward,
+        Self::FrameAdvance,
     ];
 
     /// Human label.
@@ -53,6 +59,8 @@ impl HotkeyAction {
             Self::Fullscreen => "Fullscreen",
             Self::Screenshot => "Screenshot",
             Self::Reset => "Reset",
+            Self::FastForward => "Hold to fast-forward",
+            Self::FrameAdvance => "Frame advance",
         }
     }
 
@@ -66,6 +74,8 @@ impl HotkeyAction {
             Self::Fullscreen => "hotkey_fullscreen",
             Self::Screenshot => "hotkey_screenshot",
             Self::Reset => "hotkey_reset",
+            Self::FastForward => "hotkey_fast_forward",
+            Self::FrameAdvance => "hotkey_frame_advance",
         }
     }
 }
@@ -85,6 +95,10 @@ pub struct Hotkeys {
     pub screenshot: egui::Key,
     /// Reset key.
     pub reset: egui::Key,
+    /// Hold-to-fast-forward key.
+    pub fast_forward: egui::Key,
+    /// Frame-advance key.
+    pub frame_advance: egui::Key,
 }
 
 impl Default for Hotkeys {
@@ -96,6 +110,8 @@ impl Default for Hotkeys {
             fullscreen: egui::Key::F11,
             screenshot: egui::Key::F12,
             reset: egui::Key::F2,
+            fast_forward: egui::Key::Tab,
+            frame_advance: egui::Key::Period,
         }
     }
 }
@@ -111,6 +127,8 @@ impl Hotkeys {
             HotkeyAction::Fullscreen => self.fullscreen,
             HotkeyAction::Screenshot => self.screenshot,
             HotkeyAction::Reset => self.reset,
+            HotkeyAction::FastForward => self.fast_forward,
+            HotkeyAction::FrameAdvance => self.frame_advance,
         }
     }
 
@@ -123,6 +141,8 @@ impl Hotkeys {
             HotkeyAction::Fullscreen => self.fullscreen = key,
             HotkeyAction::Screenshot => self.screenshot = key,
             HotkeyAction::Reset => self.reset = key,
+            HotkeyAction::FastForward => self.fast_forward = key,
+            HotkeyAction::FrameAdvance => self.frame_advance = key,
         }
     }
 
@@ -267,6 +287,8 @@ pub struct Settings {
     pub palette: Palette,
     /// User palette file used by [`Palette::Custom`] (`.pal`/`.palette`).
     pub custom_palette: PathBuf,
+    /// Playback speed in percent (25, 50, 100, 150, 200 or 300).
+    pub speed_percent: u32,
     /// Requested audio sample rate.
     pub sample_rate: f32,
     /// Target output latency in milliseconds (15..=250).
@@ -377,6 +399,7 @@ impl Default for Settings {
             filter: VideoFilter::Raw,
             palette: Palette::Canonical,
             custom_palette: PathBuf::new(),
+            speed_percent: 100,
             sample_rate: 48_000.0,
             audio_latency_ms: 60,
             audio_quality: AudioQuality::Standard,
@@ -468,6 +491,12 @@ impl Settings {
                 "filter" => settings.filter = parse_filter(value),
                 "palette" => settings.palette = Palette::from_name(value),
                 "custom_palette" => settings.custom_palette = value.into(),
+                "speed_percent" => {
+                    settings.speed_percent = match value.parse::<u32>().unwrap_or(100) {
+                        25 | 50 | 150 | 200 | 300 => value.parse().unwrap_or(100),
+                        _ => 100,
+                    }
+                }
                 "sample_rate" => settings.sample_rate = value.parse().unwrap_or(48_000.0),
                 "audio_latency_ms" => {
                     settings.audio_latency_ms = value.parse::<u32>().unwrap_or(60).clamp(15, 250)
@@ -643,6 +672,7 @@ impl Settings {
 # Unko settings
 rom_dir={}
 save_dir={}
+speed_percent={}
 region={}
 filter={}
 sample_rate={}
@@ -695,6 +725,7 @@ layout_debugger={}
 ",
             self.rom_dir.display(),
             self.save_dir.display(),
+            self.speed_percent,
             region_name(self.region),
             filter_name(self.filter),
             self.sample_rate,

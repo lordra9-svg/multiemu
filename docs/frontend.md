@@ -129,6 +129,10 @@ platform toolchains.
   the config, layout, hotkeys, bindings, devices and per-game profiles and
   removes state thumbnails, while never touching save states, SRAM or
   recordings.
+- Speed: playback presets 25/50/100/150/200/300%, a hold-to-fast-forward key
+  (Tab) and frame advance (Period, or Emulation -> Frame advance). Audio is
+  paused while the speed is not 100% so it cannot drift or pitch-shift; the
+  recorder still captures the run.
 - Pacing: a `Duration`-based accumulator targets 60.0988 Hz and runs at most
   four catch-up frames per repaint; vsync is left to the windowing backend.
   The UI sleeps until the next frame deadline (`request_repaint_after`), so an

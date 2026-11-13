@@ -324,6 +324,9 @@ impl App {
             if self.settings.supersample != old.supersample {
                 player.set_supersample(self.settings.supersample);
             }
+            if self.settings.speed_percent != old.speed_percent {
+                player.set_speed(self.settings.speed_percent);
+            }
             if self.settings.audio_source != old.audio_source {
                 player.set_audio_source(self.settings.audio_source);
             }
@@ -388,6 +391,19 @@ impl App {
             return;
         }
         let keys = self.settings.hotkeys;
+        let (fast_forward, frame_advance) = ctx.input(|i| {
+            (
+                i.key_down(keys.fast_forward),
+                i.key_pressed(keys.frame_advance),
+            )
+        });
+        if let Some(player) = &mut self.player {
+            player.set_fast_forward(fast_forward);
+            if frame_advance {
+                player.paused = true;
+                player.advance_frame(ctx);
+            }
+        }
         let (save, load, fullscreen, pause, screenshot, reset) = ctx.input(|i| {
             (
                 i.key_pressed(keys.save),
@@ -470,6 +486,35 @@ impl App {
                         }
                         ui.close_menu();
                     }
+                    if ui
+                        .add_enabled(has_game, egui::Button::new("Frame advance (.)"))
+                        .clicked()
+                    {
+                        if let Some(player) = &mut self.player {
+                            player.paused = true;
+                            player.advance_frame(ctx);
+                        }
+                        ui.close_menu();
+                    }
+                    ui.menu_button("Speed", |ui| {
+                        for percent in [25, 50, 100, 150, 200, 300] {
+                            if ui
+                                .radio_value(
+                                    &mut self.settings.speed_percent,
+                                    percent,
+                                    format!("{percent}%"),
+                                )
+                                .changed()
+                            {
+                                if let Some(player) = &mut self.player {
+                                    player.set_speed(percent);
+                                }
+                                let _ = self.settings.save(&Settings::path());
+                            }
+                        }
+                        ui.separator();
+                        ui.label(RichText::new("Hold Tab to fast-forward").weak().small());
+                    });
                     ui.separator();
                     if ui
                         .add_enabled(has_game, egui::Button::new("Save state (F5)"))
@@ -799,6 +844,13 @@ impl App {
                         ui.label(format!("{width}×{height}"));
                         ui.separator();
                         ui.label(format!("{:.1} fps", player.fps));
+                        ui.separator();
+                        let speed = if player.fast_forward() {
+                            "FF".to_string()
+                        } else {
+                            format!("{}%", player.speed_percent())
+                        };
+                        ui.label(speed);
                         ui.separator();
                         ui.label(format!("slot {}", player.slot));
                         ui.separator();
@@ -1627,7 +1679,9 @@ impl eframe::App for App {
             self.input_states = [unko_core::InputState::empty(); 4];
         }
         if let Some(audio) = &self.audio {
-            let running = self.player.as_ref().is_some_and(|player| !player.paused);
+            let running = self.player.as_ref().is_some_and(|player| {
+                !player.paused && player.speed_percent() == 100 && !player.fast_forward()
+            });
             audio.set_active(running && !self.settings.muted);
         }
         let detached_windows = self.detached_windows();
@@ -2384,6 +2438,25 @@ fn interface_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add_space(8.0);
     ui.checkbox(&mut settings.show_status_bar, "Show status bar");
     ui.checkbox(&mut settings.grid_view, "Game library opens in grid view");
+    ui.horizontal(|ui| {
+        ui.label("Playback speed");
+        egui::ComboBox::from_id_salt("playback-speed")
+            .selected_text(format!("{}%", settings.speed_percent))
+            .show_ui(ui, |ui| {
+                for percent in [25, 50, 100, 150, 200, 300] {
+                    ui.selectable_value(
+                        &mut settings.speed_percent,
+                        percent,
+                        format!("{percent}%"),
+                    );
+                }
+            });
+    });
+    ui.label(
+        RichText::new("Hold the fast-forward hotkey (Tab) to temporarily run at 300%.")
+            .weak()
+            .small(),
+    );
     ui.add_space(8.0);
     ui.label("Toolbar, menu and status layout follow Dolphin's desktop shell.");
 }

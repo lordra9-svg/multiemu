@@ -2002,3 +2002,11 @@ overclocking, and the 32-slot cheat engine.
 AccuracyCoin remains **146/151 with 0 failures** with the new defaults
 (`RamClear::Zero`, Famicom PPU reset, audio both sources), and 457 workspace
 tests pass.
+
+### 2026-11-13 — host speed controls
+
+Added 25/50/100/150/200/300% playback presets, hold-to-fast-forward (Tab,
+300% cap) and frame advance (Period or Emulation -> Frame advance). The
+core is still driven one frame at a time and all accuracy gates are
+unchanged; audio is paused whenever the speed is not 100% so the output
+cannot drift or pitch-shift, and it flushes on return to normal speed.

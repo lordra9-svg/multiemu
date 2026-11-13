@@ -137,7 +137,8 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] SRAM persistence keyed by ROM content hash; save-state slots with
       thumbnails.
   - [x] Core exposes `sram()` / `load_sram`; the app writes `saves/<stem>.sav`.
-- [ ] Frame advance, fast-forward and rewind ring in the host.
+- [x] Frame advance, hold-to-fast-forward and 25-300% playback presets in
+      the host; the rewind ring remains queued.
 - [x] CLI regression mode: hash frames/audio, fresh-run vs state-resume, assert
       byte-identical tails (`unko verify`).
 - [x] Versioned accuracy-core save states and retirement of the TetaNES adapter.

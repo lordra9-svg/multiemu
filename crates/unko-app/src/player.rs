@@ -51,20 +51,21 @@ impl FramePacer {
     /// A stall is allowed to catch up at most [`MAX_CATCH_UP`] frames; the
     /// rest of the backlog is discarded so audio/video stay in real time
     /// instead of playing back the stall.
-    fn advance(&mut self, now: Instant) -> (usize, f32, Duration) {
+    fn advance(&mut self, now: Instant, speed_percent: u32) -> (usize, f32, Duration) {
+        let interval = self.frame.mul_f64(100.0 / f64::from(speed_percent.max(1)));
         let dt = now.saturating_duration_since(self.last);
         self.last = now;
         self.accum = self.accum.saturating_add(dt);
         let mut ran = 0;
-        while self.accum >= self.frame && ran < MAX_CATCH_UP {
-            self.accum -= self.frame;
+        while self.accum >= interval && ran < MAX_CATCH_UP {
+            self.accum -= interval;
             ran += 1;
         }
-        if ran == MAX_CATCH_UP && self.accum >= self.frame {
+        if ran == MAX_CATCH_UP && self.accum >= interval {
             // Still behind after the bounded catch-up: resynchronise.
             self.accum = Duration::ZERO;
         }
-        let wait = self.frame.saturating_sub(self.accum);
+        let wait = interval.saturating_sub(self.accum);
         (ran, dt.as_secs_f32(), wait)
     }
 }
@@ -95,6 +96,8 @@ pub struct Player {
     texture_options: egui::TextureOptions,
     pacer: FramePacer,
     next_repaint: Duration,
+    speed_percent: u32,
+    fast_forward: bool,
     sample_rate: f32,
     gamepad: [InputState; 4],
     touch: InputState,
@@ -184,6 +187,8 @@ impl Player {
             texture_options: egui::TextureOptions::NEAREST,
             pacer: FramePacer::new(Instant::now()),
             next_repaint: Duration::ZERO,
+            speed_percent: settings.speed_percent,
+            fast_forward: false,
             sample_rate: settings.sample_rate,
             gamepad: [InputState::empty(); 4],
             touch: InputState::empty(),
@@ -201,7 +206,12 @@ impl Player {
             self.next_repaint = Duration::from_millis(250);
             return;
         }
-        let (mut ran, dt, wait) = self.pacer.advance(Instant::now());
+        let effective_speed = if self.fast_forward {
+            300
+        } else {
+            self.speed_percent
+        };
+        let (mut ran, dt, wait) = self.pacer.advance(Instant::now(), effective_speed);
         self.next_repaint = wait;
         if ran == 0 && self.frames == 0 {
             ran = 1;
@@ -235,8 +245,10 @@ impl Player {
             }
             self.frames += 1;
             done += 1;
-            if let Some(out) = audio.as_deref_mut() {
-                out.push(self.core.audio().samples);
+            if self.speed_percent == 100 {
+                if let Some(out) = audio.as_deref_mut() {
+                    out.push(self.core.audio().samples);
+                }
             }
             self.recorder.push_audio(self.core.audio().samples);
             let video = self.core.video();
@@ -583,6 +595,48 @@ impl Player {
         self.core.set_video_filter(filter);
     }
 
+    /// Selects a playback speed preset (25/50/100/150/200/300%).
+    pub fn set_speed(&mut self, percent: u32) {
+        self.speed_percent = match percent {
+            25 | 50 | 100 | 150 | 200 | 300 => percent,
+            _ => 100,
+        };
+        self.pacer.reset();
+    }
+
+    /// Holds or releases fast-forward.
+    pub fn set_fast_forward(&mut self, fast: bool) {
+        if self.fast_forward != fast {
+            self.fast_forward = fast;
+            self.pacer.reset();
+        }
+    }
+
+    /// Whether the hold-to-fast-forward key is down.
+    #[must_use]
+    pub const fn fast_forward(&self) -> bool {
+        self.fast_forward
+    }
+
+    /// Current speed preset.
+    #[must_use]
+    pub const fn speed_percent(&self) -> u32 {
+        self.speed_percent
+    }
+
+    /// Runs exactly one frame while paused and refreshes the texture.
+    pub fn advance_frame(&mut self, ctx: &egui::Context) {
+        if let Err(err) = self.core.run_frame() {
+            self.message = err.to_string();
+            return;
+        }
+        self.frames += 1;
+        self.upload(ctx);
+        self.paused = true;
+        self.pacer.reset();
+        self.next_repaint = Duration::from_millis(250);
+    }
+
     /// Applies a sample rate live.
     pub fn set_sample_rate(&mut self, rate: f32) {
         self.sample_rate = rate;
@@ -845,13 +899,13 @@ mod tests {
         let frame = pacer.frame;
         // The first interval is empty, so `Player::step` presents the
         // power-on frame itself (frames == 0).
-        let (ran, _, wait) = pacer.advance(start);
+        let (ran, _, wait) = pacer.advance(start, 100);
         assert_eq!(ran, 0);
         assert_eq!(wait, frame);
-        let (ran, _, wait) = pacer.advance(start + frame);
+        let (ran, _, wait) = pacer.advance(start + frame, 100);
         assert_eq!(ran, 1);
         assert_eq!(wait, frame);
-        let (ran, _, _) = pacer.advance(start + frame * 2);
+        let (ran, _, _) = pacer.advance(start + frame * 2, 100);
         assert_eq!(ran, 1);
     }
 
@@ -861,12 +915,12 @@ mod tests {
         let mut pacer = pacer_at(start);
         let frame = pacer.frame;
         // A 10-frame UI stall must not produce 10 emulated frames.
-        let (ran, _, wait) = pacer.advance(start + frame * 10);
+        let (ran, _, wait) = pacer.advance(start + frame * 10, 100);
         assert_eq!(ran, MAX_CATCH_UP);
         // Backlog is discarded, so the next update waits a full frame
         // instead of immediately running more stale frames.
         assert_eq!(wait, frame);
-        let (ran, _, _) = pacer.advance(start + frame * 11);
+        let (ran, _, _) = pacer.advance(start + frame * 11, 100);
         assert_eq!(ran, 1);
     }
 
@@ -927,7 +981,7 @@ mod tests {
         let mut frames = 0;
         for _ in 0..600 {
             now += frame;
-            let (ran, _, wait) = pacer.advance(now);
+            let (ran, _, wait) = pacer.advance(now, 100);
             frames += ran;
             assert!(ran <= 1, "steady 60 Hz input ran {ran} frames");
             assert!(wait <= frame, "wait {wait:?} exceeds one frame");
