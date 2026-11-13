@@ -23,7 +23,7 @@ Public suites must be 100%:
 | blargg `instr_timing` / `instr_misc` | all |
 | `ppu_vbl_nmi` | 10/10 |
 | `ppu_sprites` | 19/19 |
-| MMC3 A12 IRQ tests | all |
+| MMC3 A12 IRQ tests | all (currently 4/6; see `docs/accuracy-divergences.md`) |
 | `apu_test`, `blargg_apu_2005` | all |
 | AccuracyCoin | 146/146 non-DRAW rows (currently 146/146) |
 | Commercial oracle corpus | byte-identical frames/audio |

@@ -170,7 +170,7 @@ The main effort is now the reference-parity accuracy core. Details in
       (mapper 157, UPC-A/EAN-13 modules at the documented 1000-cycle rate).
       The piano's MIDI replies and the Datach EEPROM need their real-ROM
       validation; both transports have synthetic tests. Device state is part
-      of `UNKOST06` save states; the Controllers tab selects a device per
+      of `UNKOST07` save states; the Controllers tab selects a device per
       port.
 - [ ] FDS (BIOS supplied by the user, never bundled), Vs. System.
 - [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation

@@ -16,7 +16,23 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 
 ## Open failures
 
-None. All non-DRAW AccuracyCoin rows pass.
+None in AccuracyCoin. All non-DRAW rows pass.
+
+### MMC3 A12 timing (2026-11-13)
+
+The new PPU-A12 clocking is 4/6 in `mmc3_test_2`:
+
+- `4-scanline_timing` — test 12 (`Scanline 239 IRQ should occur later when
+  $2000=$10`) is one dot late/early at the line-239 boundary. Tests for
+  scanlines 0 and 1 in both `$2000` modes pass, as do all `$2000=$08` cases.
+- `6-MMC3_alt` — exercises the Sharp MMC3A/NEC “single IRQ on reload to zero”
+  revision. The ROM has no NES 2.0 submapper and the core defaults to the
+  normal MMC3B/C behavior, so this needs a per-game revision selector.
+- The combined `mmc3_test` suite additionally fails `6-MMC6`; MMC6-specific
+  IRQ behavior is not modelled.
+
+AccuracyCoin, the library audit and the existing mapper unit tests are
+unaffected.
 
 ## Expansion-audio parity (2026-11-12)
 

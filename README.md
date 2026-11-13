@@ -67,6 +67,7 @@ docs/
   roadmap.md             # A0..A7 and M0..M4
   implementation-plan.md # current easy-to-hard feature queue
   mapper-audit.md        # 7,101-image compatibility and mapper coverage
+  test-rom-inventory.md  # NESdev suite coverage and missing BIOS/ROMs
   performance.md         # benchmark, state costs and efficiency budgets
   oracle-feature-matrix.md # comparison against the NES emulator field
   decisions.md           # license/stack/scope decisions

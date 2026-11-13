@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::cart::{
-    A12Irq, Aux77, Bandai153, Chr169, Chr512, CpromChr, HybridChr, Mirroring, Mmc5Aux, N163Nt,
-    NtMapping, OekaChr, Qtram, Vrc7Chr,
+    A12Irq, Aux77, Bandai153, Chr169, Chr512, CpromChr, HybridChr, Mirroring, Mmc3A12, Mmc5Aux,
+    N163Nt, NtMapping, OekaChr, Qtram, Vrc7Chr,
 };
 use crate::clock::Timing;
 
@@ -160,6 +160,10 @@ pub struct Ppu {
     nt_map: Option<[u8; 4]>,
     /// Shared A12-edge IRQ counter (mapper 563).
     a12: Option<Rc<RefCell<A12Irq>>>,
+    /// Shared MMC3 A12 edge detector.
+    mmc3_a12: Option<Rc<RefCell<Mmc3A12>>>,
+    /// Absolute PPU dot counter, used by the MMC3 A12 low-time filter.
+    dots: u64,
     /// UM6578 enhanced-mode flag (mapper 405).
     um6578: bool,
     /// UM6578 10 KiB video RAM.
@@ -338,6 +342,8 @@ impl Ppu {
             chr_ram_map: None,
             nt_map: None,
             a12: None,
+            mmc3_a12: None,
+            dots: 0,
             um6578: false,
             um_vram: vec![0; 0x10000],
             um_ctrl: 0,
@@ -599,6 +605,17 @@ impl Ppu {
         self.a12 = Some(aux);
     }
 
+    /// Attaches the shared MMC3 A12 edge detector.
+    pub fn set_mmc3_a12(&mut self, aux: Rc<RefCell<Mmc3A12>>) {
+        self.mmc3_a12 = Some(aux);
+    }
+
+    fn observe_mmc3_a12(&self, address: u16) {
+        if let Some(aux) = &self.mmc3_a12 {
+            aux.borrow_mut().observe(address, self.dots);
+        }
+    }
+
     /// Marks the PPU as a UM6578 enhanced famiclone.
     pub fn set_um6578(&mut self, enabled: bool) {
         self.um6578 = enabled;
@@ -638,6 +655,7 @@ impl Ppu {
         if let Some(aux) = &self.a12 {
             aux.borrow_mut().observe(address);
         }
+        self.observe_mmc3_a12(address);
         if let Some(aux) = &self.aux77 {
             return aux.borrow().chr_read(address);
         }
@@ -689,6 +707,7 @@ impl Ppu {
 
     /// Advances one PPU dot.
     pub fn step_dot(&mut self) {
+        self.dots = self.dots.wrapping_add(1);
         self.warmup_dots = self.warmup_dots.saturating_sub(1);
         if let Some(value) = self.pending_mask {
             if self.mask_delay == 0 {
@@ -739,7 +758,10 @@ impl Ppu {
                 self.oam_id = [64; 8];
             }
         }
-        if self.mask & 0x18 != 0 && (257..=320).contains(&self.dot) {
+        if self.mask & 0x18 != 0
+            && (self.scanline < 240 || self.scanline == self.pre_render_line())
+            && (257..=320).contains(&self.dot)
+        {
             if self.dot == 257 {
                 self.fetch_addr = 0;
             } else if self.dot.is_multiple_of(2) && !self.oam2_overflow {
@@ -1032,6 +1054,7 @@ impl Ppu {
                     // can land at the read. During rendering it is deferred so
                     // the still-running fetch pipeline is not disturbed.
                     self.increment_vram_address(false);
+                    self.observe_mmc3_a12(self.v);
                 }
                 value
             }
@@ -1128,6 +1151,7 @@ impl Ppu {
                     let old_low = self.v as u8;
                     self.t = (self.t & 0xFF00) | u16::from(value);
                     self.v = self.t;
+                    self.observe_mmc3_a12(self.v);
                     if (self.scanline < 240 || self.scanline == self.pre_render_line())
                         && self.mask & 0x18 != 0
                     {
@@ -1149,6 +1173,7 @@ impl Ppu {
                 let render = (self.scanline < 240 || self.scanline == self.pre_render_line())
                     && self.mask & 0x18 != 0;
                 self.increment_vram_address(render);
+                self.observe_mmc3_a12(self.v);
             }
             _ => {}
         }
@@ -1208,6 +1233,7 @@ impl Ppu {
         if let Some(aux) = &self.a12 {
             aux.borrow_mut().observe(address);
         }
+        self.observe_mmc3_a12(address);
         if let Some(aux) = &self.aux77 {
             return aux.borrow().nt_read(address);
         }

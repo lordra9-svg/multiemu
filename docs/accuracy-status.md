@@ -38,6 +38,26 @@ Performance: `unko bench --synthetic 3000 --min-fps 300` measures **784.7 fps**
 (13.06x real time, 1.274 ms/frame); release save states are 417,054 bytes at
 172 us save / 237 us restore. Details in `docs/performance.md`.
 
+## MMC3 A12 IRQ clocking (2026-11-13)
+
+The MMC3 scanline counter now clocks on filtered PPU A12 rising edges instead
+of a scanline-boundary callback. `$2006`/`$2007` address changes feed the same
+filter, the low-time threshold is three CPU cycles (nine NTSC PPU dots), and
+sprite fetches are restricted to visible and pre-render lines. All MMC3
+variants forward the shared A12 detector.
+
+`mmc3_test_2` results: **4/6** — `1-clocking`, `2-details`, `3-A12_clocking`
+and `5-MMC3` pass; `4-scanline_timing` fails only the line-239
+`$2000=$10` boundary (test 12), and `6-MMC3_alt` needs an alternate-revision
+selector (the ROM carries no NES 2.0 submapper). The combined `mmc3_test`
+suite also fails `6-MMC6` on MMC6-specific IRQ behavior. AccuracyCoin remains
+**146/146 non-DRAW**, and the 20/120-frame library audit is unchanged
+(3,904/6,499 rendering).
+
+Because `Mmc3` and the PPU gained serialized A12 state, the save-state magic is
+now **`UNKOST07`**; `UNKOST06` states are rejected by the normal bad-magic
+check. See `docs/accuracy-divergences.md` for the two open MMC3 failures.
+
 ## A1 — 6502
 
 | Test | Result | Evidence |

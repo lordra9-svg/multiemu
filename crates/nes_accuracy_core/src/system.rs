@@ -80,6 +80,8 @@ pub struct System {
     ppu_reset: PpuResetBehavior,
     /// Active cheat overlay (host preference, not serialized).
     cheats: Vec<Cheat>,
+    /// Whether the mapper clocks its IRQ counter from PPU A12.
+    has_mmc3_a12: bool,
     open_bus: u8,
     /// Internal 2A03 data bus (drives $4015 bit 5, not the external bus).
     internal_bus: u8,
@@ -597,6 +599,9 @@ impl System {
         if let Some(aux) = cart.a12_irq() {
             ppu.set_a12_irq(aux);
         }
+        if let Some(aux) = cart.mmc3_a12() {
+            ppu.set_mmc3_a12(aux);
+        }
         if let Some(aux) = cart.chr169() {
             ppu.set_chr169(aux);
         }
@@ -613,6 +618,7 @@ impl System {
                 ppu.set_rom_nametable_rom(rom.to_vec());
             }
         }
+        let has_mmc3_a12 = cart.mmc3_a12().is_some();
         let mut system = Self {
             cart,
             cpu: Cpu::new(),
@@ -646,6 +652,7 @@ impl System {
             ram_clear: RamClear::Zero,
             ppu_reset: PpuResetBehavior::Famicom,
             cheats: Vec::new(),
+            has_mmc3_a12,
             open_bus: 0,
             internal_bus: 0,
             stall_cycles: 0,
@@ -1002,7 +1009,7 @@ impl System {
     /// Serializes the whole console state (mapper state included).
     pub fn save_state(&self) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
-        out.extend_from_slice(b"UNKOST06");
+        out.extend_from_slice(b"UNKOST07");
         out.extend_from_slice(&self.cart.fingerprint().to_le_bytes());
         let mut cart_state = Vec::new();
         self.cart.save_state(&mut cart_state)?;
@@ -1044,7 +1051,7 @@ impl System {
 
     /// Restores a state produced by [`System::save_state`].
     pub fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
-        if data.len() < 8 + 8 + 4 || &data[..8] != b"UNKOST06" {
+        if data.len() < 8 + 8 + 4 || &data[..8] != b"UNKOST07" {
             return Err("not an Unko state (bad magic/version)".into());
         }
         let fingerprint = u64::from_le_bytes(
@@ -1253,6 +1260,12 @@ impl System {
         self.ppu
             .set_nametable_quadrants(self.cart.nametable_quadrants());
         self.ppu.set_nametable_map(self.cart.nametable_map());
+        if let Some(aux) = self.cart.a12_irq() {
+            self.ppu.set_a12_irq(aux);
+        }
+        if let Some(aux) = self.cart.mmc3_a12() {
+            self.ppu.set_mmc3_a12(aux);
+        }
     }
 
     /// Reads a byte from the CPU address space without side effects.
@@ -1702,6 +1715,11 @@ impl System {
         let rendered = (line_after <= 239 || line_after == 261) && self.ppu.mask & 0x18 != 0;
         if rendered && line == line_after && dot < 260 && dot_after >= 260 {
             self.cart.clock_scanline();
+        }
+        // MMC3-family counters clock on filtered PPU A12 edges, including
+        // manual $2006/$2007 address changes while rendering is disabled.
+        if self.has_mmc3_a12 {
+            self.cart.sync_a12();
         }
     }
 
@@ -2545,6 +2563,7 @@ mod tests {
 
         let mut system = System::from_ines(&rom).expect("load");
         assert_eq!(system.cart.mapper(), 4);
+        system.ppu.ctrl = 0x08; // sprites use $1000, BG uses $0000
         system.ppu.mask = 0x1E; // background + sprites: A12 rises each line
         system.cart.cpu_write(0xC000, 0x10); // latch = 16
         system.cart.cpu_write(0xC001, 0x00); // reload

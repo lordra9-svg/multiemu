@@ -670,6 +670,14 @@ pub trait Mapper: fmt::Debug + MapperState {
         None
     }
 
+    /// Shared MMC3 A12 edge detector.
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        None
+    }
+
+    /// Drains filtered A12 edges into the mapper's IRQ counter.
+    fn sync_a12(&mut self) {}
+
     /// Pops a pending cartridge DMA request (UM6578).
     fn take_dma(&mut self) -> Option<DmaRequest> {
         None
@@ -1584,6 +1592,16 @@ impl Cartridge {
         self.mapper.a12_irq()
     }
 
+    /// Shared MMC3 A12 edge detector.
+    pub fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.mapper.mmc3_a12()
+    }
+
+    /// Drains filtered A12 edges into the mapper's IRQ counter.
+    pub fn sync_a12(&mut self) {
+        self.mapper.sync_a12();
+    }
+
     /// Pops a pending cartridge DMA request.
     pub fn take_dma(&mut self) -> Option<DmaRequest> {
         self.mapper.take_dma()
@@ -2304,6 +2322,14 @@ impl Mapper for Waixing195 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -2407,6 +2433,14 @@ impl Mapper for Mmc3_197 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -4641,6 +4675,14 @@ impl Mapper for Mmc3_254 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -5330,6 +5372,14 @@ impl Mapper for Unl158B {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -5472,6 +5522,14 @@ impl Mapper for Mmc3_219 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -5595,6 +5653,14 @@ impl Mapper for Mmc3_208 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -6212,6 +6278,14 @@ impl Mapper for Mmc3_262 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -7748,6 +7822,19 @@ enum Inner446 {
 }
 
 impl Mapper for Inner446 {
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        match self {
+            Self::Skrom(_) => None,
+            Self::Board(board) => board.mmc3_a12(),
+        }
+    }
+
+    fn sync_a12(&mut self) {
+        if let Self::Board(board) = self {
+            board.sync_a12();
+        }
+    }
+
     fn irq_possible(&self) -> bool {
         true
     }
@@ -8952,6 +9039,14 @@ impl Mapper for Techline351 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -10628,6 +10723,14 @@ impl Mapper for DragonFighter292 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -11923,6 +12026,14 @@ impl Mapper for Mapper594 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -13445,6 +13556,14 @@ impl Mapper for NeSEvent2_555 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -14245,6 +14364,14 @@ impl Mapper for Hsk007 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -14332,6 +14459,14 @@ impl Mapper for Mmc3_334 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -15746,6 +15881,14 @@ impl Mapper for Mmc3_12 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -16379,6 +16522,14 @@ impl Mapper for Tec9719 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -17186,6 +17337,42 @@ pub struct DmaRequest {
     pub target: u16,
     /// Number of bytes to transfer.
     pub len: u16,
+}
+
+/// MMC3 A12 edge detector.
+///
+/// The MMC3 clocks its IRQ counter on a rising edge of PPU A12 only after A12
+/// has stayed low for three CPU cycles (nine NTSC PPU dots). Manual `$2006`
+/// writes change A12 too, so the PPU feeds every bus address through this
+/// filter, not just the CHR fetches.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Mmc3A12 {
+    /// Filtered rising edges since the mapper last drained the counter.
+    edges: u32,
+    low: bool,
+    low_since: u64,
+}
+
+impl Mmc3A12 {
+    /// Observes one PPU bus address at absolute dot `dots`.
+    pub fn observe(&mut self, address: u16, dots: u64) {
+        let a12 = address & 0x1000 != 0;
+        if !a12 {
+            if !self.low {
+                self.low = true;
+                self.low_since = dots;
+            }
+        } else if self.low {
+            if dots.saturating_sub(self.low_since) >= 9 {
+                self.edges = self.edges.saturating_add(1);
+            }
+            self.low = false;
+        }
+    }
+
+    fn take(&mut self) -> u32 {
+        std::mem::take(&mut self.edges)
+    }
 }
 
 /// A12-edge IRQ counter shared between the PPU and a board (mapper 563).
@@ -18313,6 +18500,14 @@ impl Mapper for Mmc3Outer {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -19941,6 +20136,14 @@ impl Mapper for Mmc3_313 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -20984,6 +21187,8 @@ pub struct Mmc3 {
     irq_pending: bool,
     /// Sharp MMC3A/NEC revision: only a transition to zero raises an IRQ.
     irq_alternate: bool,
+    /// Filtered PPU A12 edges fed by the PPU.
+    a12: Rc<RefCell<Mmc3A12>>,
     hybrid: Option<Rc<RefCell<HybridChr>>>,
 }
 
@@ -21041,6 +21246,7 @@ impl Mmc3 {
             irq_enabled: false,
             irq_pending: false,
             irq_alternate: false,
+            a12: Rc::new(RefCell::new(Mmc3A12::default())),
             hybrid: None,
         }
     }
@@ -21264,23 +21470,34 @@ impl Mapper for Mmc3 {
         self.irq_pending
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        Some(self.a12.clone())
+    }
+
+    fn sync_a12(&mut self) {
+        for _ in 0..self.a12.borrow_mut().take() {
+            let old = self.irq_counter;
+            if self.irq_counter == 0 || self.irq_reload {
+                self.irq_counter = self.irq_latch;
+                self.irq_reload = false;
+                if self.irq_alternate && old != 0 && self.irq_counter == 0 && self.irq_enabled {
+                    self.irq_pending = true;
+                }
+            } else {
+                self.irq_counter -= 1;
+                if self.irq_alternate && self.irq_counter == 0 && self.irq_enabled {
+                    self.irq_pending = true;
+                }
+            }
+            if !self.irq_alternate && self.irq_counter == 0 && self.irq_enabled {
+                self.irq_pending = true;
+            }
+        }
+    }
+
     fn clock_scanline(&mut self) {
-        let old = self.irq_counter;
-        if self.irq_counter == 0 || self.irq_reload {
-            self.irq_counter = self.irq_latch;
-            self.irq_reload = false;
-            if self.irq_alternate && old != 0 && self.irq_counter == 0 && self.irq_enabled {
-                self.irq_pending = true;
-            }
-        } else {
-            self.irq_counter -= 1;
-            if self.irq_alternate && self.irq_counter == 0 && self.irq_enabled {
-                self.irq_pending = true;
-            }
-        }
-        if !self.irq_alternate && self.irq_counter == 0 && self.irq_enabled {
-            self.irq_pending = true;
-        }
+        // MMC3 IRQ clocking is driven by filtered PPU A12 edges (`sync_a12`),
+        // not by the scanline-boundary fallback used by other boards.
     }
 
     fn chr_ram_map(&self) -> Option<[u8; 8]> {
@@ -21412,6 +21629,14 @@ impl Mapper for Mmc3_123 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -21561,6 +21786,14 @@ impl Mapper for Mmc3_187 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -21657,6 +21890,14 @@ impl Mapper for Mmc3_245 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -21759,6 +22000,14 @@ impl Mapper for Mmc3_198 {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -21833,6 +22082,14 @@ impl Mapper for Mmc3_263 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -21940,6 +22197,14 @@ impl Mapper for Mmc3_37 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -22101,6 +22366,14 @@ impl Mapper for Ga23c {
         self.inner.irq_line()
     }
 
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
+    }
+
     fn clock_scanline(&mut self) {
         self.inner.clock_scanline();
     }
@@ -22237,6 +22510,14 @@ impl Mapper for Mmc3_199 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -22800,6 +23081,14 @@ impl Mapper for Mmc3_249 {
 
     fn irq_line(&self) -> bool {
         self.inner.irq_line()
+    }
+
+    fn mmc3_a12(&self) -> Option<Rc<RefCell<Mmc3A12>>> {
+        self.inner.mmc3_a12()
+    }
+
+    fn sync_a12(&mut self) {
+        self.inner.sync_a12();
     }
 
     fn clock_scanline(&mut self) {
@@ -35967,6 +36256,13 @@ impl Mapper for Benshieng286 {
 
 #[cfg(test)]
 mod tests {
+    fn mmc3_clock(cart: &mut Cartridge) {
+        let a12 = cart.mmc3_a12().expect("MMC3 A12");
+        a12.borrow_mut().observe(0x0000, 0);
+        a12.borrow_mut().observe(0x1000, 100);
+        cart.sync_a12();
+    }
+
     #[test]
     fn datach_barcode_generates_ean_modules_and_scans_them() {
         let pixels = datach_pixels("012345678905").expect("upc-a");
@@ -37237,13 +37533,13 @@ mod tests {
         cart.cpu_write(0xC000, 0);
         cart.cpu_write(0xC001, 0);
         cart.cpu_write(0xE001, 0);
-        cart.clock_scanline();
+        mmc3_clock(&mut cart);
         assert!(cart.irq_line());
         cart.cpu_write(0xE000, 0);
         assert!(!cart.irq_line());
         cart.cpu_write(0xE001, 0);
         for _ in 0..16 {
-            cart.clock_scanline();
+            mmc3_clock(&mut cart);
         }
         assert!(!cart.irq_line());
         // A non-zero latch still fires after N+1 clocks.
@@ -37251,7 +37547,7 @@ mod tests {
         cart.cpu_write(0xC001, 0);
         cart.cpu_write(0xE001, 0);
         for _ in 0..4 {
-            cart.clock_scanline();
+            mmc3_clock(&mut cart);
         }
         assert!(cart.irq_line());
     }
@@ -43160,10 +43456,10 @@ mod tests {
         cart.cpu_write(0xC001, 0); // reload
         cart.cpu_write(0xE001, 0); // enable
         for _ in 0..3 {
-            cart.clock_scanline();
+            mmc3_clock(&mut cart);
         }
         assert!(!cart.irq_line(), "IRQ too early");
-        cart.clock_scanline();
+        mmc3_clock(&mut cart);
         assert!(cart.irq_line(), "IRQ did not fire");
         cart.cpu_write(0xE000, 0);
         assert!(!cart.irq_line(), "IRQ did not clear");
