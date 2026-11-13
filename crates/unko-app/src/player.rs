@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use unko_core::{
-    Core, DebugSpace, InputState, LoadOptions, PortDevice, Region, Registry, SystemId, VideoFilter,
+    AudioFilterModel, AudioQuality, Core, DebugSpace, InputState, LoadOptions, PortDevice, Region,
+    Registry, SystemId, VideoFilter,
 };
 
 use crate::audio::AudioOutput;
@@ -135,6 +136,9 @@ impl Player {
         };
         core.set_port_device(0, device1);
         core.set_port_device(1, device2);
+        core.set_audio_quality(settings.audio_quality);
+        core.set_audio_filters(settings.audio_filter_model());
+        core.set_channel_gains(settings.effective_channel_gains());
 
         let save_dir = settings.save_dir.clone();
         fs::create_dir_all(&save_dir).map_err(|err| format!("create save dir: {err}"))?;
@@ -511,6 +515,21 @@ impl Player {
     pub fn set_sample_rate(&mut self, rate: f32) {
         self.sample_rate = rate;
         self.core.set_sample_rate(rate);
+    }
+
+    /// Applies the resampler quality live.
+    pub fn set_audio_quality(&mut self, quality: AudioQuality) {
+        self.core.set_audio_quality(quality);
+    }
+
+    /// Applies the analog output filter model live.
+    pub fn set_audio_filters(&mut self, filters: AudioFilterModel) {
+        self.core.set_audio_filters(filters);
+    }
+
+    /// Applies the per-channel mixer gains live.
+    pub fn set_channel_gains(&mut self, gains: [f32; 6]) {
+        self.core.set_channel_gains(gains);
     }
 
     /// Pauses/resumes.

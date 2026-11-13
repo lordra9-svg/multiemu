@@ -66,7 +66,7 @@ Key interaction rules worth keeping:
 | RenderWidget | `egui` texture viewport, aspect-correct | now |
 | Settings: General/Interface | theme, pause on focus loss, confirm stop | now |
 | Settings: Graphics | filter (raw/composite), integer scale | now |
-| Settings: Audio | sample rate, volume/mute (playback later) | partial |
+| Settings: Audio | sample rate, latency target, resampler quality, output filter, volume/mute, per-channel mixer | now |
 | Settings: Controllers | fixed keyboard map, rebinding UI | partial |
 | Settings: Paths | ROM dir, save dir | now |
 | Settings: NES page | region, mapper/header info, deterministic RAM | now |
@@ -134,7 +134,15 @@ platform toolchains.
   the device per port and applies it immediately.
 - Audio: cpal output with a lock-free ring buffer, device-rate resampling,
   volume/mute and underrun statistics. The stream is opened once at startup
-  and fed one mono sample per emulated frame.
+  and fed one mono sample per emulated frame. The Audio page selects the
+  target buffer latency (15-250 ms, default 60), the resampler quality
+  (Fast/Standard/High: 0.42/0.46/0.49 cutoff with Hann/Blackman/
+  Blackman-Harris windows), and the output filter model (NES RF, Crisp,
+  Warm, Linear, or a custom high-pass/low-pass pair). The per-channel mixer
+  has a gain slider and a mute switch for pulse 1/2, triangle, noise, DMC and
+  expansion audio; all values are host preferences, never part of a save
+  state. The page also reports the measured queue depth, underruns and
+  dropped samples.
 - Debugger: a separate window with CPU registers/flags and a live
   disassembly, PPU timing, palette and OAM views, APU channel meters, a
   hex viewer/editor for CPU/PPU/OAM memory and PC breakpoints. Stepping works
@@ -149,8 +157,11 @@ platform toolchains.
 - Recording: WAV audio, numbered PNG frames and animated GIF, written under
   `saves/recordings`; all encoders are pure Rust and work on every target.
 - State/SRAM: `saves/<rom>.<core>.slotN.state` and `saves/<rom>.sav`; the core
-  never touches the filesystem. States carry an `UNKOST03` header, a ROM
+  never touches the filesystem. States carry an `UNKOST04` header, a ROM
   fingerprint and the mapper state, so a state cannot be loaded into a
   different image or core. The former TetaNES state files are ignored.
 - Audio playback is active through cpal; the Audio page reports the actual
-  device rate, channel count, underruns and dropped samples.
+  device rate, channel count, target and measured latency, underruns and
+  dropped samples. The queue is primed on the first frame, trimmed after a
+  stall, and an underrun repeats the last sample with a short decay instead
+  of inserting a hard zero.

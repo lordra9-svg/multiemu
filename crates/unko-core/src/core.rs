@@ -5,7 +5,8 @@ use std::fmt;
 use crate::debug::{ApuState, CpuState, DebugSpace, Disassembly, PpuState};
 use crate::input::InputState;
 use crate::types::{
-    AudioBuffer, CoreInfo, FrameBuffer, FrameStats, LoadOptions, Palette, PortDevice, VideoFilter,
+    AudioBuffer, AudioFilterModel, AudioQuality, CoreInfo, FrameBuffer, FrameStats, LoadOptions,
+    Palette, PortDevice, VideoFilter,
 };
 
 /// Errors a core may return to the host.
@@ -98,6 +99,21 @@ pub trait Core {
 
     /// Changes the display palette.
     fn set_palette(&mut self, _palette: Palette) {}
+
+    /// Selects the audio resampler quality. May take effect on the next frame.
+    fn set_audio_quality(&mut self, _quality: AudioQuality) {}
+
+    /// Selects the analog output filter model. May take effect on the next
+    /// frame.
+    fn set_audio_filters(&mut self, _filters: AudioFilterModel) {}
+
+    /// Sets the per-channel mixer gains in
+    /// `[pulse1, pulse2, triangle, noise, dmc, expansion]` order.
+    ///
+    /// A gain of `1.0` is the unmodified hardware mix; the host uses this for
+    /// the per-channel volume/mute controls. The values are presentation
+    /// state, never part of a save state.
+    fn set_channel_gains(&mut self, _gains: [f32; 6]) {}
 
     /// Serializes the full machine state into `out`, replacing its contents.
     fn save_state(&mut self, out: &mut Vec<u8>) -> Result<(), CoreError>;

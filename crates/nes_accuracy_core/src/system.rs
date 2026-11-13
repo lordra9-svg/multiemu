@@ -10,7 +10,7 @@ use crate::cart::{CartError, Cartridge, Mirroring};
 use crate::clock::Timing;
 use crate::cpu::Cpu;
 use crate::ppu::Ppu;
-use unko_core::DebugSpace;
+use unko_core::{AudioFilterModel, AudioQuality, DebugSpace};
 
 /// CPU clock in Hz (NTSC).
 pub const CPU_HZ: f64 = 1_789_773.0;
@@ -65,6 +65,11 @@ pub struct System {
     audio: Vec<f32>,
     audio_rate: f32,
     resampler: crate::resampler::Resampler,
+    /// Host audio preferences (never part of a save state).
+    audio_quality: AudioQuality,
+    audio_filters: AudioFilterModel,
+    /// `[pulse1, pulse2, triangle, noise, dmc, expansion]` gains.
+    channel_gains: [f32; 6],
     open_bus: u8,
     /// Internal 2A03 data bus (drives $4015 bit 5, not the external bus).
     internal_bus: u8,
@@ -443,6 +448,9 @@ impl System {
             audio: Vec::with_capacity(1024),
             audio_rate: 44_100.0,
             resampler: crate::resampler::Resampler::new(44_100, 1_789_773.0),
+            audio_quality: AudioQuality::Standard,
+            audio_filters: AudioFilterModel::NesRf,
+            channel_gains: [1.0; 6],
             open_bus: 0,
             internal_bus: 0,
             stall_cycles: 0,
@@ -475,6 +483,7 @@ impl System {
         cpu.reset(self);
         self.cpu = cpu;
         self.apu = Apu::new();
+        self.apu.set_channel_gains(self.channel_gains);
         self.resampler.reset();
         self.ram = [0; 0x800];
     }
@@ -542,7 +551,34 @@ impl System {
             self.audio_rate = rate;
             self.resampler =
                 crate::resampler::Resampler::new(rate.round() as u32, self.timing.cpu_hz() as f64);
+            self.apply_audio_preferences();
         }
+    }
+
+    /// Selects the resampler kernel shape.
+    pub fn set_audio_quality(&mut self, quality: AudioQuality) {
+        self.audio_quality = quality;
+        self.resampler.set_quality(quality);
+    }
+
+    /// Selects the analog output filter model.
+    pub fn set_audio_filters(&mut self, filters: AudioFilterModel) {
+        self.audio_filters = filters;
+        self.resampler.set_filter_model(filters);
+    }
+
+    /// Sets the per-channel mixer gains.
+    pub fn set_channel_gains(&mut self, gains: [f32; 6]) {
+        self.channel_gains = gains.map(|gain| gain.clamp(0.0, 1.0));
+        self.apu.set_channel_gains(self.channel_gains);
+    }
+
+    /// Re-applies the host's audio preferences to a freshly built or restored
+    /// resampler/APU.
+    fn apply_audio_preferences(&mut self) {
+        self.resampler.set_quality(self.audio_quality);
+        self.resampler.set_filter_model(self.audio_filters);
+        self.apu.set_channel_gains(self.channel_gains);
     }
 
     /// Selects the regional timing model (NTSC, PAL or Dendy).
@@ -659,7 +695,7 @@ impl System {
     /// Serializes the whole console state (mapper state included).
     pub fn save_state(&self) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
-        out.extend_from_slice(b"UNKOST03");
+        out.extend_from_slice(b"UNKOST04");
         out.extend_from_slice(&self.cart.fingerprint().to_le_bytes());
         let mut cart_state = Vec::new();
         self.cart.save_state(&mut cart_state)?;
@@ -701,7 +737,7 @@ impl System {
 
     /// Restores a state produced by [`System::save_state`].
     pub fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
-        if data.len() < 8 + 8 + 4 || &data[..8] != b"UNKOST03" {
+        if data.len() < 8 + 8 + 4 || &data[..8] != b"UNKOST04" {
             return Err("not an Unko state (bad magic/version)".into());
         }
         let fingerprint = u64::from_le_bytes(
@@ -752,6 +788,9 @@ impl System {
         self.dma = state.dma;
         self.audio_rate = state.audio_rate;
         self.resampler = state.resampler;
+        // The state carries the resampler cursor but not the host's quality,
+        // filter or mixer preferences; re-apply them (and the APU gains) now.
+        self.apply_audio_preferences();
         self.audio.clear();
         self.sync_cartridge();
         Ok(())
@@ -1121,7 +1160,7 @@ impl System {
     #[inline]
     fn mix_sample(&mut self) {
         let output = if self.cart.has_expansion_audio() {
-            self.apu.output + self.cart.audio_mix()
+            self.apu.output + self.cart.audio_mix() * self.channel_gains[5]
         } else {
             self.apu.output
         };

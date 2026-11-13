@@ -115,7 +115,7 @@ The main effort is now the reference-parity accuracy core. Details in
       a nearest/linear texture-filter option; the composite/NTSC display filter
       is offered through the core (`VideoFilter::Composite`).
 - [x] Gamepad support (SDL3), rebinding UI, hot-plug, four players.
-- [x] Audio device via `cpal`; ring buffer; sample-rate resampling; underrun policy.
+- [x] Audio device via `cpal`; 15-250 ms target buffer with startup prefill, stall trimming and decayed underrun recovery; Fast/Standard/High resampler kernels and NES RF/Crisp/Warm/Linear/custom output filters.
 - [x] Local capture: WAV, PNG sequence and GIF.
 - [x] Input display, touch controller, auto-fire and per-game gamepad profiles.
 - [x] SRAM persistence keyed by ROM content hash; save-state slots with
@@ -139,12 +139,12 @@ The main effort is now the reference-parity accuracy core. Details in
       Arkanoid paddle (inverted MSB-first position + fire, mouse steering),
       Power Pad / Family Trainer (12-button two-bit serial read with an
       on-screen mat) and the Family BASIC keyboard (9x8 matrix with the
-      documented host-key mapping). Device state is part of `UNKOST03` save
+      documented host-key mapping). Device state is part of `UNKOST04` save
       states; the Controllers tab selects a device per port.
 - [ ] FDS (BIOS supplied by the user, never bundled), Vs. System.
 - [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation
       pending).
-- [ ] Expansion audio levels and per-channel mixing.
+- [x] Expansion audio levels and per-channel mixing: independent gain and mute for pulse 1/2, triangle, noise, DMC and expansion audio (host preferences, not save state).
 - [x] NTSC/composite filter and palette selection: Raw, Composite and CRT
       (composite + scanlines + bloom) post-process filters, plus Canonical
       2C02, Consumer TV, RGB monitor and Monochrome palettes. The filters run

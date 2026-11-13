@@ -796,6 +796,16 @@ impl FrameCounter {
     }
 }
 
+/// Host mixer gains; defaults to the unmodified hardware mix.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct ChannelGains([f32; 6]);
+
+impl Default for ChannelGains {
+    fn default() -> Self {
+        Self([1.0; 6])
+    }
+}
+
 /// The full APU.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Apu {
@@ -827,6 +837,11 @@ pub struct Apu {
     /// Halt-bit changes waiting for the next APU cycle (applied after the
     /// length-counter clock, matching hardware write latency).
     pending_halt: [Option<bool>; 4],
+    /// Host mixer gains in
+    /// `[pulse1, pulse2, triangle, noise, dmc, expansion]` order. A host
+    /// preference, never serialized.
+    #[serde(skip)]
+    channel_gains: ChannelGains,
 }
 
 impl Apu {
@@ -1070,6 +1085,11 @@ impl Apu {
         self.dmc.load_buffer(byte);
     }
 
+    /// Sets the host mixer gains (`1.0` = unmodified hardware mix).
+    pub fn set_channel_gains(&mut self, gains: [f32; 6]) {
+        self.channel_gains = ChannelGains(gains.map(|gain| gain.clamp(0.0, 1.0)));
+    }
+
     /// Debug view of the five channel DAC outputs in the order
     /// `[pulse1, pulse2, triangle, noise, dmc]`, before mixing.
     #[must_use]
@@ -1088,11 +1108,29 @@ impl Apu {
     pub fn mix(&self) -> f32 {
         // Exact lookup of the two non-linear mixer curves; the sums are
         // integer-valued channel outputs so the tables reproduce the formula
-        // bit-for-bit without the per-cycle divisions.
-        let pulse = (self.pulse1.output() + self.pulse2.output()) as usize;
-        let tnd = 3 * self.triangle.output() as usize
-            + 2 * self.noise.output() as usize
-            + self.dmc.output() as usize;
+        // bit-for-bit without the per-cycle divisions. At unity gains the
+        // arithmetic is the original path, so traces and save states are
+        // unaffected unless the host moves a slider.
+        let p1 = self.pulse1.output();
+        let p2 = self.pulse2.output();
+        let tri = self.triangle.output();
+        let noise = self.noise.output();
+        let dmc = self.dmc.output();
+        let gains = self.channel_gains.0;
+        let unity = gains == [1.0; 6];
+        let (pulse, tnd) = if unity {
+            (
+                (p1 + p2) as usize,
+                3 * tri as usize + 2 * noise as usize + dmc as usize,
+            )
+        } else {
+            let p1 = (p1 * gains[0]).round() as usize;
+            let p2 = (p2 * gains[1]).round() as usize;
+            let tri = (tri * gains[2]).round() as usize;
+            let noise = (noise * gains[3]).round() as usize;
+            let dmc = (dmc * gains[4]).round() as usize;
+            (p1 + p2, 3 * tri + 2 * noise + dmc)
+        };
         PULSE_MIX[pulse.min(PULSE_MIX.len() - 1)] + TND_MIX[tnd.min(TND_MIX.len() - 1)]
     }
 
@@ -1187,6 +1225,32 @@ mod tests {
         assert!(changes.len() >= 3, "sequencer did not advance: {changes:?}");
         let interval = changes[2] - changes[1];
         assert_eq!(interval, 10, "duty step interval was {interval} cycles");
+    }
+
+    #[test]
+    fn channel_gains_mute_and_scale_the_mixer() {
+        let mut apu = Apu::new();
+        apu.write(0x4015, 0x01);
+        apu.write(0x4000, 0xBF); // 50% duty, constant volume 15
+        apu.write(0x4002, 0x10);
+        apu.write(0x4003, 0x08);
+        // Find a cycle where the pulse is audible.
+        let mut unity = 0.0;
+        for _ in 0..200 {
+            apu.tick();
+            if apu.mix() > 0.0 {
+                unity = apu.mix();
+                break;
+            }
+        }
+        assert!(unity > 0.0, "pulse never produced output");
+        apu.set_channel_gains([1.0; 6]);
+        assert_eq!(apu.mix(), unity, "unity gains changed the mix");
+
+        apu.set_channel_gains([0.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+        assert!(apu.mix() < unity, "muting pulse 1 did not lower the mix");
+        apu.set_channel_gains([0.0; 6]);
+        assert_eq!(apu.mix(), 0.0, "all channels muted but output is nonzero");
     }
 
     #[test]

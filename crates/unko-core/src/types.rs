@@ -333,3 +333,98 @@ impl Default for LoadOptions {
         }
     }
 }
+
+/// Resampler quality trade-off.
+///
+/// The core always band-limits its ~1.79 MHz mixer stream; the modes change
+/// the FIR cutoff and window rather than selecting an aliasing path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AudioQuality {
+    /// Softer, lower cutoff (more high-frequency roll-off, cheapest kernel).
+    Fast,
+    /// The default: cutoff 0.46 with a Blackman window.
+    #[default]
+    Standard,
+    /// Sharper cutoff 0.49 with a Blackman-Harris window.
+    High,
+}
+
+impl AudioQuality {
+    /// Stable identifier used by the settings file.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Standard => "standard",
+            Self::High => "high",
+        }
+    }
+
+    /// Parses a persisted identifier, falling back to [`Self::Standard`].
+    #[must_use]
+    pub fn from_name(value: &str) -> Self {
+        match value {
+            "fast" | "low" => Self::Fast,
+            "high" => Self::High,
+            _ => Self::Standard,
+        }
+    }
+
+    /// Human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Fast => "Fast",
+            Self::Standard => "Standard",
+            Self::High => "High",
+        }
+    }
+}
+
+/// Analog output filter model applied after resampling.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum AudioFilterModel {
+    /// The front-loader network: 90 Hz + 440 Hz high-pass, 14 kHz low-pass.
+    #[default]
+    NesRf,
+    /// No filtering (flat output; useful for comparing captures).
+    Linear,
+    /// Only the 14 kHz low-pass.
+    Crisp,
+    /// The NES high-passes with an 8 kHz low-pass.
+    Warm,
+    /// One high-pass and one low-pass at the supplied cutoffs; zero (or a
+    /// cutoff at/above Nyquist) disables that stage.
+    Custom {
+        /// High-pass cutoff in Hz; `0` disables it.
+        high_pass_hz: f32,
+        /// Low-pass cutoff in Hz; `0` or a value at/above Nyquist disables it.
+        low_pass_hz: f32,
+    },
+}
+
+impl AudioFilterModel {
+    /// Stable identifier used by the settings file.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NesRf => "nes-rf",
+            Self::Linear => "linear",
+            Self::Crisp => "crisp",
+            Self::Warm => "warm",
+            Self::Custom { .. } => "custom",
+        }
+    }
+
+    /// Human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NesRf => "NES RF",
+            Self::Linear => "Linear",
+            Self::Crisp => "Crisp (14 kHz low-pass)",
+            Self::Warm => "Warm (8 kHz low-pass)",
+            Self::Custom { .. } => "Custom",
+        }
+    }
+}

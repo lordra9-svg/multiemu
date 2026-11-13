@@ -41467,8 +41467,10 @@ mod tests {
     fn sunsoft5b_envelope_shapes_hold_at_the_documented_level() {
         // One ramps of 31 steps plus the boundary clock.
         let settle = |shape: u8| {
-            let mut envelope = YmEnvelope::default();
-            envelope.period = 1;
+            let mut envelope = YmEnvelope {
+                period: 1,
+                ..YmEnvelope::default()
+            };
             envelope.reset(shape);
             for _ in 0..32 {
                 envelope.clock();

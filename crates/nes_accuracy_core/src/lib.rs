@@ -34,9 +34,10 @@ pub use system::System;
 
 use crate::clock::Region as ClockRegion;
 use unko_core::{
-    Accuracy, ApuState, AudioBuffer, Core, CoreError, CoreInfo, CoreRegistration, CpuState,
-    DebugSpace, Disassembly, Features, FrameBuffer, FrameStats, InputState, LoadOptions, Palette,
-    PixelFormat, PortDevice, PpuState, Region as HostRegion, SystemId, VideoFilter,
+    Accuracy, ApuState, AudioBuffer, AudioFilterModel, AudioQuality, Core, CoreError, CoreInfo,
+    CoreRegistration, CpuState, DebugSpace, Disassembly, Features, FrameBuffer, FrameStats,
+    InputState, LoadOptions, Palette, PixelFormat, PortDevice, PpuState, Region as HostRegion,
+    SystemId, VideoFilter,
 };
 
 /// Stable id of this core implementation.
@@ -87,6 +88,9 @@ pub struct AccuracyCore {
     sample_rate: f32,
     filter: VideoFilter,
     palette: Palette,
+    audio_quality: AudioQuality,
+    audio_filters: AudioFilterModel,
+    channel_gains: [f32; 6],
 }
 
 impl AccuracyCore {
@@ -100,6 +104,9 @@ impl AccuracyCore {
             sample_rate: 48_000.0,
             filter: VideoFilter::Raw,
             palette: Palette::Canonical,
+            audio_quality: AudioQuality::Standard,
+            audio_filters: AudioFilterModel::NesRf,
+            channel_gains: [1.0; 6],
         }
     }
 }
@@ -192,6 +199,9 @@ impl Core for AccuracyCore {
             self.sample_rate
         };
         system.set_sample_rate(rate);
+        system.set_audio_quality(self.audio_quality);
+        system.set_audio_filters(self.audio_filters);
+        system.set_channel_gains(self.channel_gains);
         self.sample_rate = rate;
         self.system = Some(system);
         Ok(())
@@ -267,6 +277,27 @@ impl Core for AccuracyCore {
         self.palette = palette;
         if let Some(system) = self.system.as_mut() {
             system.set_palette(palette_variant(palette));
+        }
+    }
+
+    fn set_audio_quality(&mut self, quality: AudioQuality) {
+        self.audio_quality = quality;
+        if let Some(system) = self.system.as_mut() {
+            system.set_audio_quality(quality);
+        }
+    }
+
+    fn set_audio_filters(&mut self, filters: AudioFilterModel) {
+        self.audio_filters = filters;
+        if let Some(system) = self.system.as_mut() {
+            system.set_audio_filters(filters);
+        }
+    }
+
+    fn set_channel_gains(&mut self, gains: [f32; 6]) {
+        self.channel_gains = gains;
+        if let Some(system) = self.system.as_mut() {
+            system.set_channel_gains(gains);
         }
     }
 

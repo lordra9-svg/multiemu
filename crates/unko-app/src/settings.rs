@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 
-use unko_core::{Palette, PortDevice, Region, VideoFilter};
+use unko_core::{AudioFilterModel, AudioQuality, Palette, PortDevice, Region, VideoFilter};
 
 use crate::gamepad::{button_name, NesButton, PadMapping};
 
@@ -154,6 +154,21 @@ pub struct Settings {
     pub palette: Palette,
     /// Requested audio sample rate.
     pub sample_rate: f32,
+    /// Target output latency in milliseconds (15..=250).
+    pub audio_latency_ms: u32,
+    /// Resampler kernel quality.
+    pub audio_quality: AudioQuality,
+    /// Analog output filter model (Custom carries the slider values).
+    pub audio_filter: AudioFilterModel,
+    /// Last custom high-pass cutoff in Hz.
+    pub audio_high_pass: f32,
+    /// Last custom low-pass cutoff in Hz.
+    pub audio_low_pass: f32,
+    /// Per-channel mixer gains: pulse1, pulse2, triangle, noise, DMC,
+    /// expansion.
+    pub channel_gains: [f32; 6],
+    /// Per-channel mute switches, preserving the gain while muted.
+    pub channel_mutes: [bool; 6],
     /// Keep integer pixel scaling when possible.
     pub integer_scale: bool,
     /// Use linear texture filtering (smooth scaling) instead of nearest.
@@ -208,6 +223,13 @@ impl Default for Settings {
             filter: VideoFilter::Raw,
             palette: Palette::Canonical,
             sample_rate: 48_000.0,
+            audio_latency_ms: 60,
+            audio_quality: AudioQuality::Standard,
+            audio_filter: AudioFilterModel::NesRf,
+            audio_high_pass: 90.0,
+            audio_low_pass: 14_000.0,
+            channel_gains: [1.0; 6],
+            channel_mutes: [false; 6],
             integer_scale: true,
             linear_filter: false,
             zapper_port2: false,
@@ -272,6 +294,35 @@ impl Settings {
                 "filter" => settings.filter = parse_filter(value),
                 "palette" => settings.palette = Palette::from_name(value),
                 "sample_rate" => settings.sample_rate = value.parse().unwrap_or(48_000.0),
+                "audio_latency_ms" => {
+                    settings.audio_latency_ms = value.parse::<u32>().unwrap_or(60).clamp(15, 250)
+                }
+                "audio_quality" => settings.audio_quality = AudioQuality::from_name(value),
+                "audio_filter" => settings.audio_filter = parse_audio_filter(value),
+                "audio_high_pass" => {
+                    settings.audio_high_pass =
+                        value.parse::<f32>().unwrap_or(90.0).clamp(0.0, 2_000.0)
+                }
+                "audio_low_pass" => {
+                    settings.audio_low_pass = value
+                        .parse::<f32>()
+                        .unwrap_or(14_000.0)
+                        .clamp(0.0, 24_000.0)
+                }
+                "channel_gains" => {
+                    let mut gains = [1.0f32; 6];
+                    for (slot, text) in gains.iter_mut().zip(value.split(',')) {
+                        *slot = text.trim().parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0);
+                    }
+                    settings.channel_gains = gains;
+                }
+                "channel_mutes" => {
+                    let mut mutes = [false; 6];
+                    for (slot, text) in mutes.iter_mut().zip(value.split(',')) {
+                        *slot = matches!(text.trim(), "1" | "true" | "on");
+                    }
+                    settings.channel_mutes = mutes;
+                }
                 "integer_scale" => settings.integer_scale = parse_bool(value),
                 "linear_filter" => settings.linear_filter = parse_bool(value),
                 "zapper_port2" => settings.zapper_port2 = parse_bool(value),
@@ -325,7 +376,40 @@ impl Settings {
         if !explicit_port2 && settings.zapper_port2 {
             settings.port2_device = PortDevice::Zapper;
         }
+        if matches!(settings.audio_filter, AudioFilterModel::Custom { .. }) {
+            settings.audio_filter = settings.custom_audio_filter();
+        }
         settings
+    }
+
+    /// The filter model with any custom slider values filled in.
+    #[must_use]
+    pub fn custom_audio_filter(&self) -> AudioFilterModel {
+        AudioFilterModel::Custom {
+            high_pass_hz: self.audio_high_pass,
+            low_pass_hz: self.audio_low_pass,
+        }
+    }
+
+    /// The per-channel gains after applying the mute switches.
+    #[must_use]
+    pub fn effective_channel_gains(&self) -> [f32; 6] {
+        let mut gains = self.channel_gains;
+        for (gain, muted) in gains.iter_mut().zip(self.channel_mutes) {
+            if muted {
+                *gain = 0.0;
+            }
+        }
+        gains
+    }
+
+    /// The filter model to send to the core.
+    #[must_use]
+    pub fn audio_filter_model(&self) -> AudioFilterModel {
+        match self.audio_filter {
+            AudioFilterModel::Custom { .. } => self.custom_audio_filter(),
+            other => other,
+        }
     }
 
     /// Writes the settings file.
@@ -343,6 +427,13 @@ save_dir={}
 region={}
 filter={}
 sample_rate={}
+audio_latency_ms={}
+audio_quality={}
+audio_filter={}
+audio_high_pass={}
+audio_low_pass={}
+channel_gains={}
+channel_mutes={}
 integer_scale={}
 linear_filter={}
 palette={}
@@ -369,6 +460,21 @@ per_game_input={}
             region_name(self.region),
             filter_name(self.filter),
             self.sample_rate,
+            self.audio_latency_ms,
+            self.audio_quality.name(),
+            self.audio_filter.name(),
+            self.audio_high_pass,
+            self.audio_low_pass,
+            self.channel_gains
+                .iter()
+                .map(|gain| gain.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            self.channel_mutes
+                .iter()
+                .map(|muted| u8::from(*muted).to_string())
+                .collect::<Vec<_>>()
+                .join(","),
             self.integer_scale,
             self.linear_filter,
             self.palette.name(),
@@ -442,6 +548,19 @@ fn region_name(region: Region) -> &'static str {
     }
 }
 
+fn parse_audio_filter(value: &str) -> AudioFilterModel {
+    match value {
+        "linear" => AudioFilterModel::Linear,
+        "crisp" => AudioFilterModel::Crisp,
+        "warm" => AudioFilterModel::Warm,
+        "custom" => AudioFilterModel::Custom {
+            high_pass_hz: 90.0,
+            low_pass_hz: 14_000.0,
+        },
+        _ => AudioFilterModel::NesRf,
+    }
+}
+
 fn parse_filter(value: &str) -> VideoFilter {
     match value {
         "composite" => VideoFilter::Composite,
@@ -476,6 +595,27 @@ mod tests {
         settings.save(&path).expect("writes");
         let loaded = Settings::load(&path);
         assert_eq!(loaded, settings);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn audio_mixer_and_filter_settings_round_trip() {
+        let path = std::env::temp_dir().join("unko-settings-audio.conf");
+        let mut settings = Settings::default();
+        settings.audio_latency_ms = 30;
+        settings.audio_quality = AudioQuality::High;
+        settings.audio_high_pass = 120.0;
+        settings.audio_low_pass = 9_000.0;
+        settings.audio_filter = settings.custom_audio_filter();
+        settings.channel_gains = [0.5, 1.0, 0.25, 1.0, 0.0, 0.75];
+        settings.channel_mutes = [false, true, false, false, false, true];
+        settings.save(&path).expect("writes");
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded, settings);
+        assert_eq!(
+            loaded.effective_channel_gains(),
+            [0.5, 0.0, 0.25, 1.0, 0.0, 0.0]
+        );
         let _ = fs::remove_file(path);
     }
 

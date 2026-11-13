@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, Vec2};
-use unko_core::{PortDevice, Region, VideoFilter};
+use unko_core::{AudioFilterModel, AudioQuality, PortDevice, Region, VideoFilter};
 
 use crate::audio::AudioOutput;
 use crate::debugger::{self, Action};
@@ -122,10 +122,11 @@ impl App {
             Ok(gamepads) => (Some(gamepads), None),
             Err(err) => (None, Some(err)),
         };
-        let (audio, audio_error) = match AudioOutput::new(settings.sample_rate) {
-            Ok(audio) => (Some(audio), None),
-            Err(err) => (None, Some(err)),
-        };
+        let (audio, audio_error) =
+            match AudioOutput::new(settings.sample_rate, settings.audio_latency_ms) {
+                Ok(audio) => (Some(audio), None),
+                Err(err) => (None, Some(err)),
+            };
         if let Some(audio) = &audio {
             audio.set_volume(settings.volume);
             audio.set_muted(settings.muted);
@@ -273,9 +274,23 @@ impl App {
         if self.settings.pad_mapping != old.pad_mapping {
             self.active_mapping = self.settings.pad_mapping;
         }
+        if let Some(player) = &mut self.player {
+            if self.settings.audio_quality != old.audio_quality {
+                player.set_audio_quality(self.settings.audio_quality);
+            }
+            if self.settings.audio_filter_model() != old.audio_filter_model() {
+                player.set_audio_filters(self.settings.audio_filter_model());
+            }
+            if self.settings.effective_channel_gains() != old.effective_channel_gains() {
+                player.set_channel_gains(self.settings.effective_channel_gains());
+            }
+        }
         if let Some(audio) = &self.audio {
             audio.set_volume(self.settings.volume);
             audio.set_muted(self.settings.muted);
+            if self.settings.audio_latency_ms != old.audio_latency_ms {
+                audio.set_latency_ms(self.settings.audio_latency_ms);
+            }
         }
         apply_theme(ctx, self.settings.theme);
         if self.settings.rom_dir != old.rom_dir {
@@ -1841,16 +1856,124 @@ fn audio_tab(
 ) {
     ui.heading("Audio");
     ui.add_space(8.0);
-    egui::ComboBox::from_label("Sample rate")
-        .selected_text(format!("{:.0} Hz", settings.sample_rate))
-        .show_ui(ui, |ui| {
-            for rate in [44_100.0, 48_000.0, 96_000.0] {
-                ui.selectable_value(&mut settings.sample_rate, rate, format!("{rate:.0} Hz"));
-            }
+    egui::Grid::new("audio-output-grid")
+        .num_columns(2)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            ui.label("Sample rate");
+            egui::ComboBox::from_id_salt("sample-rate")
+                .selected_text(format!("{:.0} Hz", settings.sample_rate))
+                .show_ui(ui, |ui| {
+                    for rate in [44_100.0, 48_000.0, 96_000.0] {
+                        ui.selectable_value(
+                            &mut settings.sample_rate,
+                            rate,
+                            format!("{rate:.0} Hz"),
+                        );
+                    }
+                });
+            ui.end_row();
+
+            ui.label("Buffer latency");
+            egui::ComboBox::from_id_salt("audio-latency")
+                .selected_text(format!("{} ms", settings.audio_latency_ms))
+                .show_ui(ui, |ui| {
+                    for ms in [15, 30, 60, 100, 150, 250] {
+                        ui.selectable_value(&mut settings.audio_latency_ms, ms, format!("{ms} ms"));
+                    }
+                });
+            ui.end_row();
+
+            ui.label("Resampler");
+            egui::ComboBox::from_id_salt("audio-quality")
+                .selected_text(settings.audio_quality.label())
+                .show_ui(ui, |ui| {
+                    for quality in [
+                        AudioQuality::Fast,
+                        AudioQuality::Standard,
+                        AudioQuality::High,
+                    ] {
+                        ui.selectable_value(&mut settings.audio_quality, quality, quality.label());
+                    }
+                });
+            ui.end_row();
+
+            ui.label("Output filter");
+            let custom_model = settings.custom_audio_filter();
+            egui::ComboBox::from_id_salt("audio-filter")
+                .selected_text(settings.audio_filter.label())
+                .show_ui(ui, |ui| {
+                    for model in [
+                        AudioFilterModel::NesRf,
+                        AudioFilterModel::Crisp,
+                        AudioFilterModel::Warm,
+                        AudioFilterModel::Linear,
+                    ] {
+                        ui.selectable_value(&mut settings.audio_filter, model, model.label());
+                    }
+                    ui.selectable_value(&mut settings.audio_filter, custom_model, "Custom");
+                });
+            ui.end_row();
         });
+    if matches!(settings.audio_filter, AudioFilterModel::Custom { .. }) {
+        let mut custom = settings.custom_audio_filter();
+        let AudioFilterModel::Custom {
+            high_pass_hz,
+            low_pass_hz,
+        } = &mut custom
+        else {
+            unreachable!()
+        };
+        ui.add(egui::Slider::new(high_pass_hz, 0.0..=1_000.0).text("High-pass (Hz, 0 = off)"));
+        ui.add(
+            egui::Slider::new(low_pass_hz, 2_000.0..=20_000.0)
+                .text("Low-pass (Hz)")
+                .logarithmic(true),
+        );
+        if let AudioFilterModel::Custom {
+            high_pass_hz,
+            low_pass_hz,
+        } = custom
+        {
+            settings.audio_high_pass = high_pass_hz;
+            settings.audio_low_pass = low_pass_hz;
+            settings.audio_filter = custom;
+        }
+    }
     ui.add(egui::Slider::new(&mut settings.volume, 0.0..=1.0).text("Volume"));
     ui.checkbox(&mut settings.muted, "Mute");
-    ui.add_space(8.0);
+    ui.add_space(10.0);
+    ui.separator();
+    ui.heading("Mixer");
+    ui.label(
+        RichText::new(
+            "Per-channel gains. Muting keeps the slider value so it can be restored;              the expansion row covers VRC6/7, MMC5, Namco 163, 5B and FDS audio.",
+        )
+        .weak()
+        .small(),
+    );
+    const CHANNELS: [&str; 6] = [
+        "Pulse 1",
+        "Pulse 2",
+        "Triangle",
+        "Noise",
+        "DMC",
+        "Expansion",
+    ];
+    for (index, name) in CHANNELS.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut settings.channel_mutes[index], "M");
+            ui.label(format!("{name:9}"));
+            ui.add(
+                egui::Slider::new(&mut settings.channel_gains[index], 0.0..=1.0).show_value(true),
+            );
+        });
+    }
+    if ui.button("Reset mixer").clicked() {
+        settings.channel_gains = [1.0; 6];
+        settings.channel_mutes = [false; 6];
+    }
+    ui.add_space(10.0);
     match audio {
         Some(audio) => {
             ui.label(
@@ -1865,6 +1988,16 @@ fn audio_tab(
                     },
                     audio.underruns(),
                     audio.dropped()
+                ))
+                .weak()
+                .small(),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "Buffered: {:.1} ms (target {} ms, {:.0} samples queued)",
+                    audio.queued_ms(),
+                    audio.latency_ms(),
+                    audio.queued_samples() as f32
                 ))
                 .weak()
                 .small(),
@@ -2205,7 +2338,7 @@ fn advanced_tab(ui: &mut egui::Ui) {
     ui.heading("Advanced");
     ui.add_space(8.0);
     ui.label("Core: Unko NES accuracy core");
-    ui.label("State format: UNKOST03, ROM-fingerprinted and core-tagged");
+    ui.label("State format: UNKOST04, ROM-fingerprinted and core-tagged");
     ui.label("Settings file: unko.conf");
     ui.add_space(8.0);
     ui.label(
