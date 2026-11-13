@@ -4,6 +4,40 @@ Measured on the reference-parity core (`nes_accuracy_core`, MIT with
 documented ISC adaptations from ares). These are local runs
 against public test ROMs placed in `test-roms/` (gitignored).
 
+## Current summary (2026-11-13)
+
+| Gate | Result |
+|---|---|
+| `nestest` golden log | **8,980 / 8,980 lines** exact (PC, A/X/Y, SP, P, CYC) |
+| blargg `instr_basics` / `instr_timing` | **pass** (official, NOP/SBC, unofficial) |
+| blargg APU/DMC | **13 / 13** |
+| `ppu_vbl_nmi` | **12 / 12** |
+| `ppu_sprites` | **19 / 19** |
+| AccuracyCoin v3.1.0 isolated | **146 / 146 non-DRAW** (146/151 total, 0 failed, 5 DRAW skips, 0 unrun, 199,320 frames) |
+| Test suite | **424 core unit tests** plus the ROM-backed suites; **472 workspace tests**, 0 failed |
+
+Compatibility, local licensed 7,101-image NES library:
+
+| Metric | Count | Share |
+|---|---:|---:|
+| Scanned | 7,101 | 100% |
+| Loaded (mapper implemented) | 7,073 | 99.6% |
+| Unsupported mapper IDs | 0 | 0.0% |
+| Load/run failures (truncated images) | 28 | 0.39% |
+| Rendering at 20 frames | 3,904 | 55.0% of scanned |
+| Rendering at 120 frames | 6,499 | 91.5% of scanned |
+| Rendering at 240 frames | 6,426 | 90.5% of scanned |
+
+Only mapper 308 (NTDEC Batman) does not draw headless at 120 or 240 frames
+without Start input. The 240-frame count is lower than 120 because the exact
+sample lands on fade/transition frames. "Rendering" is a boot smoke test, not
+a completion claim. The current audit, mapper breadth and per-mapper gaps are
+in `docs/mapper-audit.md`; the dated measurements are below.
+
+Performance: `unko bench --synthetic 3000 --min-fps 300` measures **784.7 fps**
+(13.06x real time, 1.274 ms/frame); release save states are 417,054 bytes at
+172 us save / 237 us restore. Details in `docs/performance.md`.
+
 ## A1 — 6502
 
 | Test | Result | Evidence |
@@ -330,15 +364,17 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-7,073 loaded (99.6%), 3,896 rendering (54.3%), 3,177 blank (45.3%), 0
+7,073 loaded (99.6%), 3,904 rendering (55.0%), 3,169 blank (44.6%), 0
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
-A 120-frame pass renders 6,490 with 583 blank; a 240-frame pass renders
-6,420 with 653 blank. The 240 total is slightly lower because several
+A 120-frame pass renders 6,499 with 574 blank; a 240-frame pass renders
+6,426 with 647 blank. The 240 total is slightly lower because several
 hundred games sit on a fade or transition frame at that exact sample;
 across both passes every loaded image renders except mapper 308 (NTDEC
-Batman), which waits for Start. The 120-frame pass attributes 2,556 of the 20-frame blanks to
-slow boot (MMC3 +654, MMC1 +424, UxROM +254, mapper 163 +69).
+Batman), which waits for Start. The 120-frame pass adds 2,595 rendering
+images over the 20-frame sample; the largest gains are MMC3 +654, MMC1
++423, UxROM +254, mapper 30 +219, NROM +179, CNROM +101 and mapper 163
++69.
 The follow-up work closed the original 18-ID never-rendering set:
 121/303/13/12/14/50/301/305/309/513 render by 120 frames, 42 renders
 9/9 at 120 after its `$6000` window and `$4030` timer acknowledge, 47

@@ -12,21 +12,41 @@ system-agnostic interface.
 
 ## Status
 
-The shell is at **M1**. It boots a NES ROM headlessly or in a desktop window,
-runs frames at 60 fps, produces RGBA video and f32 audio, plays audio through
-cpal, accepts keyboard and SDL3 gamepad input, records WAV/PNG/GIF, round-trips
-save states, and verifies determinism. The same UI is being prepared for
-Windows, macOS, Linux, iOS and Android (explicit touch controls are included).
+The shell is usable end-to-end: library scanning, a Dolphin-inspired desktop
+UI, GPU output shaders, speed controls, cheats, save states, exact rewind,
+0-4 frame run-ahead and input-movie (TAS) record/playback. It runs the NES core
+headlessly or in a desktop window, produces RGBA video and f32 audio, plays
+audio through cpal, accepts keyboard, SDL3 gamepad, touch and peripheral input,
+records WAV/PNG/GIF, and verifies determinism. The same UI builds for Windows,
+macOS, Linux, iOS and Android.
 
-The accuracy core is at milestone **A5** (accuracy gate):
+The accuracy core is at milestone **A5** (accuracy gate), verified against the
+public reference suites:
 
-- `nestest` 0 diff, blargg `instr_timing` / `instr_basics` pass
-- `vbl_nmi` 12/12, `ppu_sprites` 19/19, all 13 blargg APU/DMC ROMs pass
-- AccuracyCoin isolated battery: **146/151** (5 DRAW skips, 0 failures)
+- `nestest` golden log: **8,980 / 8,980 lines** exact (PC, A/X/Y, SP, P and cycle count)
+- blargg `instr_timing` and `instr_basics`: pass
+- `ppu_vbl_nmi` **12/12**, `ppu_sprites` **19/19**, blargg APU/DMC **13/13**
+- AccuracyCoin v3.1.0 isolated: **146/146 non-DRAW rows pass**, 0 failed,
+  5 DRAW skips, 0 unrun (199,320 frames)
 
-Cycle accuracy is not claimed yet. The remaining failures and every known
-approximation are recorded in
+Compatibility from the local licensed 7,101-image NES audit:
+
+| Metric | Result |
+|---|---:|
+| Scanned | 7,101 |
+| Loaded (mapper implemented) | 7,073 (**99.6%**) |
+| Unsupported mapper IDs | **0** |
+| Load/run failures | 28 (all truncated dumps) |
+| Rendering at 20 frames | 3,904 |
+| Rendering at 120 frames | 6,499 |
+| Distinct mapper IDs in the set | 285 |
+
+Only mapper 308 (NTDEC Batman) does not draw headless without Start input.
+"Rendering" in that audit is a boot smoke signal, not a completion claim; the
+20-frame window mostly measures how long a game stays on its boot screen.
+Current figures, dated entries and the remaining limits are in
 [`docs/accuracy-status.md`](docs/accuracy-status.md) and
+[`docs/mapper-audit.md`](docs/mapper-audit.md); known divergences are in
 [`docs/accuracy-divergences.md`](docs/accuracy-divergences.md).
 
 ## Layout
@@ -45,6 +65,10 @@ docs/
   architecture.md        # core boundary and why it looks like this
   systems.md             # system/core entries, licenses, integration order
   roadmap.md             # A0..A7 and M0..M4
+  implementation-plan.md # current easy-to-hard feature queue
+  mapper-audit.md        # 7,101-image compatibility and mapper coverage
+  performance.md         # benchmark, state costs and efficiency budgets
+  oracle-feature-matrix.md # comparison against the NES emulator field
   decisions.md           # license/stack/scope decisions
   emulator-tooling.md    # installed reference emulators and toolchains
   frontend.md            # desktop UX blueprint and the GPL boundary
@@ -105,10 +129,16 @@ licenses and verifies the reproducibility claim. Requirements and current
 gaps are in [`docs/platforms.md`](docs/platforms.md).
 Keyboard: arrows = D-pad, X = A, Z = B, Enter = Start, Shift = Select,
 Space = pause, F5/F8 = save/load state, F9/F10 = step frame/instruction,
-F11 = fullscreen.
+Backspace = rewind while paused, Tab = hold-to-fast-forward, F11 = fullscreen.
+
+Playback and capture: 25-300% speed presets, frame advance, exact rewind
+(64-256 MiB ring), 0-4 frame run-ahead, input-movie (TAS) recording/playback,
+Game Genie and raw-RAM cheats, WAV/PNG/GIF capture, and screenshots.
 
 Per-port devices (Settings -> Controllers): NES Zapper, Arkanoid paddle,
-Power Pad, Family BASIC keyboard and the Four Score four-player adapter.
+Power Pad / Family Trainer, Family BASIC keyboard, Subor/Dendy keyboard,
+Famicom microphone, data-recorder tape loopback, Miracle Piano transport,
+Datach scanner with a persisted X24C02 EEPROM, and the Four Score adapter.
 
 The debugger window (`Emulation -> Debugger`, or `--debug` on the command
 line) shows CPU registers and disassembly, PPU timing/palette/OAM, APU channel
@@ -126,6 +156,19 @@ python3 scripts/license_audit.py
 
 Tests that need public test ROMs look for them under `test-roms/` and skip
 cleanly when the folder is absent. No ROMs are tracked in this repository.
+
+The synthetic performance floor is checked in CI; the current development
+machine measures about **785 fps** (13.1x real time):
+
+```sh
+cargo run --release -p unko-cli -- bench --synthetic 3000 --min-fps 300
+```
+
+The compatibility smoke test needs a local library:
+
+```sh
+cargo run --release -p unko-cli -- corpus <library-dir> --frames 20
+```
 
 To run the AccuracyCoin battery, supply the ROM and its catalog yourself:
 

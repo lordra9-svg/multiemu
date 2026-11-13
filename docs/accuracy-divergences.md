@@ -6,8 +6,9 @@ ROM). It is required by the accuracy charter in `docs/accuracy.md`. Add a dated
 entry whenever a divergence is found, and remove it only when a test or a
 hardware capture proves the behaviour matches.
 
-Current snapshot: **2026-11-12**, AccuracyCoin v3.1.0, isolated battery
-**146/151 passed, 0 failed, 5 skipped, 0 unrun**.
+Current snapshot: **2026-11-13**, AccuracyCoin v3.1.0, isolated battery
+**146/146 non-DRAW rows passed** (146/151 total, 0 failed, 5 DRAW skips,
+0 unrun).
 
 The five skipped rows are the `DRAW` tests, which need a human-drawn reference
 image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
