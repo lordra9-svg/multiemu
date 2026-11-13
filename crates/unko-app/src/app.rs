@@ -661,6 +661,7 @@ impl App {
                             ui.close_menu();
                         }
                         ui.separator();
+                        #[cfg(not(any(target_os = "android", target_os = "ios")))]
                         if ui
                             .add_enabled(
                                 has_game && !recording && !playing,
@@ -2484,6 +2485,8 @@ fn viewport(
         show_touch,
     } = *options;
     let mut touch = unko_core::InputState::empty();
+    #[cfg(target_os = "ios")]
+    let _ = (brightness, sharpness);
     let mut paddle = None;
     let mut power_pad = None;
     egui::CentralPanel::default()
