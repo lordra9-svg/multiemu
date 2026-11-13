@@ -88,9 +88,9 @@ impl Apu {
             }
             0x4015 => {
                 self.enabled = value;
-                for channel in 0..4 {
+                for (channel, length) in self.lengths.iter_mut().enumerate() {
                     if value & (1 << channel) == 0 {
-                        self.lengths[channel] = 0;
+                        *length = 0;
                     }
                 }
             }

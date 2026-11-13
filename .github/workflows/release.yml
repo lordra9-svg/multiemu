@@ -16,7 +16,7 @@ jobs:
     name: License audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Audit dependency licenses
         run: python3 scripts/license_audit.py
@@ -25,7 +25,7 @@ jobs:
     name: Linux x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install system dependencies
         run: |
@@ -60,7 +60,7 @@ jobs:
           cd dist
           sha256sum unko-linux-x86_64.tar.gz unko-*.AppImage > SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: unko-linux-x86_64
           path: dist/
@@ -69,7 +69,7 @@ jobs:
     name: Windows x86_64
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
@@ -83,7 +83,7 @@ jobs:
       - name: Package
         run: python scripts/package.py --platform windows --arch x86_64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: unko-windows-x86_64
           path: dist/
@@ -92,7 +92,7 @@ jobs:
     name: macOS arm64
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install build tools
         run: brew install ninja
       - uses: dtolnay/rust-toolchain@stable
@@ -110,7 +110,7 @@ jobs:
       - name: Package
         run: python3 scripts/package.py --platform macos --arch arm64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: unko-macos-arm64
           path: dist/
@@ -119,7 +119,7 @@ jobs:
     name: Reproducible build check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install system dependencies
         run: |
@@ -162,12 +162,12 @@ jobs:
     needs: [licenses, linux, windows, macos, reproducible]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
           merge-multiple: true
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
           generate_release_notes: true

@@ -726,8 +726,9 @@ impl Ppu {
         // start of the line.
         if self.dot == 0 {
             let mut mask = 0u8;
-            for slot in 0..8 {
-                if self.spr_id[slot] != 64 {
+            let ids = self.spr_id;
+            for (slot, id) in ids.iter().enumerate() {
+                if *id != 64 {
                     mask |= 1 << slot;
                 }
             }
@@ -783,8 +784,9 @@ impl Ppu {
             // fetch are armed. Empty slots keep their previous shifter state,
             // which is what lets a stale sprite appear on line 0 when the
             // pre-render line's dot 339 is blanked.
-            for slot in 0..8 {
-                if self.spr_id[slot] != 64 {
+            let ids = self.spr_id;
+            for (slot, id) in ids.iter().enumerate() {
+                if *id != 64 {
                     self.spr_counting[slot] = true;
                 }
             }
