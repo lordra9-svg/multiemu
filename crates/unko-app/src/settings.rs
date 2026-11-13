@@ -34,11 +34,13 @@ pub enum HotkeyAction {
     FastForward,
     /// Advance one frame while paused.
     FrameAdvance,
+    /// Step one frame back while paused.
+    Rewind,
 }
 
 impl HotkeyAction {
     /// Every action, in display order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Pause,
         Self::Save,
         Self::Load,
@@ -47,6 +49,7 @@ impl HotkeyAction {
         Self::Reset,
         Self::FastForward,
         Self::FrameAdvance,
+        Self::Rewind,
     ];
 
     /// Human label.
@@ -61,6 +64,7 @@ impl HotkeyAction {
             Self::Reset => "Reset",
             Self::FastForward => "Hold to fast-forward",
             Self::FrameAdvance => "Frame advance",
+            Self::Rewind => "Rewind",
         }
     }
 
@@ -76,6 +80,7 @@ impl HotkeyAction {
             Self::Reset => "hotkey_reset",
             Self::FastForward => "hotkey_fast_forward",
             Self::FrameAdvance => "hotkey_frame_advance",
+            Self::Rewind => "hotkey_rewind",
         }
     }
 }
@@ -99,6 +104,8 @@ pub struct Hotkeys {
     pub fast_forward: egui::Key,
     /// Frame-advance key.
     pub frame_advance: egui::Key,
+    /// Rewind key.
+    pub rewind: egui::Key,
 }
 
 impl Default for Hotkeys {
@@ -112,6 +119,7 @@ impl Default for Hotkeys {
             reset: egui::Key::F2,
             fast_forward: egui::Key::Tab,
             frame_advance: egui::Key::Period,
+            rewind: egui::Key::Backspace,
         }
     }
 }
@@ -129,6 +137,7 @@ impl Hotkeys {
             HotkeyAction::Reset => self.reset,
             HotkeyAction::FastForward => self.fast_forward,
             HotkeyAction::FrameAdvance => self.frame_advance,
+            HotkeyAction::Rewind => self.rewind,
         }
     }
 
@@ -143,6 +152,7 @@ impl Hotkeys {
             HotkeyAction::Reset => self.reset = key,
             HotkeyAction::FastForward => self.fast_forward = key,
             HotkeyAction::FrameAdvance => self.frame_advance = key,
+            HotkeyAction::Rewind => self.rewind = key,
         }
     }
 
@@ -289,6 +299,8 @@ pub struct Settings {
     pub custom_palette: PathBuf,
     /// Playback speed in percent (25, 50, 100, 150, 200 or 300).
     pub speed_percent: u32,
+    /// Rewind ring budget in MiB (64, 128 or 256).
+    pub rewind_mb: u32,
     /// Requested audio sample rate.
     pub sample_rate: f32,
     /// Target output latency in milliseconds (15..=250).
@@ -402,6 +414,7 @@ impl Default for Settings {
             palette: Palette::Canonical,
             custom_palette: PathBuf::new(),
             speed_percent: 100,
+            rewind_mb: 64,
             sample_rate: 48_000.0,
             audio_latency_ms: 60,
             audio_quality: AudioQuality::Standard,
@@ -498,6 +511,12 @@ impl Settings {
                     settings.speed_percent = match value.parse::<u32>().unwrap_or(100) {
                         25 | 50 | 150 | 200 | 300 => value.parse().unwrap_or(100),
                         _ => 100,
+                    }
+                }
+                "rewind_mb" => {
+                    settings.rewind_mb = match value.parse::<u32>().unwrap_or(64) {
+                        128 | 256 => value.parse().unwrap_or(64),
+                        _ => 64,
                     }
                 }
                 "sample_rate" => settings.sample_rate = value.parse().unwrap_or(48_000.0),

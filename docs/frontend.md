@@ -133,6 +133,11 @@ platform toolchains.
   (Tab) and frame advance (Period, or Emulation -> Frame advance). Audio is
   paused while the speed is not 100% so it cannot drift or pitch-shift; the
   recorder still captures the run.
+- Rewind: hold Backspace (or Emulation -> Rewind) while paused to step back
+  one frame. Full keyframes every 30 frames plus the per-frame input log are
+  replayed exactly; the ring budget is 64/128/256 MiB (default 64, tens of
+  seconds depending on the mapper). Recording and non-100% speeds suspend the
+  buffer. Run-ahead is still queued.
 - Pacing: a `Duration`-based accumulator targets 60.0988 Hz and runs at most
   four catch-up frames per repaint; vsync is left to the windowing backend.
   The UI sleeps until the next frame deadline (`request_repaint_after`), so an

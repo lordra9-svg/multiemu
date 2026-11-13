@@ -70,6 +70,103 @@ impl FramePacer {
     }
 }
 
+/// Keyframes plus per-frame inputs for rewind.
+///
+/// A full state every 30 frames gives tens of seconds of history inside the
+/// configured budget; restoring one keyframe and replaying at most 29 frames
+/// is cheap enough to step back while paused.
+struct RewindBuffer {
+    keyframes: std::collections::VecDeque<(u64, Vec<u8>)>,
+    inputs: std::collections::VecDeque<(u64, [InputState; 4])>,
+    bytes: usize,
+    budget: usize,
+    interval: u64,
+}
+
+impl RewindBuffer {
+    fn new(budget_mb: u32) -> Self {
+        Self {
+            keyframes: std::collections::VecDeque::new(),
+            inputs: std::collections::VecDeque::new(),
+            bytes: 0,
+            budget: usize::try_from(budget_mb).unwrap_or(64) * 1024 * 1024,
+            interval: 30,
+        }
+    }
+
+    fn set_budget(&mut self, budget_mb: u32) {
+        self.budget = usize::try_from(budget_mb).unwrap_or(64) * 1024 * 1024;
+        self.trim();
+    }
+
+    fn clear(&mut self) {
+        self.keyframes.clear();
+        self.inputs.clear();
+        self.bytes = 0;
+    }
+
+    fn push_input(&mut self, frame: u64, input: [InputState; 4]) {
+        self.inputs.push_back((frame, input));
+    }
+
+    fn push_keyframe(&mut self, frame: u64, state: Vec<u8>) {
+        self.bytes += state.len();
+        self.keyframes.push_back((frame, state));
+        self.trim();
+    }
+
+    fn trim(&mut self) {
+        while self.bytes > self.budget && self.keyframes.len() > 1 {
+            if let Some((frame, state)) = self.keyframes.pop_front() {
+                self.bytes = self.bytes.saturating_sub(state.len());
+                let keep_from = frame + self.interval;
+                while self
+                    .inputs
+                    .front()
+                    .is_some_and(|(input_frame, _)| *input_frame < keep_from)
+                {
+                    self.inputs.pop_front();
+                }
+            }
+        }
+        while self
+            .inputs
+            .front()
+            .is_some_and(|(frame, _)| self.keyframes.front().is_some_and(|(kf, _)| frame < kf))
+        {
+            self.inputs.pop_front();
+        }
+    }
+
+    fn oldest(&self) -> Option<u64> {
+        self.keyframes.front().map(|(frame, _)| *frame)
+    }
+
+    /// Restores the newest keyframe at or before `target`, replays the
+    /// recorded inputs to `target`, and drops the obsolete future states.
+    fn restore(&mut self, core: &mut dyn Core, target: u64) -> Option<u64> {
+        let index = self
+            .keyframes
+            .iter()
+            .rposition(|(frame, _)| *frame <= target)?;
+        let (start, state) = &self.keyframes[index];
+        let start = *start;
+        core.load_state(state).ok()?;
+        for frame in (start + 1)..=target {
+            if let Some((_, input)) = self.inputs.iter().find(|(at, _)| *at == frame) {
+                for (port, state) in input.iter().enumerate() {
+                    core.set_input(port, *state);
+                }
+            }
+            core.run_frame().ok()?;
+        }
+        self.keyframes.retain(|(frame, _)| *frame <= target);
+        self.inputs.retain(|(frame, _)| *frame <= target);
+        self.bytes = self.keyframes.iter().map(|(_, state)| state.len()).sum();
+        Some(target)
+    }
+}
+
 /// A loaded machine plus frontend state (pause, slot, counters).
 pub struct Player {
     core: Box<dyn Core>,
@@ -98,6 +195,9 @@ pub struct Player {
     next_repaint: Duration,
     speed_percent: u32,
     fast_forward: bool,
+    last_input: [InputState; 4],
+    rewind: RewindBuffer,
+    rewind_enabled: bool,
     sample_rate: f32,
     gamepad: [InputState; 4],
     touch: InputState,
@@ -172,7 +272,7 @@ impl Player {
         {
             message = "No NES 2.0 header; defaulting to NTSC".to_string();
         }
-        Ok(Self {
+        let mut player = Self {
             core,
             texture: None,
             paused: false,
@@ -196,7 +296,12 @@ impl Player {
             debug: Debugger::default(),
             port_enabled: [true; 4],
             supersample: settings.supersample,
-        })
+            last_input: [InputState::empty(); 4],
+            rewind: RewindBuffer::new(settings.rewind_mb),
+            rewind_enabled: true,
+        };
+        player.push_rewind_keyframe();
+        Ok(player)
     }
 
     /// Advances emulation (bounded catch-up) and refreshes the texture.
@@ -206,6 +311,7 @@ impl Player {
             self.next_repaint = Duration::from_millis(250);
             return;
         }
+        self.update_rewind_enabled();
         let effective_speed = if self.fast_forward {
             300
         } else {
@@ -219,6 +325,9 @@ impl Player {
 
         let mut done = 0;
         while done < ran {
+            if self.rewind_enabled {
+                self.rewind.push_input(self.frames + 1, self.last_input);
+            }
             if self.debug.breakpoints.is_empty() || !self.core.debug_supported() {
                 if let Err(err) = self.core.run_frame() {
                     self.message = err.to_string();
@@ -245,6 +354,9 @@ impl Player {
             }
             self.frames += 1;
             done += 1;
+            if self.rewind_enabled && self.frames.is_multiple_of(self.rewind.interval) {
+                self.push_rewind_keyframe();
+            }
             if self.speed_percent == 100 {
                 if let Some(out) = audio.as_deref_mut() {
                     out.push(self.core.audio().samples);
@@ -270,6 +382,60 @@ impl Player {
                     self.fps * 0.9 + instant * 0.1
                 };
             }
+        }
+    }
+
+    fn update_rewind_enabled(&mut self) {
+        let enabled = self.speed_percent == 100 && !self.fast_forward && !self.recording();
+        if enabled == self.rewind_enabled {
+            return;
+        }
+        self.rewind_enabled = enabled;
+        self.rewind.clear();
+        if enabled {
+            self.push_rewind_keyframe();
+        }
+    }
+
+    fn push_rewind_keyframe(&mut self) {
+        let mut state = Vec::new();
+        if self.core.save_state(&mut state).is_ok() {
+            self.rewind.push_keyframe(self.frames, state);
+        }
+    }
+
+    /// Changes the rewind budget (64, 128 or 256 MiB).
+    pub fn set_rewind_mb(&mut self, budget_mb: u32) {
+        self.rewind.set_budget(budget_mb);
+    }
+
+    /// Number of frames currently available to rewind.
+    #[must_use]
+    pub fn rewind_available(&self) -> u64 {
+        self.frames
+            .saturating_sub(self.rewind.oldest().unwrap_or(self.frames))
+    }
+
+    /// Steps one frame back while paused. Returns whether the frame changed.
+    pub fn rewind_step(&mut self, ctx: &egui::Context) -> bool {
+        let Some(oldest) = self.rewind.oldest() else {
+            return false;
+        };
+        let target = self.frames.saturating_sub(1);
+        if target < oldest {
+            self.message = "Rewind buffer exhausted".to_string();
+            return false;
+        }
+        self.paused = true;
+        if self.rewind.restore(self.core.as_mut(), target).is_some() {
+            self.frames = target;
+            self.pacer.reset();
+            self.next_repaint = Duration::from_millis(250);
+            self.upload(ctx);
+            self.message = format!("Rewound to frame {target}");
+            true
+        } else {
+            false
         }
     }
 
@@ -452,8 +618,10 @@ impl Player {
             InputState::empty()
         };
         let first = InputState::from_bits(keyboard.bits() | pads[0].bits() | touch.bits());
+        self.last_input[0] = first;
         self.core.set_input(0, first);
         for (port, state) in pads.iter().enumerate().skip(1) {
+            self.last_input[port] = *state;
             self.core.set_input(port, *state);
         }
     }
@@ -631,11 +799,17 @@ impl Player {
 
     /// Runs exactly one frame while paused and refreshes the texture.
     pub fn advance_frame(&mut self, ctx: &egui::Context) {
+        if self.rewind_enabled {
+            self.rewind.push_input(self.frames + 1, self.last_input);
+        }
         if let Err(err) = self.core.run_frame() {
             self.message = err.to_string();
             return;
         }
         self.frames += 1;
+        if self.rewind_enabled && self.frames.is_multiple_of(self.rewind.interval) {
+            self.push_rewind_keyframe();
+        }
         self.upload(ctx);
         self.paused = true;
         self.pacer.reset();
@@ -714,6 +888,9 @@ impl Player {
         if let Err(err) = self.core.reset() {
             self.message = err.to_string();
         }
+        self.frames = 0;
+        self.rewind.clear();
+        self.push_rewind_keyframe();
     }
 
     /// Saves a state into `slot`.
@@ -745,6 +922,8 @@ impl Player {
                     self.slot = slot;
                     self.pacer.reset();
                     self.next_repaint = Duration::ZERO;
+                    self.rewind.clear();
+                    self.push_rewind_keyframe();
                     self.message = format!("Loaded state slot {slot}");
                 }
                 Err(err) => self.message = err.to_string(),
@@ -980,6 +1159,60 @@ mod tests {
         assert_eq!(view.cpu.pc, 0x8002);
         assert_eq!(view.cpu.a, 0x10, "the LDA before the breakpoint executed");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn minimal_nrom() -> Vec<u8> {
+        let mut rom = vec![0u8; 16 + 0x8000 + 0x2000];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 2; // 32 KiB PRG
+        rom[5] = 1; // 8 KiB CHR
+        for byte in &mut rom[16..16 + 0x8000] {
+            *byte = 0xEA;
+        }
+        // JMP $8000 at the reset vector.
+        rom[16..19].copy_from_slice(&[0x4C, 0x00, 0x80]);
+        let vector = 16 + 0x8000 - 4;
+        rom[vector] = 0x00;
+        rom[vector + 1] = 0x80;
+        rom
+    }
+
+    #[test]
+    fn rewind_replays_to_the_exact_state() {
+        let rom = minimal_nrom();
+        let mut core = nes_accuracy_core::AccuracyCore::new();
+        core.load(&rom, &unko_core::LoadOptions::default())
+            .expect("load");
+
+        let mut rewind = RewindBuffer::new(64);
+        let mut initial = Vec::new();
+        core.save_state(&mut initial).expect("initial state");
+        rewind.push_keyframe(0, initial);
+
+        let input_at =
+            |frame: u64| InputState::from_bits(if frame.is_multiple_of(2) { 1 } else { 2 });
+        let mut state_at_45 = Vec::new();
+        for frame in 1..=60u64 {
+            let input = input_at(frame);
+            rewind.push_input(frame, [input; 4]);
+            for port in 0..4 {
+                core.set_input(port, input);
+            }
+            core.run_frame().expect("frame");
+            if frame == 45 {
+                core.save_state(&mut state_at_45).expect("state 45");
+            }
+            if frame.is_multiple_of(30) {
+                let mut state = Vec::new();
+                core.save_state(&mut state).expect("keyframe");
+                rewind.push_keyframe(frame, state);
+            }
+        }
+
+        assert_eq!(rewind.restore(&mut core, 45), Some(45));
+        let mut restored = Vec::new();
+        core.save_state(&mut restored).expect("restored state");
+        assert_eq!(restored, state_at_45, "rewind replay must be exact");
     }
 
     #[test]

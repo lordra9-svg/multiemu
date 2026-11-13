@@ -2042,3 +2042,14 @@ inverted nibble. The app maps the documented FCEUX/PlayPower matrix onto host
 keys (letters, digits, arrows, F1-F12, editing keys, punctuation, Shift and
 Ctrl) and sends the 13-row matrix every frame while the device is attached.
 Test covers nibble reads, row advance and reset.
+
+### 2026-11-13 — rewind
+
+Added a rewind ring built on the deterministic state format: a full keyframe
+every 30 frames plus the per-frame input log, within a 64/128/256 MiB budget
+(default 64). Holding Backspace while paused restores the newest keyframe at
+or before the target and replays the recorded inputs; a test compares the
+replayed state at frame 45 byte-for-byte against the live state. The buffer is
+suspended while recording or when the speed is not 100%, cleared on reset and
+manual state load, and the status bar shows the available rewind depth.
+Run-ahead is queued next.

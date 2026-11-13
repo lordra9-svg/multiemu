@@ -376,6 +376,9 @@ impl App {
             if self.settings.speed_percent != old.speed_percent {
                 player.set_speed(self.settings.speed_percent);
             }
+            if self.settings.rewind_mb != old.rewind_mb {
+                player.set_rewind_mb(self.settings.rewind_mb);
+            }
             if self.settings.audio_source != old.audio_source {
                 player.set_audio_source(self.settings.audio_source);
             }
@@ -545,6 +548,33 @@ impl App {
                         }
                         ui.close_menu();
                     }
+                    if ui
+                        .add_enabled(has_game, egui::Button::new("Rewind (Backspace)"))
+                        .clicked()
+                    {
+                        if let Some(player) = &mut self.player {
+                            player.paused = true;
+                            player.rewind_step(ctx);
+                        }
+                        ui.close_menu();
+                    }
+                    ui.menu_button("Rewind buffer", |ui| {
+                        for budget in [64, 128, 256] {
+                            if ui
+                                .radio_value(
+                                    &mut self.settings.rewind_mb,
+                                    budget,
+                                    format!("{budget} MiB"),
+                                )
+                                .changed()
+                            {
+                                if let Some(player) = &mut self.player {
+                                    player.set_rewind_mb(budget);
+                                }
+                                let _ = self.settings.save(&Settings::path());
+                            }
+                        }
+                    });
                     ui.menu_button("Speed", |ui| {
                         for percent in [25, 50, 100, 150, 200, 300] {
                             if ui
@@ -908,6 +938,10 @@ impl App {
                         };
                         ui.label(speed);
                         ui.separator();
+                        if player.rewind_available() > 0 {
+                            ui.label(format!("rewind {}", player.rewind_available()));
+                            ui.separator();
+                        }
                         ui.label(format!("slot {}", player.slot));
                         ui.separator();
                         ui.label(format!("{:.0} Hz", player.sample_rate()));
@@ -2819,10 +2853,23 @@ fn interface_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 }
             });
     });
+    ui.horizontal(|ui| {
+        ui.label("Rewind buffer");
+        egui::ComboBox::from_id_salt("rewind-budget")
+            .selected_text(format!("{} MiB", settings.rewind_mb))
+            .show_ui(ui, |ui| {
+                for budget in [64, 128, 256] {
+                    ui.selectable_value(&mut settings.rewind_mb, budget, format!("{budget} MiB"));
+                }
+            });
+    });
     ui.label(
-        RichText::new("Hold the fast-forward hotkey (Tab) to temporarily run at 300%.")
-            .weak()
-            .small(),
+        RichText::new(
+            "Hold the fast-forward hotkey (Tab) to temporarily run at 300%; hold Backspace \
+             while paused to rewind one frame at a time.",
+        )
+        .weak()
+        .small(),
     );
     ui.add_space(8.0);
     ui.label("Toolbar, menu and status layout follow Dolphin's desktop shell.");
