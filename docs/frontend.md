@@ -64,11 +64,11 @@ Key interaction rules worth keeping:
 | MenuBar: Help | About | now |
 | ToolBar | Open, Refresh, Play/Pause, Stop, Reset, Fullscreen, Shot, Config | now |
 | RenderWidget | `egui` texture viewport, aspect-correct | now |
-| Settings: General/Interface | theme, pause on focus loss, confirm stop | now |
-| Settings: Graphics | filter (raw/composite), integer scale | now |
+| Settings: General/Interface | theme, pause on focus loss, confirm stop, detachable windows, reset-all | now |
+| Settings: Graphics | filter, palette + `.pal` import, aspect, integer scale, supersampling, output shader, window presets | now |
 | Settings: Audio | sample rate, latency target, resampler quality, output filter, volume/mute, per-channel mixer | now |
 | Settings: Controllers | fixed keyboard map, rebinding UI | partial |
-| Settings: Paths | ROM dir, save dir | now |
+| Settings: Paths | ROM dir, save dir, per-system library roots | now |
 | Settings: NES page | region, mapper/header info, deterministic RAM | now |
 | Settings: Advanced | core id, log level, state format | now |
 | Per-game properties | header/mapper/region overrides | later |
@@ -105,15 +105,25 @@ platform toolchains.
 - **No ROM database dependency.** Titles come from file names; metadata comes
   from the iNES/NES 2.0 header. A game database can be added behind the same
   library model.
-- **Native file dialogs are deferred.** The environment used for this milestone
-  has no GTK/portal development packages, so the app uses a path entry field and
-  folder scanning. `rfd` can replace it without touching the rest of the UI.
+- **Native file dialogs are optional.** `rfd` is used for ROM/save folders and
+  palette import on desktop; text entries remain for platforms without a
+  dialog backend, so the UI works in a headless/CI environment.
 
 ## Implementation notes
 
 - `egui`/`eframe` 0.31, pinned.
-- Video: the core's RGBA frame is uploaded to a nearest-neighbour texture each
-  frame; the viewport preserves the NES 8:7 pixel aspect inside a 4:3 box.
+- Video: the core's RGBA frame is uploaded to a texture each frame. The
+  viewport offers Fit, 4:3 and 8:7 aspect modes, an automatic or fixed 1-6x
+  integer scale, and 1-3x output supersampling (the frame is upscaled before
+  the linear downscale to the window; the PPU stays 256x240). Output shader
+  presets (scanlines, LCD grid, CRT vignette) are painted over the image, on
+  top of the core's Raw/Composite/CRT filters.
+- Windows: Settings, Devices and the Debugger open as native OS windows on
+  desktop (each remembers its own size/position); mobile embeds them as
+  panels. The General page has a confirmed "Reset all settings" that restores
+  the config, layout, hotkeys, bindings, devices and per-game profiles and
+  removes state thumbnails, while never touching save states, SRAM or
+  recordings.
 - Pacing: a `Duration`-based accumulator targets 60.0988 Hz and runs at most
   four catch-up frames per repaint; vsync is left to the windowing backend.
   The UI sleeps until the next frame deadline (`request_repaint_after`), so an
@@ -125,8 +135,14 @@ platform toolchains.
   unpause/load resets the clock so the first frame is presented immediately.
 - Input: keyboard map is arrows + Z/X/A/S + Enter/Shift; SDL3 gamepads are
   hot-plugged, remappable, support analog-stick D-pad input, auto-fire and
-  per-game profiles. The input display and an on-screen touch controller are
-  available for mobile and can be previewed on desktop.
+  per-game profiles. A gamepad-to-player matrix routes each physical pad to
+  P1-P4 (two pads on one player merge), and both the two NES ports and each
+  physical pad can be disabled. The Devices window lists the port devices,
+  every detected pad, its assignment and connection state. The input display
+  and an on-screen touch controller are available for mobile and can be
+  previewed on desktop. The library grid takes 1-8 columns and the list view
+  shows any combination of system, file, size, region, mapper and modified
+  columns.
 - Controller-port devices: each port can be a gamepad, Zapper, Arkanoid
   paddle (mouse steering + fire), Power Pad (on-screen 12-pad mat), Family
   BASIC keyboard (host keys map to the documented 9x8 matrix) or a Four Score

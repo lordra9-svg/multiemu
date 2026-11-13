@@ -100,6 +100,9 @@ pub trait Core {
     /// Changes the display palette.
     fn set_palette(&mut self, _palette: Palette) {}
 
+    /// Supplies the 64-entry RGB table used by [`Palette::Custom`].
+    fn set_palette_table(&mut self, _table: [[u8; 3]; 64]) {}
+
     /// Selects the audio resampler quality. May take effect on the next frame.
     fn set_audio_quality(&mut self, _quality: AudioQuality) {}
 

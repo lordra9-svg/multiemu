@@ -101,6 +101,10 @@ pub struct Player {
     recorder: Recorder,
     /// Debugger window state and breakpoints.
     pub debug: Debugger,
+    /// Which logical controller ports accept input.
+    port_enabled: [bool; 4],
+    /// Output supersampling factor (1 = off).
+    supersample: u32,
 }
 
 impl Player {
@@ -139,6 +143,11 @@ impl Player {
         core.set_audio_quality(settings.audio_quality);
         core.set_audio_filters(settings.audio_filter_model());
         core.set_channel_gains(settings.effective_channel_gains());
+        if settings.palette == unko_core::Palette::Custom {
+            if let Some(table) = crate::settings::load_palette(&settings.custom_palette) {
+                core.set_palette_table(table);
+            }
+        }
 
         let save_dir = settings.save_dir.clone();
         fs::create_dir_all(&save_dir).map_err(|err| format!("create save dir: {err}"))?;
@@ -171,6 +180,8 @@ impl Player {
             touch: InputState::empty(),
             recorder: Recorder::default(),
             debug: Debugger::default(),
+            port_enabled: [true; 4],
+            supersample: settings.supersample,
         })
     }
 
@@ -403,11 +414,26 @@ impl Player {
             state = state.with(InputState::SELECT, i.modifiers.shift);
             state
         });
-        let first =
-            InputState::from_bits(keyboard.bits() | self.gamepad[0].bits() | self.touch.bits());
+        let mut pads = self.gamepad;
+        for (port, state) in pads.iter_mut().enumerate() {
+            if !self.port_enabled[port] {
+                *state = InputState::empty();
+            }
+        }
+        let keyboard = if self.port_enabled[0] {
+            keyboard
+        } else {
+            InputState::empty()
+        };
+        let touch = if self.port_enabled[0] {
+            self.touch
+        } else {
+            InputState::empty()
+        };
+        let first = InputState::from_bits(keyboard.bits() | pads[0].bits() | touch.bits());
         self.core.set_input(0, first);
-        for port in 1..4 {
-            self.core.set_input(port, self.gamepad[port]);
+        for (port, state) in pads.iter().enumerate().skip(1) {
+            self.core.set_input(port, *state);
         }
     }
 
@@ -423,6 +449,19 @@ impl Player {
         self.touch = state;
     }
 
+    /// Sets the output supersampling factor (`1..=3`).
+    pub fn set_supersample(&mut self, factor: u32) {
+        self.supersample = factor.clamp(1, 3);
+    }
+
+    /// Enables or disables a logical controller port. A disabled port reports
+    /// no buttons and ignores keyboard, touch and gamepad input.
+    pub fn set_port_enabled(&mut self, port: usize, enabled: bool) {
+        if let Some(slot) = self.port_enabled.get_mut(port) {
+            *slot = enabled;
+        }
+    }
+
     fn upload(&mut self, ctx: &egui::Context) {
         let video = self.core.video();
         let width = video.width as usize;
@@ -430,7 +469,7 @@ impl Player {
         if width == 0 || height == 0 {
             return;
         }
-        let pixels: Vec<u8> = if video.stride == width * 4 {
+        let mut pixels: Vec<u8> = if video.stride == width * 4 {
             video.data.to_vec()
         } else {
             let mut packed = Vec::with_capacity(width * height * 4);
@@ -440,7 +479,31 @@ impl Player {
             }
             packed
         };
-        let image = egui::ColorImage::from_rgba_unmultiplied([width, height], &pixels);
+        let mut upload_width = width;
+        let mut upload_height = height;
+        // Output supersampling: duplicate each pixel 2x/3x and let the linear
+        // texture downscale smooth the result at the final window size. The
+        // PPU stays 256x240, so this is a presentation filter, not detail.
+        if self.supersample > 1 {
+            let factor = self.supersample as usize;
+            let mut scaled = Vec::with_capacity(pixels.len() * factor * factor);
+            for row in 0..height {
+                for _ in 0..factor {
+                    for column in 0..width {
+                        let start = (row * width + column) * 4;
+                        let texel = &pixels[start..start + 4];
+                        for _ in 0..factor {
+                            scaled.extend_from_slice(texel);
+                        }
+                    }
+                }
+            }
+            pixels = scaled;
+            upload_width *= factor;
+            upload_height *= factor;
+        }
+        let image =
+            egui::ColorImage::from_rgba_unmultiplied([upload_width, upload_height], &pixels);
         match &mut self.texture {
             Some(texture) => texture.set(image, self.texture_options),
             None => {
@@ -515,6 +578,11 @@ impl Player {
     pub fn set_sample_rate(&mut self, rate: f32) {
         self.sample_rate = rate;
         self.core.set_sample_rate(rate);
+    }
+
+    /// Supplies the 64-entry table used by the custom palette.
+    pub fn set_palette_table(&mut self, table: [[u8; 3]; 64]) {
+        self.core.set_palette_table(table);
     }
 
     /// Applies the resampler quality live.

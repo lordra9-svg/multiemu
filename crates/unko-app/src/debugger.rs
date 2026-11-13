@@ -130,37 +130,70 @@ pub enum Action {
 }
 
 /// Renders the debugger window and returns the requested actions.
-pub fn window(debug: &mut Debugger, ctx: &egui::Context, view: &DebugView) -> Vec<Action> {
+///
+/// `detach` opens it as its own OS window on desktop; otherwise it is an
+/// in-window panel. `generation` changes when the user resets the layout so a
+/// fresh viewport is created at its default position.
+pub fn window(
+    debug: &mut Debugger,
+    ctx: &egui::Context,
+    view: &DebugView,
+    detach: bool,
+    generation: u32,
+) -> Vec<Action> {
     let mut actions = Vec::new();
     let mut open = debug.open;
-    egui::Window::new("Debugger")
-        .open(&mut open)
-        .default_size([760.0, 520.0])
-        .min_width(620.0)
-        .show(ctx, |ui| {
-            toolbar(ui, view, &mut actions);
-            ui.separator();
-            ui.horizontal(|ui| {
-                for tab in DebugTab::ALL {
-                    if ui.selectable_label(debug.tab == tab, tab.label()).clicked() {
-                        debug.tab = tab;
-                    }
+    let mut body = |ui: &mut egui::Ui| {
+        toolbar(ui, view, &mut actions);
+        ui.separator();
+        ui.horizontal(|ui| {
+            for tab in DebugTab::ALL {
+                if ui.selectable_label(debug.tab == tab, tab.label()).clicked() {
+                    debug.tab = tab;
                 }
-            });
-            ui.separator();
-            match debug.tab {
-                DebugTab::Cpu => cpu_tab(ui, debug, view, &mut actions),
-                DebugTab::Ppu => ppu_tab(ui, debug, view),
-                DebugTab::Apu => apu_tab(ui, view),
-                DebugTab::Memory => memory_tab(ui, debug, view, &mut actions),
-                DebugTab::Breakpoints => breakpoints_tab(ui, debug, &mut actions),
-            }
-            if !debug.message.is_empty() {
-                ui.separator();
-                ui.label(RichText::new(&debug.message).weak().small());
             }
         });
-    debug.open = open;
+        ui.separator();
+        match debug.tab {
+            DebugTab::Cpu => cpu_tab(ui, debug, view, &mut actions),
+            DebugTab::Ppu => ppu_tab(ui, debug, view),
+            DebugTab::Apu => apu_tab(ui, view),
+            DebugTab::Memory => memory_tab(ui, debug, view, &mut actions),
+            DebugTab::Breakpoints => breakpoints_tab(ui, debug, &mut actions),
+        }
+        if !debug.message.is_empty() {
+            ui.separator();
+            ui.label(RichText::new(&debug.message).weak().small());
+        }
+    };
+    if detach && !cfg!(any(target_os = "android", target_os = "ios")) {
+        let id = egui::ViewportId::from_hash_of(("unko-debugger", generation));
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Debugger — Unko")
+            .with_inner_size([780.0, 540.0])
+            .with_min_inner_size([560.0, 360.0])
+            .with_resizable(true);
+        let mut closed = false;
+        ctx.show_viewport_immediate(id, builder, |ctx, _class| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.add_space(6.0);
+                body(ui);
+            });
+            if ctx.input(|input| input.viewport().close_requested()) {
+                closed = true;
+            }
+        });
+        if closed {
+            debug.open = false;
+        }
+    } else {
+        egui::Window::new("Debugger")
+            .open(&mut open)
+            .default_size([760.0, 520.0])
+            .min_width(620.0)
+            .show(ctx, |ui| body(ui));
+        debug.open = open;
+    }
     actions
 }
 
@@ -647,7 +680,7 @@ mod tests {
         for tab in DebugTab::ALL {
             debug.tab = tab;
             let output = ctx.run(egui::RawInput::default(), |ctx| {
-                let actions = window(&mut debug, ctx, &view);
+                let actions = window(&mut debug, ctx, &view, false, 0);
                 assert!(actions.is_empty(), "no pointer input means no actions");
             });
             assert!(!output.shapes.is_empty(), "{tab:?} produced no shapes");

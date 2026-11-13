@@ -252,6 +252,9 @@ pub struct Ppu {
     pub timing: Timing,
     /// Display palette preset (does not affect emulated values).
     palette_variant: PaletteVariant,
+    /// User table for [`PaletteVariant::Custom`] (64 RGB triplets, indexed by
+    /// the 6-bit NES colour).
+    custom_palette: Vec<[u8; 3]>,
     /// Accumulated RGBA frame (256x240).
     frame: Vec<u8>,
     /// Background shift registers (MSB is the next pixel).
@@ -407,6 +410,7 @@ impl Ppu {
             disable_cancel_dot: 3,
             timing,
             palette_variant: PaletteVariant::Canonical,
+            custom_palette: Vec::new(),
             frame: vec![0; 256 * 240 * 4],
             bg_lo: 0,
             bg_hi: 0,
@@ -1296,6 +1300,14 @@ impl Ppu {
         self.refresh_palette_rgb();
     }
 
+    /// Supplies the 64-entry table used by [`PaletteVariant::Custom`].
+    pub fn set_palette_table(&mut self, table: [[u8; 3]; 64]) {
+        self.custom_palette = table.to_vec();
+        if matches!(self.palette_variant, PaletteVariant::Custom) {
+            self.refresh_palette_rgb();
+        }
+    }
+
     /// The 32 palette entries as RGB, after emphasis, for debuggers.
     #[must_use]
     pub fn debug_palette_rgb(&self) -> [[u8; 3]; 32] {
@@ -1470,7 +1482,14 @@ impl Ppu {
         let emph = (self.mask >> 5) & 0x07;
         for index in 0..32 {
             let colour = self.palette[index] & 0x3F;
-            let base = palette_colour(self.palette_variant, NES_PALETTE[usize::from(colour)]);
+            let base = if matches!(self.palette_variant, PaletteVariant::Custom) {
+                self.custom_palette
+                    .get(usize::from(colour))
+                    .copied()
+                    .unwrap_or(NES_PALETTE[usize::from(colour)])
+            } else {
+                palette_colour(self.palette_variant, NES_PALETTE[usize::from(colour)])
+            };
             self.palette_rgb[index] = if emph == 0 {
                 base
             } else {
@@ -2496,6 +2515,8 @@ pub enum PaletteVariant {
     Rgb,
     /// Luminance-only output.
     Monochrome,
+    /// User-supplied 64-entry table.
+    Custom,
 }
 
 /// Applies a display palette preset to a canonical 2C02 colour.
@@ -2524,6 +2545,7 @@ fn palette_colour(variant: PaletteVariant, base: [u8; 3]) -> [u8; 3] {
             let luma = 0.299 * r + 0.587 * g + 0.114 * b;
             [clamp(luma); 3]
         }
+        PaletteVariant::Custom => base,
     }
 }
 
@@ -2682,6 +2704,21 @@ mod tests {
         assert!(warm[0] > warm[2], "consumer palette is warm");
         let saturated = palette_colour(PaletteVariant::Rgb, [200, 40, 10]);
         assert!(saturated[0] > 200, "RGB palette boosts saturation");
+    }
+
+    #[test]
+    fn custom_palette_table_is_used_by_the_custom_variant() {
+        let mut ppu = Ppu::new(Timing::NTSC, vec![0; 0x2000], false, false);
+        let mut table = [[0u8; 3]; 64];
+        table[0] = [1, 2, 3];
+        table[0x0F] = [4, 5, 6];
+        ppu.set_palette_table(table);
+        ppu.set_palette_variant(PaletteVariant::Custom);
+        assert_eq!(ppu.debug_palette_rgb()[0], [1, 2, 3]);
+        // Palette RAM entry 0 maps to NES colour 0 at power-on.
+        ppu.palette[0] = 0x0F;
+        ppu.refresh_palette_rgb();
+        assert_eq!(ppu.debug_palette_rgb()[0], [4, 5, 6]);
     }
 
     #[test]

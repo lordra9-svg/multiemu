@@ -114,7 +114,20 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] Native file dialog (`rfd`) for the ROM/save folders, integer scaling and
       a nearest/linear texture-filter option; the composite/NTSC display filter
       is offered through the core (`VideoFilter::Composite`).
-- [x] Gamepad support (SDL3), rebinding UI, hot-plug, four players.
+- [x] Gamepad support (SDL3), rebinding UI, hot-plug, four players, a
+      gamepad-to-player matrix, per-port and per-pad disables, and a Devices
+      window showing port devices and every pad's assignment/connection.
+- [x] Detachable Settings/Devices/Debugger OS windows on desktop (embedded
+      panels on mobile), remembered layout and a confirmed reset-all that
+      restores config/profiles/thumbnails while keeping saves, SRAM and
+      recordings.
+- [x] Library grid columns (1-8), configurable list columns and per-system
+      library roots (NES scanned; SNES/N64 tags are placeholders).
+- [x] Display aspect Fit/4:3/8:7, fixed 1-6x integer scale, 1-3x output
+      supersampling, built-in output shader presets and window-size presets.
+- [x] Palette `.pal`/`.palette` import (192/768-byte binary and text) with a
+      custom table; the broad built-in hardware palette set awaits a
+      license-clean source.
 - [x] Audio device via `cpal`; 15-250 ms target buffer with startup prefill, stall trimming and decayed underrun recovery; Fast/Standard/High resampler kernels and NES RF/Crisp/Warm/Linear/custom output filters.
 - [x] Local capture: WAV, PNG sequence and GIF.
 - [x] Input display, touch controller, auto-fire and per-game gamepad profiles.

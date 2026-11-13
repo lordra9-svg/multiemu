@@ -271,6 +271,8 @@ pub enum Palette {
     Rgb,
     /// Luminance-only output.
     Monochrome,
+    /// User-supplied 64-entry table (`.pal` / `.palette` import).
+    Custom,
 }
 
 impl Palette {
@@ -282,6 +284,7 @@ impl Palette {
             Self::Consumer => "consumer",
             Self::Rgb => "rgb",
             Self::Monochrome => "mono",
+            Self::Custom => "custom",
         }
     }
 
@@ -292,6 +295,7 @@ impl Palette {
             "consumer" | "warm" => Self::Consumer,
             "rgb" => Self::Rgb,
             "mono" | "monochrome" | "grayscale" => Self::Monochrome,
+            "custom" => Self::Custom,
             _ => Self::Canonical,
         }
     }

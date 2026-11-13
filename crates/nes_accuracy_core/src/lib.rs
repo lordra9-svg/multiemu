@@ -91,6 +91,7 @@ pub struct AccuracyCore {
     audio_quality: AudioQuality,
     audio_filters: AudioFilterModel,
     channel_gains: [f32; 6],
+    palette_table: Option<[[u8; 3]; 64]>,
 }
 
 impl AccuracyCore {
@@ -107,6 +108,7 @@ impl AccuracyCore {
             audio_quality: AudioQuality::Standard,
             audio_filters: AudioFilterModel::NesRf,
             channel_gains: [1.0; 6],
+            palette_table: None,
         }
     }
 }
@@ -127,6 +129,7 @@ fn palette_variant(palette: Palette) -> PaletteVariant {
         Palette::Consumer => PaletteVariant::Consumer,
         Palette::Rgb => PaletteVariant::Rgb,
         Palette::Monochrome => PaletteVariant::Monochrome,
+        Palette::Custom => PaletteVariant::Custom,
     }
 }
 
@@ -193,6 +196,9 @@ impl Core for AccuracyCore {
         self.filter = options.video_filter;
         self.palette = options.palette;
         system.set_palette(palette_variant(options.palette));
+        if let Some(table) = self.palette_table {
+            system.set_palette_table(table);
+        }
         let rate = if options.sample_rate > 0.0 {
             options.sample_rate
         } else {
@@ -277,6 +283,13 @@ impl Core for AccuracyCore {
         self.palette = palette;
         if let Some(system) = self.system.as_mut() {
             system.set_palette(palette_variant(palette));
+        }
+    }
+
+    fn set_palette_table(&mut self, table: [[u8; 3]; 64]) {
+        self.palette_table = Some(table);
+        if let Some(system) = self.system.as_mut() {
+            system.set_palette_table(table);
         }
     }
 

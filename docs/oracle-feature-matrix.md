@@ -41,8 +41,8 @@ emulator's scope.
 | Netplay | No | Yes | experimental (2.7) | Yes | No | Yes | rollback, 2–4p | No |
 | Movies / TAS | trace | movie recording | rich TAS editor + movies | movie recording | movie recording | No | TAStudio + movie import | No (WAV/PNG/GIF only) |
 | Debugger | memory editor, tracer | full debugger suite | full (RAM search, trace, hex, PPU/nametable) | no | full (breakpoints, viewers, palette) | no | conditional bp, watchpoints, hex, callstack | **CPU/PPU/APU + hex + PC breakpoints** |
-| Video filters / shaders | slang shaders | NTSC, xBRZ, HD packs | NTSC filters, palettes | Blargg NTSC, HQx, scanlines | palette editor, scanlines | many (NTSC, CRT, xBRZ, hqNx) | NTSC + CRT shader stack | **raw/composite/CRT (CPU)** |
-| Palettes | several | many + custom | many + `.pal` | many + `.pal`, palette editor | palette editor + custom | many + editor + Raw | `.pal` + generated NTSC | **4 presets** |
+| Video filters / shaders | slang shaders | NTSC, xBRZ, HD packs | NTSC filters, palettes | Blargg NTSC, HQx, scanlines | palette editor, scanlines | many (NTSC, CRT, xBRZ, hqNx) | NTSC + CRT shader stack | **raw/composite/CRT + scanline/LCD/CRT output presets** |
+| Palettes | several | many + custom | many + `.pal` | many + `.pal`, palette editor | palette editor + custom | many + editor + Raw | `.pal` + generated NTSC | **4 presets + `.pal`/`.palette` import** |
 | HD packs | No | Yes | No | No | No | No | Yes | No |
 | Lua / scripting | No | debugger scripting | Yes (Lua 5.1) | No | No | No | Yes (sandboxed Lua 5.4) | No |
 | RetroAchievements | No | Yes (libretro) | No | No | No | No | Yes | No |

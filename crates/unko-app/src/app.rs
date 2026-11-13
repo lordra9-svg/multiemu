@@ -20,7 +20,7 @@ use crate::gamepad::{
 use crate::library::{self, GameEntry};
 use crate::player::{self, Player};
 use crate::recording::RecordModes;
-use crate::settings::{HotkeyAction, Settings, Theme};
+use crate::settings::{Aspect, HotkeyAction, Settings, ShaderPreset, Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -86,6 +86,9 @@ pub struct App {
     active_mapping: PadMapping,
     paused_by_focus: bool,
     debug_on_start: bool,
+    devices_open: bool,
+    confirm_reset: bool,
+    window_generation: u32,
 }
 
 /// Command-line overrides.
@@ -157,6 +160,9 @@ impl App {
             active_mapping,
             paused_by_focus: false,
             debug_on_start: args.debug,
+            devices_open: false,
+            confirm_reset: false,
+            window_generation: 0,
         };
         app.status_until = Some(Instant::now() + Duration::from_secs(6));
         if args.settings {
@@ -174,18 +180,37 @@ impl App {
     }
 
     fn scan(&mut self) {
-        self.library = scan(&self.settings.rom_dir);
+        let mut roots = vec![self.settings.rom_dir.clone()];
+        for root in &self.settings.library_roots {
+            if root.system == "nes" {
+                roots.push(root.path.clone());
+            }
+        }
+        let mut library = Vec::new();
+        for root in roots {
+            library.extend(scan(&root));
+        }
+        let mut seen = std::collections::HashSet::new();
+        library.retain(|entry| seen.insert(entry.source.display_path()));
+        self.library = library;
         self.selected = None;
         self.status = if self.library.is_empty() {
             format!(
                 "No ROMs in {} — add .nes files or .zip/.7z/.rar archives",
                 self.settings.rom_dir.display()
             )
-        } else {
+        } else if self.settings.library_roots.is_empty() {
             format!(
                 "{} ROMs in {}",
                 self.library.len(),
                 self.settings.rom_dir.display()
+            )
+        } else {
+            format!(
+                "{} ROMs in {} + {} extra root(s)",
+                self.library.len(),
+                self.settings.rom_dir.display(),
+                self.settings.library_roots.len()
             )
         };
         self.status_until = Some(Instant::now() + Duration::from_secs(5));
@@ -265,6 +290,11 @@ impl App {
         if let Some(player) = &mut self.player {
             player.set_filter(self.settings.filter);
             player.set_palette(self.settings.palette);
+            if self.settings.palette == unko_core::Palette::Custom {
+                if let Some(table) = crate::settings::load_palette(&self.settings.custom_palette) {
+                    player.set_palette_table(table);
+                }
+            }
             let rate = self
                 .audio
                 .as_ref()
@@ -283,6 +313,9 @@ impl App {
             }
             if self.settings.effective_channel_gains() != old.effective_channel_gains() {
                 player.set_channel_gains(self.settings.effective_channel_gains());
+            }
+            if self.settings.supersample != old.supersample {
+                player.set_supersample(self.settings.supersample);
             }
         }
         if let Some(audio) = &self.audio {
@@ -570,6 +603,10 @@ impl App {
                             ui.close_menu();
                         }
                     }
+                    if ui.button("Devices").clicked() {
+                        self.devices_open = true;
+                        ui.close_menu();
+                    }
                     ui.separator();
                     ui.menu_button("Recording", |ui| {
                         let has_game = self.player.is_some();
@@ -778,6 +815,7 @@ impl App {
     fn library(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(6.0);
+            let before = (self.settings.grid_columns, self.settings.list_columns);
             ui.horizontal(|ui| {
                 ui.heading("Library");
                 ui.add_space(8.0);
@@ -799,11 +837,32 @@ impl App {
                         self.settings.grid_view = !self.settings.grid_view;
                         let _ = self.settings.save(&Settings::path());
                     }
+                    ui.menu_button("Columns", |ui| {
+                        ui.label("Grid columns (1-8)");
+                        ui.add(egui::Slider::new(&mut self.settings.grid_columns, 1..=8));
+                        ui.separator();
+                        ui.label("List columns");
+                        let mut mask = self.settings.list_columns;
+                        for (name, bit) in LIST_COLUMN_BITS {
+                            let mut shown = mask & bit != 0;
+                            if ui.checkbox(&mut shown, name).changed() {
+                                if shown {
+                                    mask |= bit;
+                                } else {
+                                    mask &= !bit;
+                                }
+                            }
+                        }
+                        self.settings.list_columns = mask;
+                    });
                     if ui.button("Rescan").clicked() {
                         self.scan();
                     }
                 });
             });
+            if before != (self.settings.grid_columns, self.settings.list_columns) {
+                let _ = self.settings.save(&Settings::path());
+            }
             ui.separator();
 
             let indices = self.filtered();
@@ -848,18 +907,28 @@ impl App {
     }
 
     fn table(&mut self, ui: &mut egui::Ui, indices: &[usize]) {
-        let width = ui.available_width();
-        let title_width = (width * 0.30).clamp(200.0, 380.0);
-        let others: f32 = 64.0 + 76.0 + 64.0 + 64.0 + 96.0;
-        let file_width = (width - title_width - others - 24.0).max(160.0);
-        let columns: [(&str, f32); 6] = [
-            ("System", 64.0),
-            ("File", file_width),
-            ("Size", 76.0),
-            ("Region", 64.0),
-            ("Mapper", 64.0),
-            ("Modified", 96.0),
+        const COLUMNS: [(&str, u8, f32); 6] = [
+            ("System", 0x01, 0.9),
+            ("File", 0x02, 2.0),
+            ("Size", 0x04, 0.9),
+            ("Region", 0x08, 0.9),
+            ("Mapper", 0x10, 1.0),
+            ("Modified", 0x20, 1.4),
         ];
+        let width = ui.available_width();
+        let title_width = (width * 0.28).clamp(180.0, 360.0);
+        let visible: Vec<(&str, u8, f32)> = COLUMNS
+            .iter()
+            .copied()
+            .filter(|(_, bit, _)| self.settings.list_columns & bit != 0)
+            .collect();
+        let total_weight: f32 = visible.iter().map(|(_, _, weight)| weight).sum();
+        let usable = (width - title_width - 28.0).max(120.0);
+        let widths: Vec<f32> = visible
+            .iter()
+            .map(|(_, _, weight)| usable * weight / total_weight.max(0.001))
+            .collect();
+
         let header = ui
             .allocate_exact_size(Vec2::new(width, 22.0), Sense::hover())
             .0;
@@ -873,7 +942,7 @@ impl App {
             Color32::GRAY,
         );
         x += title_width;
-        for (name, column_width) in columns {
+        for ((name, _, _), column_width) in visible.iter().zip(&widths) {
             painter.text(
                 egui::pos2(x, header.center().y),
                 Align2::LEFT_CENTER,
@@ -940,19 +1009,11 @@ impl App {
                         text_color,
                     );
                     x += title_width;
-                    let cells = [
-                        entry.system().to_string(),
-                        entry.file_name.clone(),
-                        entry.size_label(),
-                        entry.region_label().to_string(),
-                        entry.mapper_label(),
-                        modified_label(entry.modified),
-                    ];
-                    for (cell, (_, column_width)) in cells.iter().zip(columns) {
+                    for ((_, bit, _), column_width) in visible.iter().zip(&widths) {
                         painter.text(
                             egui::pos2(x, y),
                             Align2::LEFT_CENTER,
-                            cell,
+                            column_cell(entry, *bit),
                             FontId::proportional(12.0),
                             Color32::from_gray(170),
                         );
@@ -963,6 +1024,13 @@ impl App {
     }
 
     fn grid(&mut self, ui: &mut egui::Ui, indices: &[usize]) {
+        let columns = self.settings.grid_columns.clamp(1, 8) as usize;
+        let gap = 8.0;
+        let available = ui.available_width();
+        let cell_width =
+            ((available - gap * (columns.saturating_sub(1)) as f32) / columns as f32).max(80.0);
+        let cell_height = (cell_width * 0.52).clamp(64.0, 140.0);
+        ui.spacing_mut().item_spacing = Vec2::new(gap, gap);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -970,7 +1038,7 @@ impl App {
                     for &index in indices {
                         let entry = &self.library[index];
                         let selected = self.selected == Some(index);
-                        let size = Vec2::new(190.0, 88.0);
+                        let size = Vec2::new(cell_width, cell_height);
                         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
                         if response.clicked() {
                             self.selected = Some(index);
@@ -1000,21 +1068,22 @@ impl App {
                         );
                         let painter = ui.painter().with_clip_rect(rect.shrink(8.0));
                         painter.text(
-                            rect.left_top() + Vec2::new(10.0, 18.0),
+                            rect.left_top() + Vec2::new(10.0, 12.0),
                             Align2::LEFT_TOP,
                             &entry.title,
-                            FontId::proportional(14.0),
+                            FontId::proportional(13.0),
                             ui.visuals().strong_text_color(),
                         );
                         painter.text(
-                            rect.left_bottom() + Vec2::new(10.0, -14.0),
+                            rect.left_bottom() + Vec2::new(10.0, -10.0),
                             Align2::LEFT_BOTTOM,
                             format!(
-                                "NES · mapper {} · {}",
+                                "{} · {} · {}",
+                                entry.system(),
                                 entry.mapper_label(),
                                 entry.region_label()
                             ),
-                            FontId::proportional(11.0),
+                            FontId::proportional(10.0),
                             Color32::from_gray(160),
                         );
                     }
@@ -1022,11 +1091,39 @@ impl App {
             });
     }
 
+    fn detached_windows(&self) -> bool {
+        self.settings.detachable_windows && !cfg!(any(target_os = "android", target_os = "ios"))
+    }
+
     fn settings_window(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             return;
         }
         let mut open = self.settings_open;
+        if self.detached_windows() {
+            let id = egui::ViewportId::from_hash_of(("unko-settings", self.window_generation));
+            let builder = egui::ViewportBuilder::default()
+                .with_title("Settings — Unko")
+                .with_inner_size([780.0, 540.0])
+                .with_min_inner_size([520.0, 360.0])
+                .with_resizable(true);
+            let mut closed = false;
+            ctx.show_viewport_immediate(id, builder, |ctx, _class| {
+                self.settings_frame(ctx, &mut open, false);
+                if ctx.input(|input| input.viewport().close_requested()) {
+                    closed = true;
+                }
+            });
+            if closed {
+                open = false;
+            }
+        } else {
+            self.settings_frame(ctx, &mut open, true);
+        }
+        self.settings_open = open;
+    }
+
+    fn settings_frame(&mut self, ctx: &egui::Context, open: &mut bool, embedded: bool) {
         let mut settings = self.settings.clone();
         let mut tab = self.tab;
         let selected_entry = self
@@ -1036,59 +1133,273 @@ impl App {
         let mut gamepads = self.gamepads.take();
         let gamepad_error = self.gamepad_error.clone();
         let mut hotkey_capture = self.hotkey_capture.take();
+        let mut reset_requested = false;
+        let mut layout_reset = false;
 
-        egui::Window::new("Settings")
-            .open(&mut open)
-            .default_width(760.0)
-            .default_height(480.0)
-            .resizable(true)
-            .show(ctx, |ui| {
-                ui.horizontal_top(|ui| {
-                    ui.set_min_width(140.0);
-                    ui.vertical(|ui| {
-                        for entry in Tab::ALL {
-                            if ui.selectable_label(tab == entry, entry.label()).clicked() {
-                                tab = entry;
-                            }
+        let mut body = |ui: &mut egui::Ui| {
+            ui.horizontal_top(|ui| {
+                ui.set_min_width(140.0);
+                ui.vertical(|ui| {
+                    for entry in Tab::ALL {
+                        if ui.selectable_label(tab == entry, entry.label()).clicked() {
+                            tab = entry;
                         }
-                    });
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        ui.set_min_width(560.0);
-                        match tab {
-                            Tab::General => general_tab(ui, &mut settings, ctx),
-                            Tab::Interface => interface_tab(ui, &mut settings),
-                            Tab::Graphics => graphics_tab(ui, &mut settings),
-                            Tab::Audio => audio_tab(
-                                ui,
-                                &mut settings,
-                                self.audio.as_ref(),
-                                self.audio_error.as_deref(),
-                            ),
-                            Tab::Controllers => controllers_tab(
-                                ui,
-                                &mut settings,
-                                gamepads.as_mut(),
-                                gamepad_error.as_deref(),
-                                &mut hotkey_capture,
-                            ),
-                            Tab::Paths => paths_tab(ui, &mut settings),
-                            Tab::Nes => nes_tab(ui, &mut settings, selected_entry.as_ref()),
-                            Tab::Advanced => advanced_tab(ui),
+                    }
+                });
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.set_min_width(560.0);
+                    match tab {
+                        Tab::General => {
+                            reset_requested =
+                                general_tab(ui, &mut settings, ctx, &mut layout_reset);
                         }
-                    });
+                        Tab::Interface => interface_tab(ui, &mut settings),
+                        Tab::Graphics => graphics_tab(ui, &mut settings, ctx),
+                        Tab::Audio => audio_tab(
+                            ui,
+                            &mut settings,
+                            self.audio.as_ref(),
+                            self.audio_error.as_deref(),
+                        ),
+                        Tab::Controllers => controllers_tab(
+                            ui,
+                            &mut settings,
+                            gamepads.as_mut(),
+                            gamepad_error.as_deref(),
+                            &mut hotkey_capture,
+                        ),
+                        Tab::Paths => paths_tab(ui, &mut settings),
+                        Tab::Nes => nes_tab(ui, &mut settings, selected_entry.as_ref()),
+                        Tab::Advanced => advanced_tab(ui),
+                    }
                 });
             });
+        };
+
+        if embedded {
+            egui::Window::new("Settings")
+                .open(open)
+                .default_width(760.0)
+                .default_height(480.0)
+                .resizable(true)
+                .show(ctx, |ui| body(ui));
+        } else {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.add_space(6.0);
+                body(ui);
+            });
+        }
 
         self.gamepads = gamepads;
         self.hotkey_capture = hotkey_capture;
-        self.settings_open = open;
         self.tab = tab;
         if settings != self.settings {
             let old = self.settings.clone();
             self.settings = settings;
             self.apply_settings(ctx, &old);
         }
+        if layout_reset {
+            self.window_generation = self.window_generation.wrapping_add(1);
+        }
+        if reset_requested {
+            self.confirm_reset = true;
+        }
+    }
+
+    fn devices_window(&mut self, ctx: &egui::Context) {
+        if !self.devices_open {
+            return;
+        }
+        let mut open = self.devices_open;
+        if self.detached_windows() {
+            let id = egui::ViewportId::from_hash_of(("unko-devices", self.window_generation));
+            let builder = egui::ViewportBuilder::default()
+                .with_title("Devices — Unko")
+                .with_inner_size([680.0, 520.0])
+                .with_min_inner_size([420.0, 320.0])
+                .with_resizable(true);
+            let mut closed = false;
+            ctx.show_viewport_immediate(id, builder, |ctx, _class| {
+                self.devices_frame(ctx, false);
+                if ctx.input(|input| input.viewport().close_requested()) {
+                    closed = true;
+                }
+            });
+            if closed {
+                open = false;
+            }
+        } else {
+            self.devices_frame(ctx, true);
+        }
+        self.devices_open = open;
+    }
+
+    fn devices_frame(&mut self, ctx: &egui::Context, embedded: bool) {
+        let names = self.gamepads.as_ref().map(Gamepads::names);
+        let connected = self.gamepads.as_ref().map_or(0, Gamepads::connected);
+        let gamepad_error = self.gamepad_error.clone();
+        let mut settings = self.settings.clone();
+        let mut body = |ui: &mut egui::Ui| {
+            ui.heading("NES ports");
+            ui.label(
+                RichText::new(
+                    "The two physical ports carry players 1/2, or players 1-4 \
+                     with a Four Score adapter. A disabled port ignores \
+                     keyboard, touch and gamepad input.",
+                )
+                .weak()
+                .small(),
+            );
+            for port in 0..2 {
+                let device = if port == 0 {
+                    settings.port1_device
+                } else {
+                    settings.port2_device
+                };
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut settings.port_disabled[port], "Disabled");
+                    ui.label(format!("Port {}: {}", port + 1, device_label(device)));
+                });
+            }
+            ui.add_space(10.0);
+            ui.separator();
+            ui.heading("Gamepads");
+            match &names {
+                Some(names) => {
+                    egui::Grid::new("devices-pads")
+                        .num_columns(3)
+                        .spacing([10.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Pad");
+                            ui.label("NES player");
+                            ui.label("Disabled");
+                            ui.end_row();
+                            for (slot, name) in names.iter().enumerate() {
+                                ui.label(match name {
+                                    Some(name) => format!("{}: {name}", slot + 1),
+                                    None => format!("{}: (not connected)", slot + 1),
+                                });
+                                egui::ComboBox::from_id_salt(("pad-port", slot))
+                                    .selected_text(format!(
+                                        "Player {}",
+                                        settings.pad_ports[slot] + 1
+                                    ))
+                                    .show_ui(ui, |ui| {
+                                        for port in 0..4u8 {
+                                            ui.selectable_value(
+                                                &mut settings.pad_ports[slot],
+                                                port,
+                                                format!("Player {}", port + 1),
+                                            );
+                                        }
+                                    });
+                                ui.checkbox(&mut settings.pad_disabled[slot], "");
+                                ui.end_row();
+                            }
+                        });
+                    ui.label(
+                        RichText::new(format!(
+                            "{connected} connected. Two pads can drive the same \
+                             player; their buttons are merged."
+                        ))
+                        .weak()
+                        .small(),
+                    );
+                }
+                None => {
+                    ui.colored_label(
+                        Color32::from_rgb(0xE0, 0x80, 0x60),
+                        gamepad_error
+                            .as_deref()
+                            .unwrap_or("SDL3 gamepad backend unavailable"),
+                    );
+                    ui.label("Keyboard and the touch overlay still work.");
+                }
+            }
+            ui.add_space(10.0);
+            ui.separator();
+            ui.heading("Sources");
+            ui.label("Keyboard and touch: player 1 (unless port 1 is disabled).");
+            ui.label("Gamepads: routed through the matrix above.");
+            ui.label("Zapper, paddle, Power Pad and Family BASIC use the port's device.");
+        };
+
+        if embedded {
+            egui::Window::new("Devices")
+                .default_width(660.0)
+                .resizable(true)
+                .show(ctx, |ui| body(ui));
+        } else {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.add_space(6.0);
+                body(ui);
+            });
+        }
+        if settings != self.settings {
+            let old = self.settings.clone();
+            self.settings = settings;
+            self.apply_settings(ctx, &old);
+        }
+    }
+
+    fn reset_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.confirm_reset {
+            return;
+        }
+        let mut open = true;
+        let mut confirmed = false;
+        egui::Window::new("Reset all settings?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(
+                    "This restores configuration, window layout, hotkeys, gamepad \
+                     bindings, per-port devices and per-game input profiles, and \
+                     removes saved state thumbnails.",
+                );
+                ui.label(
+                    RichText::new("Save states, SRAM and recordings are never deleted.").strong(),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Reset").clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        open = false;
+                    }
+                });
+            });
+        if confirmed {
+            self.confirm_reset = false;
+            self.reset_all_settings(ctx);
+        } else if !open {
+            self.confirm_reset = false;
+        }
+    }
+
+    fn reset_all_settings(&mut self, ctx: &egui::Context) {
+        let old = self.settings.clone();
+        // Per-game profiles and state thumbnails are regenerable; state files,
+        // SRAM and recordings are not touched.
+        if let Ok(entries) = std::fs::read_dir(&old.save_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let extension = path.extension().and_then(|value| value.to_str());
+                if matches!(extension, Some("pad" | "thumb")) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        self.settings = Settings::default();
+        self.active_mapping = self.settings.pad_mapping;
+        self.tab = Tab::General;
+        self.window_generation = self.window_generation.wrapping_add(1);
+        self.apply_settings(ctx, &old);
+        self.scan();
+        self.set_status("Reset all settings to defaults");
     }
 
     fn about_window(&mut self, ctx: &egui::Context) {
@@ -1183,12 +1494,22 @@ impl eframe::App for App {
 
         if self.settings.gamepad_enabled {
             if let Some(gamepads) = &mut self.gamepads {
-                self.input_states = gamepads.poll(
+                let polled = gamepads.poll(
                     self.active_mapping,
                     self.settings.pad_deadzone,
                     self.settings.turbo_enabled,
                     self.settings.turbo_hz,
                 );
+                let mut routed = [unko_core::InputState::empty(); 4];
+                for (slot, state) in polled.iter().enumerate() {
+                    if self.settings.pad_disabled[slot] {
+                        continue;
+                    }
+                    let port = usize::from(self.settings.pad_ports[slot].min(3));
+                    routed[port] =
+                        unko_core::InputState::from_bits(routed[port].bits() | state.bits());
+                }
+                self.input_states = routed;
             }
         } else {
             self.input_states = [unko_core::InputState::empty(); 4];
@@ -1197,11 +1518,20 @@ impl eframe::App for App {
             let running = self.player.as_ref().is_some_and(|player| !player.paused);
             audio.set_active(running && !self.settings.muted);
         }
+        let detached_windows = self.detached_windows();
+        let window_generation = self.window_generation;
+        let port_disabled = self.settings.port_disabled;
         let audio = self.audio.as_mut();
         if let Some(player) = &mut self.player {
             for (port, state) in self.input_states.iter().enumerate() {
                 player.set_gamepad(port, *state);
             }
+            // The two physical ports gate players 1/2 and, for a Four Score,
+            // the extra players 3/4 that ride the same ports.
+            player.set_port_enabled(0, !port_disabled[0]);
+            player.set_port_enabled(1, !port_disabled[1]);
+            player.set_port_enabled(2, !port_disabled[0]);
+            player.set_port_enabled(3, !port_disabled[1]);
             player.step(ctx, audio);
         }
 
@@ -1246,6 +1576,10 @@ impl eframe::App for App {
                 &ViewportOptions {
                     integer_scale: self.settings.integer_scale,
                     linear_filter: self.settings.linear_filter,
+                    aspect: self.settings.aspect,
+                    scale: self.settings.scale,
+                    supersample: self.settings.supersample,
+                    shader: self.settings.shader,
                     zapper_port,
                     paddle_port,
                     power_pad_port,
@@ -1263,7 +1597,13 @@ impl eframe::App for App {
             }
             if player.debug.open {
                 if let Some(view) = player.debug_view() {
-                    let actions = debugger::window(&mut player.debug, ctx, &view);
+                    let actions = debugger::window(
+                        &mut player.debug,
+                        ctx,
+                        &view,
+                        detached_windows,
+                        window_generation,
+                    );
                     for action in actions {
                         player.apply_debug(action, ctx);
                     }
@@ -1283,8 +1623,10 @@ impl eframe::App for App {
         }
 
         self.settings_window(ctx);
+        self.devices_window(ctx);
         self.about_window(ctx);
         self.open_rom_window(ctx);
+        self.reset_confirmation(ctx);
 
         if let Some(entry) = self.pending_play.take() {
             self.start_entry(entry);
@@ -1364,9 +1706,81 @@ fn fit_aspect(available: Rect, aspect: f32) -> Rect {
     Rect::from_center_size(available.center(), Vec2::new(width, height))
 }
 
+/// Draws the selected output post-process preset over the game image.
+fn paint_shader(ui: &egui::Ui, target: Rect, shader: ShaderPreset) {
+    let step = (target.height() / 240.0).max(1.0);
+    match shader {
+        ShaderPreset::Off => {}
+        ShaderPreset::Scanlines | ShaderPreset::Crt => {
+            let painter = ui.painter();
+            let mut y = target.top();
+            let mut row = 0;
+            while y < target.bottom() {
+                if row & 1 == 1 {
+                    let line = Rect::from_min_size(
+                        egui::pos2(target.left(), y),
+                        Vec2::new(target.width(), (step * 0.45).max(1.0)),
+                    );
+                    painter.rect_filled(
+                        line,
+                        0.0,
+                        Color32::from_black_alpha(if shader == ShaderPreset::Crt {
+                            90
+                        } else {
+                            64
+                        }),
+                    );
+                }
+                y += step;
+                row += 1;
+            }
+            if shader == ShaderPreset::Crt {
+                // Cheap vignette: two nested borders instead of a shader.
+                let border = (target.width().min(target.height()) * 0.06).max(6.0);
+                painter.rect_stroke(
+                    target.shrink(border * 0.5),
+                    6.0,
+                    Stroke::new(border, Color32::from_black_alpha(60)),
+                    egui::StrokeKind::Inside,
+                );
+                painter.rect_stroke(
+                    target,
+                    6.0,
+                    Stroke::new(border * 2.0, Color32::from_black_alpha(35)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+        ShaderPreset::Lcd => {
+            let painter = ui.painter();
+            let color = Color32::from_black_alpha(48);
+            let mut x = target.left();
+            while x <= target.right() {
+                painter.line_segment(
+                    [egui::pos2(x, target.top()), egui::pos2(x, target.bottom())],
+                    Stroke::new(1.0_f32, color),
+                );
+                x += step;
+            }
+            let mut y = target.top();
+            while y <= target.bottom() {
+                painter.line_segment(
+                    [egui::pos2(target.left(), y), egui::pos2(target.right(), y)],
+                    Stroke::new(1.0_f32, color),
+                );
+                y += step;
+            }
+        }
+    }
+}
+
 struct ViewportOptions {
     integer_scale: bool,
     linear_filter: bool,
+    aspect: Aspect,
+    scale: u32,
+    supersample: u32,
+    shader: ShaderPreset,
     zapper_port: Option<usize>,
     paddle_port: Option<usize>,
     power_pad_port: Option<usize>,
@@ -1386,6 +1800,10 @@ fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions)
     let ViewportOptions {
         integer_scale,
         linear_filter,
+        aspect,
+        scale,
+        supersample,
+        shader,
         zapper_port,
         paddle_port,
         power_pad_port,
@@ -1400,10 +1818,19 @@ fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions)
         .frame(egui::Frame::NONE.fill(Color32::BLACK))
         .show(ctx, |ui| {
             let available = ui.max_rect();
-            let mut target = fit_aspect(available, 4.0 / 3.0);
-            if integer_scale {
-                let scale = (target.height() / 240.0).floor().max(1.0);
-                let size = Vec2::new(240.0 * scale * 4.0 / 3.0, 240.0 * scale);
+            let mut target = match aspect.ratio() {
+                Some(ratio) => fit_aspect(available, ratio),
+                None => available,
+            };
+            if scale > 0 {
+                let factor = scale as f32;
+                let size = Vec2::new(256.0 * factor, 240.0 * factor);
+                if size.x <= available.width() && size.y <= available.height() {
+                    target = Rect::from_center_size(available.center(), size);
+                }
+            } else if integer_scale {
+                let factor = (target.height() / 240.0).floor().max(1.0);
+                let size = Vec2::new(240.0 * factor * 4.0 / 3.0, 240.0 * factor);
                 target = Rect::from_center_size(available.center(), size);
             }
             if let Some(port) = zapper_port {
@@ -1436,7 +1863,7 @@ fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions)
                     },
                 );
             }
-            player.set_texture_options(if linear_filter {
+            player.set_texture_options(if linear_filter || supersample > 1 {
                 egui::TextureOptions::LINEAR
             } else {
                 egui::TextureOptions::NEAREST
@@ -1449,6 +1876,7 @@ fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions)
                     Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                     Color32::WHITE,
                 );
+                paint_shader(ui, target, shader);
             } else {
                 ui.painter().text(
                     available.center(),
@@ -1758,7 +2186,12 @@ fn touch_buttons(target: Rect) -> [(u16, Rect, &'static str); 8] {
     ]
 }
 
-fn general_tab(ui: &mut egui::Ui, settings: &mut Settings, _ctx: &egui::Context) {
+fn general_tab(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    _ctx: &egui::Context,
+    reset_layout: &mut bool,
+) -> bool {
     ui.heading("General");
     ui.add_space(8.0);
     ui.checkbox(
@@ -1766,12 +2199,35 @@ fn general_tab(ui: &mut egui::Ui, settings: &mut Settings, _ctx: &egui::Context)
         "Pause when the window loses focus",
     );
     ui.checkbox(&mut settings.confirm_stop, "Confirm before stopping a game");
+    ui.checkbox(
+        &mut settings.detachable_windows,
+        "Open Settings, Devices and the Debugger as separate OS windows",
+    );
+    if settings.detachable_windows && ui.button("Reset window layout").clicked() {
+        *reset_layout = true;
+    }
     ui.add_space(12.0);
     ui.label("Theme");
     ui.horizontal(|ui| {
         ui.radio_value(&mut settings.theme, Theme::Dark, "Dark");
         ui.radio_value(&mut settings.theme, Theme::Light, "Light");
     });
+    ui.add_space(18.0);
+    ui.separator();
+    let mut reset = false;
+    if ui.button("Reset all settings…").clicked() {
+        reset = true;
+    }
+    ui.label(
+        RichText::new(
+            "Restores configuration, window layout, hotkeys, gamepad bindings, \
+             per-port devices and per-game profiles. Save states, SRAM and \
+             recordings are kept.",
+        )
+        .weak()
+        .small(),
+    );
+    reset
 }
 
 fn interface_tab(ui: &mut egui::Ui, settings: &mut Settings) {
@@ -1783,8 +2239,21 @@ fn interface_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.label("Toolbar, menu and status layout follow Dolphin's desktop shell.");
 }
 
-fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings, ctx: &egui::Context) {
     ui.heading("Graphics");
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label("Window size");
+        for (label, size) in [
+            ("1280x960", [1280.0, 960.0]),
+            ("1600x1200", [1600.0, 1200.0]),
+            ("1920x1080", [1920.0, 1080.0]),
+        ] {
+            if ui.button(label).clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::from(size)));
+            }
+        }
+    });
     ui.add_space(8.0);
     ui.label("Video filter");
     ui.radio_value(
@@ -1813,10 +2282,30 @@ fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                     unko_core::Palette::Consumer,
                     unko_core::Palette::Rgb,
                     unko_core::Palette::Monochrome,
+                    unko_core::Palette::Custom,
                 ] {
                     ui.selectable_value(&mut settings.palette, palette, palette_label(palette));
                 }
             });
+        ui.label("Palette file");
+        let mut path = settings.custom_palette.display().to_string();
+        if ui
+            .add(egui::TextEdit::singleline(&mut path).desired_width(320.0))
+            .changed()
+        {
+            settings.custom_palette = PathBuf::from(path);
+            settings.palette = unko_core::Palette::Custom;
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if ui.button("Import .pal…").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("NES palette", &["pal", "palette"])
+                .pick_file()
+            {
+                settings.custom_palette = path;
+                settings.palette = unko_core::Palette::Custom;
+            }
+        }
     });
     ui.label(
         RichText::new(
@@ -1826,17 +2315,60 @@ fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         .small(),
     );
     ui.add_space(8.0);
+    ui.label("Aspect");
+    ui.horizontal(|ui| {
+        for aspect in [Aspect::Fit, Aspect::Tv43, Aspect::Pixel87] {
+            ui.radio_value(&mut settings.aspect, aspect, aspect.label());
+        }
+    });
     ui.checkbox(&mut settings.integer_scale, "Integer scaling when possible");
+    ui.add(egui::Slider::new(&mut settings.scale, 0..=6).text("Fixed integer scale (0 = auto)"));
+    ui.horizontal(|ui| {
+        ui.label("Supersampling");
+        egui::ComboBox::from_id_salt("supersample")
+            .selected_text(format!("{}x", settings.supersample))
+            .show_ui(ui, |ui| {
+                for factor in [1, 2, 3] {
+                    ui.selectable_value(&mut settings.supersample, factor, format!("{factor}x"));
+                }
+            });
+        ui.label("(output upscale, then linear downscale)");
+    });
     ui.checkbox(
         &mut settings.linear_filter,
         "Smooth (linear) texture filtering",
     );
+    ui.horizontal(|ui| {
+        ui.label("Output shader");
+        egui::ComboBox::from_id_salt("output-shader")
+            .selected_text(settings.shader.label())
+            .show_ui(ui, |ui| {
+                for shader in [
+                    ShaderPreset::Off,
+                    ShaderPreset::Scanlines,
+                    ShaderPreset::Lcd,
+                    ShaderPreset::Crt,
+                ] {
+                    ui.selectable_value(&mut settings.shader, shader, shader.label());
+                }
+            });
+    });
     ui.add_space(8.0);
     ui.label(
-        RichText::new("Filter changes apply to the running game immediately.")
-            .weak()
-            .small(),
+        RichText::new(
+            "Filter, aspect, scale and shader changes apply to the running game immediately.",
+        )
+        .weak()
+        .small(),
     );
+}
+
+fn system_label(system: &str) -> &'static str {
+    match system {
+        "snes" => "SNES (stub)",
+        "n64" => "N64 (stub)",
+        _ => "NES",
+    }
 }
 
 fn palette_label(palette: unko_core::Palette) -> &'static str {
@@ -1845,6 +2377,7 @@ fn palette_label(palette: unko_core::Palette) -> &'static str {
         unko_core::Palette::Consumer => "Consumer TV (warm)",
         unko_core::Palette::Rgb => "RGB monitor (saturated)",
         unko_core::Palette::Monochrome => "Monochrome",
+        unko_core::Palette::Custom => "Custom (.pal)",
     }
 }
 
@@ -2277,6 +2810,60 @@ fn paths_tab(ui: &mut egui::Ui, settings: &mut Settings) {
             }
         }
     });
+    ui.add_space(12.0);
+    ui.separator();
+    ui.heading("Library roots");
+    ui.label(
+        RichText::new(
+            "Additional folders tagged by system. Only NES roots are scanned in this milestone; \
+             the SNES/N64 tags are placeholders for the multi-system library.",
+        )
+        .weak()
+        .small(),
+    );
+    let mut remove = None;
+    for (index, root) in settings.library_roots.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let mut system = root.system.clone();
+            egui::ComboBox::from_id_salt(("root-system", index))
+                .selected_text(system_label(&system))
+                .show_ui(ui, |ui| {
+                    for candidate in ["nes", "snes", "n64"] {
+                        ui.selectable_value(
+                            &mut system,
+                            candidate.to_string(),
+                            system_label(candidate),
+                        );
+                    }
+                });
+            root.system = system;
+            let mut path = root.path.display().to_string();
+            if ui.text_edit_singleline(&mut path).changed() {
+                root.path = PathBuf::from(path);
+            }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if ui.button("Browse…").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_directory(&root.path)
+                    .pick_folder()
+                {
+                    root.path = path;
+                }
+            }
+            if ui.button("Remove").clicked() {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        settings.library_roots.remove(index);
+    }
+    if ui.button("Add library root").clicked() {
+        settings.library_roots.push(crate::settings::LibraryRoot {
+            system: "nes".into(),
+            path: settings.rom_dir.clone(),
+        });
+    }
     ui.add_space(8.0);
     ui.label(
         RichText::new("Changing the ROM folder rescans the library when you close Settings.")
@@ -2346,6 +2933,26 @@ fn advanced_tab(ui: &mut egui::Ui) {
             .weak()
             .small(),
     );
+}
+
+const LIST_COLUMN_BITS: [(&str, u8); 6] = [
+    ("System", 0x01),
+    ("File", 0x02),
+    ("Size", 0x04),
+    ("Region", 0x08),
+    ("Mapper", 0x10),
+    ("Modified", 0x20),
+];
+
+fn column_cell(entry: &crate::library::GameEntry, bit: u8) -> String {
+    match bit {
+        0x01 => entry.system().to_string(),
+        0x02 => entry.file_name.clone(),
+        0x04 => entry.size_label(),
+        0x08 => entry.region_label().to_string(),
+        0x10 => entry.mapper_label(),
+        _ => modified_label(entry.modified),
+    }
 }
 
 #[cfg(test)]

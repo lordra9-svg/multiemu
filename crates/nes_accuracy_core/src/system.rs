@@ -581,6 +581,11 @@ impl System {
         self.apu.set_channel_gains(self.channel_gains);
     }
 
+    /// Supplies the 64-entry table used by the custom palette.
+    pub fn set_palette_table(&mut self, table: [[u8; 3]; 64]) {
+        self.ppu.set_palette_table(table);
+    }
+
     /// Selects the regional timing model (NTSC, PAL or Dendy).
     ///
     /// The PPU scanline count and the CPU/PPU clock ratio follow the region.

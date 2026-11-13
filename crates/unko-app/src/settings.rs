@@ -130,6 +130,116 @@ impl Hotkeys {
     }
 }
 
+/// Display aspect handling when no fixed integer scale is selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aspect {
+    /// Stretch to the available window area.
+    Fit,
+    /// Contained 4:3 (television).
+    Tv43,
+    /// Contained 8:7 pixel aspect (square-ish NES pixels).
+    Pixel87,
+}
+
+impl Aspect {
+    /// Stable name for the settings file.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Fit => "fit",
+            Self::Tv43 => "4:3",
+            Self::Pixel87 => "8:7",
+        }
+    }
+
+    /// Parses a persisted name.
+    #[must_use]
+    pub fn from_name(value: &str) -> Self {
+        match value {
+            "4:3" | "tv" => Self::Tv43,
+            "8:7" | "pixel" => Self::Pixel87,
+            _ => Self::Fit,
+        }
+    }
+
+    /// Human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Fit => "Fit window",
+            Self::Tv43 => "4:3 TV",
+            Self::Pixel87 => "8:7 pixel",
+        }
+    }
+
+    /// Display width divided by height, or `None` for a stretched fit.
+    #[must_use]
+    pub fn ratio(self) -> Option<f32> {
+        match self {
+            Self::Fit => None,
+            Self::Tv43 => Some(4.0 / 3.0),
+            Self::Pixel87 => Some(256.0 * (8.0 / 7.0) / 240.0),
+        }
+    }
+}
+
+/// Output post-process preset (applied after the core video filter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShaderPreset {
+    /// No additional effect.
+    Off,
+    /// Dark horizontal lines over odd rows.
+    Scanlines,
+    /// Aperture-grille style vertical/horizontal grid.
+    Lcd,
+    /// Scanlines plus a soft vignette.
+    Crt,
+}
+
+impl ShaderPreset {
+    /// Stable name for the settings file.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Scanlines => "scanlines",
+            Self::Lcd => "lcd",
+            Self::Crt => "crt",
+        }
+    }
+
+    /// Parses a persisted name.
+    #[must_use]
+    pub fn from_name(value: &str) -> Self {
+        match value {
+            "scanlines" => Self::Scanlines,
+            "lcd" => Self::Lcd,
+            "crt" => Self::Crt,
+            _ => Self::Off,
+        }
+    }
+
+    /// Human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Scanlines => "Scanlines",
+            Self::Lcd => "LCD grid",
+            Self::Crt => "CRT (scanlines + vignette)",
+        }
+    }
+}
+
+/// One library root tagged with the system it contains.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryRoot {
+    /// System identifier (`nes` for now; SNES/N64 placeholders later).
+    pub system: String,
+    /// Folder scanned for that system.
+    pub path: PathBuf,
+}
+
 /// UI colour theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
@@ -152,6 +262,8 @@ pub struct Settings {
     pub filter: VideoFilter,
     /// Display palette preset.
     pub palette: Palette,
+    /// User palette file used by [`Palette::Custom`] (`.pal`/`.palette`).
+    pub custom_palette: PathBuf,
     /// Requested audio sample rate.
     pub sample_rate: f32,
     /// Target output latency in milliseconds (15..=250).
@@ -212,6 +324,29 @@ pub struct Settings {
     pub hotkeys: Hotkeys,
     /// Keep gamepad bindings per game instead of globally.
     pub per_game_input: bool,
+    /// Let Settings/Debugger/Devices open as native OS windows on desktop.
+    pub detachable_windows: bool,
+    /// Disable the two physical NES controller ports.
+    pub port_disabled: [bool; 2],
+    /// Disable individual physical gamepads.
+    pub pad_disabled: [bool; 4],
+    /// Physical gamepad slot -> NES port assignment (`0..=3`).
+    pub pad_ports: [u8; 4],
+    /// Number of columns in the library grid (1..=8).
+    pub grid_columns: u32,
+    /// Bitmask of visible list columns: 1 system, 2 file, 4 size, 8 region,
+    /// 16 mapper, 32 modified (title is always visible).
+    pub list_columns: u8,
+    /// Additional per-system library roots (stub for multi-system support).
+    pub library_roots: Vec<LibraryRoot>,
+    /// Display aspect when no fixed integer scale is selected.
+    pub aspect: Aspect,
+    /// Fixed integer scale factor (0 = automatic).
+    pub scale: u32,
+    /// Output supersampling factor (1 = off, 2 or 3).
+    pub supersample: u32,
+    /// Output post-process preset.
+    pub shader: ShaderPreset,
 }
 
 impl Default for Settings {
@@ -222,6 +357,7 @@ impl Default for Settings {
             region: Region::Auto,
             filter: VideoFilter::Raw,
             palette: Palette::Canonical,
+            custom_palette: PathBuf::new(),
             sample_rate: 48_000.0,
             audio_latency_ms: 60,
             audio_quality: AudioQuality::Standard,
@@ -252,6 +388,17 @@ impl Default for Settings {
             show_touch_controls: cfg!(any(target_os = "android", target_os = "ios")),
             hotkeys: Hotkeys::default(),
             per_game_input: false,
+            detachable_windows: !cfg!(any(target_os = "android", target_os = "ios")),
+            port_disabled: [false; 2],
+            pad_disabled: [false; 4],
+            pad_ports: [0, 1, 2, 3],
+            grid_columns: 5,
+            list_columns: 0b11_1111,
+            library_roots: Vec::new(),
+            aspect: Aspect::Fit,
+            scale: 0,
+            supersample: 1,
+            shader: ShaderPreset::Off,
         }
     }
 }
@@ -293,6 +440,7 @@ impl Settings {
                 "region" => settings.region = parse_region(value),
                 "filter" => settings.filter = parse_filter(value),
                 "palette" => settings.palette = Palette::from_name(value),
+                "custom_palette" => settings.custom_palette = value.into(),
                 "sample_rate" => settings.sample_rate = value.parse().unwrap_or(48_000.0),
                 "audio_latency_ms" => {
                     settings.audio_latency_ms = value.parse::<u32>().unwrap_or(60).clamp(15, 250)
@@ -355,6 +503,42 @@ impl Settings {
                 "input_display" => settings.show_input_display = parse_bool(value),
                 "touch_controls" => settings.show_touch_controls = parse_bool(value),
                 "per_game_input" => settings.per_game_input = parse_bool(value),
+                "detachable_windows" => settings.detachable_windows = parse_bool(value),
+                "port_disabled" => {
+                    for (slot, text) in settings.port_disabled.iter_mut().zip(value.split(',')) {
+                        *slot = matches!(text.trim(), "1" | "true" | "on");
+                    }
+                }
+                "pad_disabled" => {
+                    for (slot, text) in settings.pad_disabled.iter_mut().zip(value.split(',')) {
+                        *slot = matches!(text.trim(), "1" | "true" | "on");
+                    }
+                }
+                "pad_ports" => {
+                    for (slot, text) in settings.pad_ports.iter_mut().zip(value.split(',')) {
+                        *slot = text.trim().parse::<u8>().unwrap_or(0).min(3);
+                    }
+                }
+                "grid_columns" => {
+                    settings.grid_columns = value.parse::<u32>().unwrap_or(5).clamp(1, 8)
+                }
+                "list_columns" => {
+                    settings.list_columns = value.parse::<u8>().unwrap_or(0b11_1111) & 0x3F
+                }
+                "aspect" => settings.aspect = Aspect::from_name(value),
+                "scale" => settings.scale = value.parse::<u32>().unwrap_or(0).min(6),
+                "supersample" => {
+                    settings.supersample = value.parse::<u32>().unwrap_or(1).clamp(1, 3)
+                }
+                "shader" => settings.shader = ShaderPreset::from_name(value),
+                "library_root" => {
+                    if let Some((system, path)) = value.split_once('|') {
+                        settings.library_roots.push(LibraryRoot {
+                            system: system.trim().to_string(),
+                            path: PathBuf::from(path),
+                        });
+                    }
+                }
                 key if key.starts_with("hotkey_") => {
                     if let Some(action) =
                         HotkeyAction::ALL.iter().find(|action| action.key() == key)
@@ -437,6 +621,7 @@ channel_mutes={}
 integer_scale={}
 linear_filter={}
 palette={}
+custom_palette={}
 port1_device={}
 port2_device={}
 zapper_port2={}
@@ -454,6 +639,16 @@ turbo_hz={}
 input_display={}
 touch_controls={}
 per_game_input={}
+detachable_windows={}
+port_disabled={}
+pad_disabled={}
+pad_ports={}
+grid_columns={}
+list_columns={}
+aspect={}
+scale={}
+supersample={}
+shader={}
 ",
             self.rom_dir.display(),
             self.save_dir.display(),
@@ -478,6 +673,7 @@ per_game_input={}
             self.integer_scale,
             self.linear_filter,
             self.palette.name(),
+            self.custom_palette.display(),
             self.port1_device.name(),
             self.port2_device.name(),
             self.port2_device == PortDevice::Zapper,
@@ -498,7 +694,37 @@ per_game_input={}
             self.show_input_display,
             self.show_touch_controls,
             self.per_game_input,
+            self.detachable_windows,
+            self.port_disabled
+                .iter()
+                .map(|disabled| u8::from(*disabled).to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            self.pad_disabled
+                .iter()
+                .map(|disabled| u8::from(*disabled).to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            self.pad_ports
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            self.grid_columns,
+            self.list_columns,
+            self.aspect.name(),
+            self.scale,
+            self.supersample,
+            self.shader.name(),
         );
+        for root in &self.library_roots {
+            text.push_str(&format!(
+                "library_root={}|{}
+",
+                root.system,
+                root.path.display()
+            ));
+        }
         for action in HotkeyAction::ALL {
             text.push_str(&format!(
                 "{}={}\n",
@@ -524,6 +750,51 @@ fn default_data_root() -> PathBuf {
         }
     }
     PathBuf::new()
+}
+
+/// Loads a 64-entry RGB palette from a binary `.pal` (192 bytes) or a text
+/// file with 64 rows of three decimal/hex values.
+#[must_use]
+pub fn load_palette(path: &Path) -> Option<[[u8; 3]; 64]> {
+    let bytes = fs::read(path).ok()?;
+    let mut table = [[0u8; 3]; 64];
+    // Binary `.pal` files are 64 RGB triplets (192 bytes) or 64 RGBA quads
+    // (768 bytes, as written by some tools).
+    let stride = match bytes.len() {
+        768 => Some(4),
+        192 => Some(3),
+        _ if bytes.len() >= 768 && std::str::from_utf8(&bytes).is_err() => Some(4),
+        _ => None,
+    };
+    if let Some(stride) = stride {
+        for (index, entry) in table.iter_mut().enumerate() {
+            let start = index * stride;
+            entry.copy_from_slice(&bytes[start..start + 3]);
+        }
+        return Some(table);
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    let values: Vec<u8> = text
+        .split(|character: char| character.is_whitespace() || character == ',')
+        .filter(|token| !token.is_empty() && !token.starts_with(';') && !token.starts_with('#'))
+        .filter_map(|token| {
+            let token = token.trim();
+            token
+                .strip_prefix("0x")
+                .or_else(|| token.strip_prefix("0X"))
+                .map_or_else(
+                    || token.parse::<u8>().ok(),
+                    |hex| u8::from_str_radix(hex, 16).ok(),
+                )
+        })
+        .collect();
+    if values.len() < 192 {
+        return None;
+    }
+    for (index, entry) in table.iter_mut().enumerate() {
+        entry.copy_from_slice(&values[index * 3..index * 3 + 3]);
+    }
+    Some(table)
 }
 
 fn parse_bool(value: &str) -> bool {
@@ -599,6 +870,37 @@ mod tests {
     }
 
     #[test]
+    fn palette_import_reads_binary_rgb_rgba_and_text() {
+        let dir = std::env::temp_dir();
+        let rgb_path = dir.join("unko-test-rgb.pal");
+        let mut rgb = vec![0u8; 192];
+        rgb[0..3].copy_from_slice(&[1, 2, 3]);
+        rgb[189..192].copy_from_slice(&[4, 5, 6]);
+        fs::write(&rgb_path, &rgb).expect("write");
+        let table = load_palette(&rgb_path).expect("rgb palette");
+        assert_eq!(table[0], [1, 2, 3]);
+        assert_eq!(table[63], [4, 5, 6]);
+
+        let rgba_path = dir.join("unko-test-rgba.pal");
+        let mut rgba = vec![0u8; 768];
+        rgba[0..4].copy_from_slice(&[7, 8, 9, 255]);
+        fs::write(&rgba_path, &rgba).expect("write");
+        let table = load_palette(&rgba_path).expect("rgba palette");
+        assert_eq!(table[0], [7, 8, 9]);
+
+        let text_path = dir.join("unko-test-text.pal");
+        let text = "10 20 30\n".repeat(64);
+        fs::write(&text_path, text).expect("write");
+        let table = load_palette(&text_path).expect("text palette");
+        assert_eq!(table[0], [10, 20, 30]);
+        assert_eq!(table[63], [10, 20, 30]);
+
+        let _ = fs::remove_file(rgb_path);
+        let _ = fs::remove_file(rgba_path);
+        let _ = fs::remove_file(text_path);
+    }
+
+    #[test]
     fn audio_mixer_and_filter_settings_round_trip() {
         let path = std::env::temp_dir().join("unko-settings-audio.conf");
         let mut settings = Settings::default();
@@ -616,6 +918,37 @@ mod tests {
             loaded.effective_channel_gains(),
             [0.5, 0.0, 0.25, 1.0, 0.0, 0.0]
         );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn display_device_and_library_settings_round_trip() {
+        let path = std::env::temp_dir().join("unko-settings-display.conf");
+        let settings = Settings {
+            port_disabled: [true, false],
+            pad_disabled: [false, true, false, true],
+            pad_ports: [2, 0, 3, 1],
+            grid_columns: 7,
+            list_columns: 0b10_1010,
+            aspect: Aspect::Pixel87,
+            scale: 3,
+            supersample: 2,
+            shader: ShaderPreset::Crt,
+            library_roots: vec![
+                LibraryRoot {
+                    system: "nes".into(),
+                    path: PathBuf::from("/roms/nes"),
+                },
+                LibraryRoot {
+                    system: "snes".into(),
+                    path: PathBuf::from("/roms/snes"),
+                },
+            ],
+            ..Settings::default()
+        };
+        settings.save(&path).expect("writes");
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded, settings);
         let _ = fs::remove_file(path);
     }
 
