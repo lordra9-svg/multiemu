@@ -379,6 +379,9 @@ impl App {
             if self.settings.rewind_mb != old.rewind_mb {
                 player.set_rewind_mb(self.settings.rewind_mb);
             }
+            if self.settings.run_ahead != old.run_ahead {
+                player.set_run_ahead(self.settings.run_ahead);
+            }
             if self.settings.audio_source != old.audio_source {
                 player.set_audio_source(self.settings.audio_source);
             }
@@ -574,6 +577,33 @@ impl App {
                                 let _ = self.settings.save(&Settings::path());
                             }
                         }
+                    });
+                    ui.menu_button("Run-ahead", |ui| {
+                        for frames in 0..=4 {
+                            let label = if frames == 0 {
+                                "Off".to_string()
+                            } else {
+                                format!("{frames} frame{}", if frames == 1 { "" } else { "s" })
+                            };
+                            if ui
+                                .radio_value(&mut self.settings.run_ahead, frames, label)
+                                .changed()
+                            {
+                                if let Some(player) = &mut self.player {
+                                    player.set_run_ahead(frames);
+                                }
+                                let _ = self.settings.save(&Settings::path());
+                            }
+                        }
+                        ui.separator();
+                        ui.label(
+                            RichText::new(
+                                "Runs extra frames to hide input latency; suspended at \
+                                 non-100% speeds, during movies and while debugging.",
+                            )
+                            .weak()
+                            .small(),
+                        );
                     });
                     ui.menu_button("Movie", |ui| {
                         let has_game = self.player.is_some();

@@ -301,6 +301,8 @@ pub struct Settings {
     pub speed_percent: u32,
     /// Rewind ring budget in MiB (64, 128 or 256).
     pub rewind_mb: u32,
+    /// Extra frames emulated ahead for lower input latency (0 = off, 1-4).
+    pub run_ahead: u32,
     /// Requested audio sample rate.
     pub sample_rate: f32,
     /// Target output latency in milliseconds (15..=250).
@@ -415,6 +417,7 @@ impl Default for Settings {
             custom_palette: PathBuf::new(),
             speed_percent: 100,
             rewind_mb: 64,
+            run_ahead: 0,
             sample_rate: 48_000.0,
             audio_latency_ms: 60,
             audio_quality: AudioQuality::Standard,
@@ -519,6 +522,7 @@ impl Settings {
                         _ => 64,
                     }
                 }
+                "run_ahead" => settings.run_ahead = value.parse::<u32>().unwrap_or(0).min(4),
                 "sample_rate" => settings.sample_rate = value.parse().unwrap_or(48_000.0),
                 "audio_latency_ms" => {
                     settings.audio_latency_ms = value.parse::<u32>().unwrap_or(60).clamp(15, 250)

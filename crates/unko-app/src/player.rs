@@ -167,6 +167,14 @@ impl RewindBuffer {
     }
 }
 
+/// A frame copied out of the core before a run-ahead restore.
+struct PendingVideo {
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+    stride: usize,
+}
+
 /// A loaded machine plus frontend state (pause, slot, counters).
 pub struct Player {
     core: Box<dyn Core>,
@@ -201,6 +209,8 @@ pub struct Player {
     movie_record: Option<Vec<[u16; 4]>>,
     movie_state: Option<Vec<u8>>,
     movie_playback: Option<(Vec<[u16; 4]>, usize)>,
+    /// Extra frames emulated ahead of the committed frame (0 = off).
+    run_ahead: u32,
     sample_rate: f32,
     gamepad: [InputState; 4],
     touch: InputState,
@@ -305,6 +315,7 @@ impl Player {
             movie_record: None,
             movie_state: None,
             movie_playback: None,
+            run_ahead: settings.run_ahead,
         };
         player.push_rewind_keyframe();
         Ok(player)
@@ -328,7 +339,21 @@ impl Player {
         if ran == 0 && self.frames == 0 {
             ran = 1;
         }
+        // Run-ahead predicts input for the frames it shows, so it only makes
+        // sense at real-time speed and without an authoritative input source
+        // (a movie) or a live debugger stepping instruction by instruction.
+        let ahead = if self.speed_percent == 100
+            && !self.fast_forward
+            && self.movie_record.is_none()
+            && self.movie_playback.is_none()
+            && self.debug.breakpoints.is_empty()
+        {
+            self.run_ahead
+        } else {
+            0
+        };
 
+        let mut pending: Option<PendingVideo> = None;
         let mut done = 0;
         while done < ran {
             if !self.consume_movie_input() {
@@ -366,9 +391,6 @@ impl Player {
             }
             self.frames += 1;
             done += 1;
-            if self.rewind_enabled && self.frames.is_multiple_of(self.rewind.interval) {
-                self.push_rewind_keyframe();
-            }
             if self.speed_percent == 100 {
                 if let Some(out) = audio.as_deref_mut() {
                     out.push(self.core.audio().samples);
@@ -382,10 +404,73 @@ impl Player {
                 video.height as usize,
                 video.stride,
             );
+
+            // Run-ahead: the first frame above is the committed frame. Keep
+            // its end state, run `ahead - 1` extra frames for the picture the
+            // player will see, then restore the committed state so the next
+            // update continues from the right place.
+            let mut lead_state = None;
+            if ahead > 0 {
+                let mut state = Vec::new();
+                match self.core.save_state(&mut state) {
+                    Ok(()) => {
+                        let mut failed = false;
+                        for _ in 1..ahead {
+                            if let Err(err) = self.core.run_frame() {
+                                self.message = err.to_string();
+                                self.paused = true;
+                                self.next_repaint = Duration::from_millis(250);
+                                failed = true;
+                                break;
+                            }
+                        }
+                        let video = self.core.video();
+                        pending = Some(PendingVideo {
+                            data: video.data.to_vec(),
+                            width: video.width,
+                            height: video.height,
+                            stride: video.stride,
+                        });
+                        if let Err(err) = self.core.load_state(&state) {
+                            self.message = err.to_string();
+                            self.paused = true;
+                            self.next_repaint = Duration::from_millis(250);
+                            failed = true;
+                        }
+                        if failed {
+                            break;
+                        }
+                        lead_state = Some(state);
+                    }
+                    Err(err) => {
+                        self.message = err.to_string();
+                        self.paused = true;
+                        self.next_repaint = Duration::from_millis(250);
+                        break;
+                    }
+                }
+            }
+            if self.rewind_enabled && self.frames.is_multiple_of(self.rewind.interval) {
+                if let Some(state) = lead_state {
+                    self.rewind.push_keyframe(self.frames, state);
+                } else {
+                    self.push_rewind_keyframe();
+                }
+            }
         }
 
         if done > 0 {
-            self.upload(ctx);
+            if let Some(video) = pending.take() {
+                self.upload_pixels(
+                    ctx,
+                    &video.data,
+                    video.width as usize,
+                    video.height as usize,
+                    video.stride,
+                );
+            } else {
+                self.upload(ctx);
+            }
             if dt > 0.0001 {
                 let instant = done as f32 / dt;
                 self.fps = if self.fps == 0.0 {
@@ -778,7 +863,7 @@ impl Player {
         if width == 0 || height == 0 {
             return;
         }
-        let mut pixels: Vec<u8> = if video.stride == width * 4 {
+        let pixels: Vec<u8> = if video.stride == width * 4 {
             video.data.to_vec()
         } else {
             let mut packed = Vec::with_capacity(width * height * 4);
@@ -788,6 +873,45 @@ impl Player {
             }
             packed
         };
+        self.upload_packed(ctx, pixels, width, height);
+    }
+
+    /// Uploads a copied core frame (used by run-ahead after its restore).
+    fn upload_pixels(
+        &mut self,
+        ctx: &egui::Context,
+        data: &[u8],
+        width: usize,
+        height: usize,
+        stride: usize,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let pixels = if stride == width * 4 {
+            data.to_vec()
+        } else {
+            let mut packed = Vec::with_capacity(width * height * 4);
+            for row in 0..height {
+                let start = row * stride;
+                packed.extend_from_slice(&data[start..start + width * 4]);
+            }
+            packed
+        };
+        self.upload_packed(ctx, pixels, width, height);
+    }
+
+    /// Uploads an already packed (stride = width * 4) frame.
+    fn upload_packed(
+        &mut self,
+        ctx: &egui::Context,
+        mut pixels: Vec<u8>,
+        width: usize,
+        height: usize,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
         let mut upload_width = width;
         let mut upload_height = height;
         // Output supersampling: duplicate each pixel 2x/3x and let the linear
@@ -895,6 +1019,11 @@ impl Player {
             _ => 100,
         };
         self.pacer.reset();
+    }
+
+    /// Sets extra run-ahead frames (0 = off, clamped to 0-4).
+    pub fn set_run_ahead(&mut self, frames: u32) {
+        self.run_ahead = frames.min(4);
     }
 
     /// Holds or releases fast-forward.
@@ -1339,6 +1468,78 @@ mod tests {
         let mut restored = Vec::new();
         core.save_state(&mut restored).expect("restored state");
         assert_eq!(restored, state_at_45, "rewind replay must be exact");
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_state_and_frame_cost() {
+        let rom = minimal_nrom();
+        let mut core = nes_accuracy_core::AccuracyCore::new();
+        core.load(&rom, &unko_core::LoadOptions::default())
+            .expect("load");
+        for _ in 0..10 {
+            core.run_frame().expect("warm");
+        }
+        let mut state = Vec::new();
+        let start = Instant::now();
+        for _ in 0..100 {
+            state.clear();
+            core.save_state(&mut state).expect("save");
+        }
+        println!(
+            "save_state: {:?} each, {} bytes",
+            start.elapsed() / 100,
+            state.len()
+        );
+        let start = Instant::now();
+        for _ in 0..100 {
+            core.load_state(&state).expect("load");
+        }
+        println!("load_state: {:?} each", start.elapsed() / 100);
+        let start = Instant::now();
+        for _ in 0..600 {
+            core.run_frame().expect("frame");
+        }
+        println!("run_frame: {:?} each", start.elapsed() / 600);
+    }
+
+    #[test]
+    fn run_ahead_restore_matches_plain_emulation() {
+        let rom = minimal_nrom();
+        let mut plain = nes_accuracy_core::AccuracyCore::new();
+        plain
+            .load(&rom, &unko_core::LoadOptions::default())
+            .expect("load plain");
+        let mut ahead = nes_accuracy_core::AccuracyCore::new();
+        ahead
+            .load(&rom, &unko_core::LoadOptions::default())
+            .expect("load ahead");
+
+        for frame in 0..90u64 {
+            let input = InputState::from_bits(if frame.is_multiple_of(2) { 0x01 } else { 0x02 });
+            for core in [&mut plain, &mut ahead] {
+                for port in 0..4 {
+                    core.set_input(port, input);
+                }
+                core.run_frame().expect("frame");
+            }
+            // The committed frame is done; run three prediction frames and
+            // restore, exactly like the frontend does for 4-frame run-ahead.
+            let mut state = Vec::new();
+            ahead.save_state(&mut state).expect("save lead");
+            for _ in 1..4 {
+                ahead.run_frame().expect("extra");
+            }
+            ahead.load_state(&state).expect("restore lead");
+
+            if frame.is_multiple_of(10) {
+                let mut a = Vec::new();
+                let mut b = Vec::new();
+                plain.save_state(&mut a).expect("plain state");
+                ahead.save_state(&mut b).expect("ahead state");
+                assert_eq!(a, b, "run-ahead drifted at frame {frame}");
+            }
+        }
     }
 
     #[test]

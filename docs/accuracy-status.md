@@ -2066,3 +2066,16 @@ menu exposes record, stop, play (file picker rooted in
 `<save dir>/recordings`) and stop playback; the status bar shows the capture
 length and playback progress. Round-trip and truncation tests cover the file
 format.
+
+### 2026-11-13 — run-ahead
+
+Added 0-4 frame run-ahead. For each committed frame the player saves the
+post-frame state, emulates the remaining prediction frames for display, then
+restores that state so the machine still advances exactly one frame per
+update; audio, the recorder and the rewind log only see the committed frame.
+It is suspended at non-100% speeds, during movie recording/playback and with
+live debugger breakpoints. A test runs two cores side by side, applies 4-frame
+run-ahead to one, and asserts the committed states stay byte-identical every
+10 frames. Release measurements on the synthetic ROM: save 172 us, load
+237 us, frame 1.28 ms, so 4-frame run-ahead remains inside the 16.6 ms frame
+budget.

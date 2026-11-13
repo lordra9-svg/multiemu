@@ -137,7 +137,12 @@ platform toolchains.
   one frame. Full keyframes every 30 frames plus the per-frame input log are
   replayed exactly; the ring budget is 64/128/256 MiB (default 64, tens of
   seconds depending on the mapper). Recording and non-100% speeds suspend the
-  buffer. Run-ahead is still queued.
+  buffer.
+- Run-ahead: 0-4 extra frames (Emulation -> Run-ahead or Interface). The
+  first frame is committed and its end state is captured, 1-3 prediction
+  frames are drawn, then the committed state is restored so gameplay
+  advances exactly one frame per update. It is suspended at non-100% speeds,
+  while a movie is active and with live debugger breakpoints.
 - Input movies: Emulation -> Movie records the four controller ports from the
   current machine state and writes `<save dir>/recordings/<stem>.movie`
   (`UNKOMOV1`: stem, full start state, one 4x u16 input word per frame).

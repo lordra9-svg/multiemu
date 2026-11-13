@@ -139,7 +139,9 @@ matrix above is the comparison; this list is the work queue.
 2. **Speed, rewind and movies**: fast-forward (hold), 25-300% presets, frame
    advance and the rewind ring (30-frame keyframes + input log, 64-256 MiB)
    are implemented. Input movies (TAS) record the full start state plus
-   per-frame 4-port inputs in the `UNKOMOV1` format. Run-ahead is still queued.
+   per-frame 4-port inputs in the `UNKOMOV1` format. Run-ahead (0-4 frames)
+   commits one frame, draws prediction frames and restores the committed
+   state.
 3. **GPU shader pass**: built-in output presets exist, but arbitrary
    GLSL/WGSL/slang shaders and MiSTer-style HQ2x/CRT-25/50/75 scanline
    scaling are not implemented.

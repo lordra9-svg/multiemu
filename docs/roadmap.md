@@ -140,8 +140,8 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] Frame advance, hold-to-fast-forward and 25-300% playback presets in
       the host.
 - [x] Rewind: 30-frame keyframes plus per-frame inputs, 64/128/256 MiB ring,
-      hold-Backspace stepping with exact state replay. Run-ahead remains
-      queued.
+      hold-Backspace stepping with exact state replay, plus 0-4 frame
+      run-ahead (commit, draw prediction frames, restore).
 - [x] Input movies (TAS): full start state plus per-frame 4-port inputs in the
       `UNKOMOV1` format, with Emulation -> Movie record/play/stop and status
       bar progress.
