@@ -87,6 +87,7 @@ pub struct App {
     paused_by_focus: bool,
     debug_on_start: bool,
     devices_open: bool,
+    microphone: bool,
     confirm_reset: bool,
     window_generation: u32,
 }
@@ -161,6 +162,7 @@ impl App {
             paused_by_focus: false,
             debug_on_start: args.debug,
             devices_open: false,
+            microphone: false,
             confirm_reset: false,
             window_generation: 0,
         };
@@ -1272,6 +1274,7 @@ impl App {
         let connected = self.gamepads.as_ref().map_or(0, Gamepads::connected);
         let gamepad_error = self.gamepad_error.clone();
         let mut settings = self.settings.clone();
+        let mut microphone = self.microphone;
         let mut body = |ui: &mut egui::Ui| {
             ui.heading("NES ports");
             ui.label(
@@ -1292,6 +1295,17 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut settings.port_disabled[port], "Disabled");
                     ui.label(format!("Port {}: {}", port + 1, device_label(device)));
+                });
+            }
+            if settings.port1_device == PortDevice::Microphone
+                || settings.port2_device == PortDevice::Microphone
+            {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut microphone,
+                        "Microphone input (hold while making noise)",
+                    );
                 });
             }
             ui.add_space(10.0);
@@ -1368,6 +1382,7 @@ impl App {
                 body(ui);
             });
         }
+        self.microphone = microphone;
         if settings != self.settings {
             let old = self.settings.clone();
             self.settings = settings;
@@ -1564,6 +1579,7 @@ impl eframe::App for App {
             player.set_port_enabled(1, !port_disabled[1]);
             player.set_port_enabled(2, !port_disabled[0]);
             player.set_port_enabled(3, !port_disabled[1]);
+            player.set_microphone(self.microphone);
             player.step(ctx, audio);
         }
 
@@ -2792,6 +2808,8 @@ fn device_label(device: PortDevice) -> &'static str {
         PortDevice::PowerPad => "Power Pad",
         PortDevice::FamilyKeyboard => "Family BASIC keyboard",
         PortDevice::FourScore => "Four Score (4 players)",
+        PortDevice::Microphone => "Famicom microphone",
+        PortDevice::Tape => "Family BASIC data recorder",
     }
 }
 
@@ -2807,6 +2825,8 @@ fn device_combo(ui: &mut egui::Ui, id: &str, device: &mut PortDevice) {
                 PortDevice::PowerPad,
                 PortDevice::FamilyKeyboard,
                 PortDevice::FourScore,
+                PortDevice::Microphone,
+                PortDevice::Tape,
             ] {
                 if ui
                     .selectable_label(*device == option, device_label(option))

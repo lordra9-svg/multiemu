@@ -580,6 +580,11 @@ impl Player {
         self.core.set_sample_rate(rate);
     }
 
+    /// Reports the Famicom microphone state (`$4016` bit 2).
+    pub fn set_microphone(&mut self, pressed: bool) {
+        self.core.set_microphone(pressed);
+    }
+
     /// Supplies the 64-entry table used by the custom palette.
     pub fn set_palette_table(&mut self, table: [[u8; 3]; 64]) {
         self.core.set_palette_table(table);

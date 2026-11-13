@@ -145,9 +145,11 @@ platform toolchains.
   columns.
 - Controller-port devices: each port can be a gamepad, Zapper, Arkanoid
   paddle (mouse steering + fire), Power Pad (on-screen 12-pad mat), Family
-  BASIC keyboard (host keys map to the documented 9x8 matrix) or a Four Score
-  adapter (four players across both ports). Settings -> Controllers selects
-  the device per port and applies it immediately.
+  BASIC keyboard (host keys map to the documented 9x8 matrix), a Four Score
+  adapter (four players across both ports), the Famicom microphone (`$4016`
+  D2, held from the Devices window) or the Family BASIC data recorder
+  (cassette bit loopback on `$4016`). Settings -> Controllers selects the
+  device per port and applies it immediately.
 - Audio: cpal output with a lock-free ring buffer, device-rate resampling,
   volume/mute and underrun statistics. The stream is opened once at startup
   and fed one mono sample per emulated frame. The Audio page selects the

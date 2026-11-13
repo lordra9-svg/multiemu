@@ -225,6 +225,10 @@ pub enum PortDevice {
     FamilyKeyboard,
     /// Four Score adapter (four controllers across both ports).
     FourScore,
+    /// Famicom controller microphone (`$4016` D2).
+    Microphone,
+    /// Family BASIC data recorder (cassette loopback on `$4016`).
+    Tape,
 }
 
 impl PortDevice {
@@ -238,6 +242,8 @@ impl PortDevice {
             Self::PowerPad => "powerpad",
             Self::FamilyKeyboard => "keyboard",
             Self::FourScore => "fourscore",
+            Self::Microphone => "microphone",
+            Self::Tape => "tape",
         }
     }
 
@@ -250,6 +256,8 @@ impl PortDevice {
             "powerpad" => Self::PowerPad,
             "keyboard" => Self::FamilyKeyboard,
             "fourscore" => Self::FourScore,
+            "microphone" | "mic" => Self::Microphone,
+            "tape" | "recorder" => Self::Tape,
             _ => Self::Gamepad,
         }
     }

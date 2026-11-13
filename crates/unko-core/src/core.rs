@@ -79,6 +79,9 @@ pub trait Core {
     /// Attaches a device to a controller port (`Gamepad` by default).
     fn set_port_device(&mut self, _port: usize, _device: PortDevice) {}
 
+    /// Reports the Famicom microphone state (`$4016` bit 2).
+    fn set_microphone(&mut self, _pressed: bool) {}
+
     /// Aims the Zapper attached to `port` and reports the trigger state.
     fn set_zapper(&mut self, _port: usize, _x: u8, _y: u8, _trigger: bool) {}
 

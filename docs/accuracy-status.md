@@ -1918,3 +1918,20 @@ The custom palette table lives in the PPU (64 RGB triples), so the UI batch
 adds a serialized field after the audio work. The save-state magic moves
 again to **`UNKOST05`**; `UNKOST04` states are rejected with the normal
 bad-magic error rather than a decode failure.
+
+### 2026-11-13 — microphone and Family BASIC tape recorder
+
+Added two controller-port devices with synthetic tests:
+
+- **Famicom microphone** — the immediate `$4016` D2 report documented on the
+  NESdev controller page. The standard controller bits stay available on bits
+  0/1, and the Devices window has a hold-to-talk checkbox.
+- **Family BASIC data recorder** — `$4016` bit 0 is the cassette DAC/readback
+  bit and bit 1 forces readback to 0; writes are queued and reads pop the same
+  bit stream (the wiki's recommended emulator model). The queue is capped at
+  1 Mbit.
+
+Both are save-state fields. Miracle Piano and Datach remain queued until
+protocol test ROMs are available; VS. System/PlayChoice-10 remains blocked on
+ROM and palette/security data. Tests: microphone bit 2, tape loopback and
+readback-disable, device settings round-trip.

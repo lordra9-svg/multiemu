@@ -177,6 +177,12 @@ pub enum PortDevice {
     /// Four Score adapter: both ports form a 24-read serial chain carrying
     /// players 1+3 (`$4016`) and 2+4 (`$4017`) plus an adapter signature.
     FourScore,
+    /// Famicom controller microphone: an immediate 1-bit report on `$4016`
+    /// bit 2, with the standard buttons still available on bits 0/1.
+    Microphone,
+    /// Family BASIC data recorder: a cassette loopback on `$4016` bit 0.
+    /// Bit 0 of a write is the DAC output and bit 1 enables readback.
+    Tape,
 }
 
 /// Arkanoid paddle state for one port.
@@ -267,7 +273,7 @@ impl FamilyKeyboard {
 }
 
 /// Non-gamepad controller state shared by both ports.
-#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct Peripherals {
     paddle: [Paddle; 2],
     power_pad: [PowerPad; 2],
@@ -279,6 +285,37 @@ struct Peripherals {
     four_score_signature: [u8; 2],
     /// Player 1-4 button masks latched by the strobe for the Four Score chain.
     four_score_pads: [u8; 4],
+    /// Famicom microphone report (`$4016` bit 2).
+    microphone: bool,
+    /// Family BASIC data recorder loopback.
+    tape: TapeRecorder,
+}
+
+/// Loopback for the Family BASIC data recorder. The wiki notes that an
+/// emulator can simply play back the bit stream it emitted; there is no
+/// cassette audio decoding here.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+struct TapeRecorder {
+    bits: std::collections::VecDeque<bool>,
+    /// `$4016` write bit 1: 0 forces readback to 0.
+    read_enabled: bool,
+}
+
+impl TapeRecorder {
+    fn write(&mut self, value: u8) {
+        self.read_enabled = value & 0x02 != 0;
+        if self.bits.len() < 1_048_576 {
+            self.bits.push_back(value & 0x01 != 0);
+        }
+    }
+
+    fn read(&mut self) -> u8 {
+        if self.read_enabled {
+            u8::from(self.bits.pop_front().unwrap_or(false))
+        } else {
+            0
+        }
+    }
 }
 
 /// NES Zapper state.
@@ -494,6 +531,11 @@ impl System {
             self.devices[port] = device;
             self.zapper_present = self.devices.contains(&PortDevice::Zapper);
         }
+    }
+
+    /// Sets the Famicom microphone report (`$4016` bit 2).
+    pub fn set_microphone(&mut self, pressed: bool) {
+        self.peripherals.microphone = pressed;
     }
 
     /// Sets the Zapper's aim and trigger for a port.
@@ -1119,6 +1161,18 @@ impl System {
                 (self.open_bus & 0xE0) | 0x40 | self.peripherals.keyboard.read()
             }
             PortDevice::FourScore => unreachable!("handled above"),
+            PortDevice::Microphone => {
+                let bit = self.shift[port] & 1;
+                let mut value = (self.open_bus & 0xE0) | 0x40 | bit;
+                if self.peripherals.microphone {
+                    value |= 0x04;
+                }
+                if !self.strobe {
+                    self.shift[port] = (self.shift[port] >> 1) | 0x80;
+                }
+                value
+            }
+            PortDevice::Tape => (self.open_bus & 0xE0) | 0x40 | self.peripherals.tape.read(),
             PortDevice::Gamepad => {
                 let bit = self.shift[port] & 1;
                 let value = (self.open_bus & 0xE0) | 0x40 | bit;
@@ -1680,6 +1734,9 @@ impl CpuBus for System {
                 // A normal write always strobes. An RMW dummy write only
                 // reaches the controller when it lands on a put cycle.
                 if !self.rmw_dummy || self.phase {
+                    if self.devices.contains(&PortDevice::Tape) {
+                        self.peripherals.tape.write(value);
+                    }
                     self.strobe = value & 1 != 0;
                     self.peripherals.keyboard.write(value);
                     if self.strobe {
@@ -2031,6 +2088,33 @@ mod tests {
             "44.1 kHz frame produced {n} samples"
         );
         assert!(system.audio().iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn microphone_reports_on_4016_bit_2() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_port_device(0, PortDevice::Microphone);
+        system.set_microphone(true);
+        system.write(0x4016, 0);
+        system.write(0x4016, 1);
+        assert_ne!(system.read(0x4016) & 0x04, 0);
+        system.set_microphone(false);
+        assert_eq!(system.read(0x4016) & 0x04, 0);
+    }
+
+    #[test]
+    fn tape_recorder_loops_back_written_bits() {
+        let rom = synthetic_nrom(0);
+        let mut system = System::from_ines(&rom).expect("load");
+        system.set_port_device(0, PortDevice::Tape);
+        for bit in [true, false, true, true, false] {
+            system.write(0x4016, 0x02 | u8::from(bit));
+            assert_eq!(system.read(0x4016) & 1, u8::from(bit));
+        }
+        // Bit 1 clear forces readback to 0 even with queued bits.
+        system.write(0x4016, 0x00);
+        assert_eq!(system.read(0x4016) & 1, 0);
     }
 
     #[test]

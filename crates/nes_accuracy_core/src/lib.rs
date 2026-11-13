@@ -328,8 +328,16 @@ impl Core for AccuracyCore {
                 PortDevice::PowerPad => crate::system::PortDevice::PowerPad,
                 PortDevice::FamilyKeyboard => crate::system::PortDevice::FamilyKeyboard,
                 PortDevice::FourScore => crate::system::PortDevice::FourScore,
+                PortDevice::Microphone => crate::system::PortDevice::Microphone,
+                PortDevice::Tape => crate::system::PortDevice::Tape,
             };
             system.set_port_device(port, device);
+        }
+    }
+
+    fn set_microphone(&mut self, pressed: bool) {
+        if let Some(system) = self.system.as_mut() {
+            system.set_microphone(pressed);
         }
     }
 

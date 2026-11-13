@@ -1008,17 +1008,17 @@ mod tests {
     fn controller_devices_round_trip() {
         let path = std::env::temp_dir().join("unko-settings-devices.conf");
         let settings = Settings {
-            port1_device: PortDevice::FamilyKeyboard,
-            port2_device: PortDevice::FourScore,
+            port1_device: PortDevice::Microphone,
+            port2_device: PortDevice::Tape,
             ..Settings::default()
         };
         settings.save(&path).expect("writes");
         let loaded = Settings::load(&path);
-        assert_eq!(loaded.port1_device, PortDevice::FamilyKeyboard);
-        assert_eq!(loaded.port2_device, PortDevice::FourScore);
+        assert_eq!(loaded.port1_device, PortDevice::Microphone);
+        assert_eq!(loaded.port2_device, PortDevice::Tape);
         let text = fs::read_to_string(&path).expect("read");
-        assert!(text.contains("port1_device=keyboard"));
-        assert!(text.contains("port2_device=fourscore"));
+        assert!(text.contains("port1_device=microphone"));
+        assert!(text.contains("port2_device=tape"));
         let _ = fs::remove_file(path);
     }
 
