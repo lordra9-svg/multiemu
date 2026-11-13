@@ -140,6 +140,7 @@ pub fn window(
     view: &DebugView,
     detach: bool,
     generation: u32,
+    layout: &mut Option<[f32; 4]>,
 ) -> Vec<Action> {
     let mut actions = Vec::new();
     let mut open = debug.open;
@@ -168,21 +169,36 @@ pub fn window(
     };
     if detach && !cfg!(any(target_os = "android", target_os = "ios")) {
         let id = egui::ViewportId::from_hash_of(("unko-debugger", generation));
-        let builder = egui::ViewportBuilder::default()
+        let mut builder = egui::ViewportBuilder::default()
             .with_title("Debugger — Unko")
-            .with_inner_size([780.0, 540.0])
             .with_min_inner_size([560.0, 360.0])
             .with_resizable(true);
+        builder = if let Some([x, y, width, height]) = *layout {
+            builder
+                .with_position([x, y])
+                .with_inner_size([width, height])
+        } else {
+            builder.with_inner_size([780.0, 540.0])
+        };
         let mut closed = false;
+        let mut captured = None;
         ctx.show_viewport_immediate(id, builder, |ctx, _class| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.add_space(6.0);
                 body(ui);
             });
+            let info = ctx.input(|input| input.viewport().clone());
+            if let Some(outer) = info.outer_rect {
+                let size = info.inner_rect.map_or(outer.size(), |rect| rect.size());
+                captured = Some([outer.min.x, outer.min.y, size.x, size.y]);
+            }
             if ctx.input(|input| input.viewport().close_requested()) {
                 closed = true;
             }
         });
+        if let Some(captured) = captured {
+            *layout = Some(captured);
+        }
         if closed {
             debug.open = false;
         }
@@ -680,7 +696,7 @@ mod tests {
         for tab in DebugTab::ALL {
             debug.tab = tab;
             let output = ctx.run(egui::RawInput::default(), |ctx| {
-                let actions = window(&mut debug, ctx, &view, false, 0);
+                let actions = window(&mut debug, ctx, &view, false, 0, &mut None);
                 assert!(actions.is_empty(), "no pointer input means no actions");
             });
             assert!(!output.shapes.is_empty(), "{tab:?} produced no shapes");

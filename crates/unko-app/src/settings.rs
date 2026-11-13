@@ -347,6 +347,12 @@ pub struct Settings {
     pub supersample: u32,
     /// Output post-process preset.
     pub shader: ShaderPreset,
+    /// Remembered Settings OS-window geometry `(x, y, width, height)`.
+    pub layout_settings: Option<[f32; 4]>,
+    /// Remembered Devices OS-window geometry.
+    pub layout_devices: Option<[f32; 4]>,
+    /// Remembered Debugger OS-window geometry.
+    pub layout_debugger: Option<[f32; 4]>,
 }
 
 impl Default for Settings {
@@ -399,6 +405,9 @@ impl Default for Settings {
             scale: 0,
             supersample: 1,
             shader: ShaderPreset::Off,
+            layout_settings: None,
+            layout_devices: None,
+            layout_debugger: None,
         }
     }
 }
@@ -531,6 +540,9 @@ impl Settings {
                     settings.supersample = value.parse::<u32>().unwrap_or(1).clamp(1, 3)
                 }
                 "shader" => settings.shader = ShaderPreset::from_name(value),
+                "layout_settings" => settings.layout_settings = parse_layout(value),
+                "layout_devices" => settings.layout_devices = parse_layout(value),
+                "layout_debugger" => settings.layout_debugger = parse_layout(value),
                 "library_root" => {
                     if let Some((system, path)) = value.split_once('|') {
                         settings.library_roots.push(LibraryRoot {
@@ -649,6 +661,9 @@ aspect={}
 scale={}
 supersample={}
 shader={}
+layout_settings={}
+layout_devices={}
+layout_debugger={}
 ",
             self.rom_dir.display(),
             self.save_dir.display(),
@@ -716,6 +731,9 @@ shader={}
             self.scale,
             self.supersample,
             self.shader.name(),
+            layout_text(self.layout_settings),
+            layout_text(self.layout_devices),
+            layout_text(self.layout_debugger),
         );
         for root in &self.library_roots {
             text.push_str(&format!(
@@ -817,6 +835,21 @@ fn region_name(region: Region) -> &'static str {
         Region::Pal => "pal",
         Region::Dendy => "dendy",
     }
+}
+
+fn parse_layout(value: &str) -> Option<[f32; 4]> {
+    let mut parts = value.split(',');
+    let x = parts.next()?.trim().parse().ok()?;
+    let y = parts.next()?.trim().parse().ok()?;
+    let width = parts.next()?.trim().parse().ok()?;
+    let height = parts.next()?.trim().parse().ok()?;
+    Some([x, y, width, height])
+}
+
+fn layout_text(layout: Option<[f32; 4]>) -> String {
+    layout.map_or_else(String::new, |[x, y, width, height]| {
+        format!("{x},{y},{width},{height}")
+    })
 }
 
 fn parse_audio_filter(value: &str) -> AudioFilterModel {
@@ -934,6 +967,9 @@ mod tests {
             scale: 3,
             supersample: 2,
             shader: ShaderPreset::Crt,
+            layout_settings: Some([100.0, 120.0, 780.0, 500.0]),
+            layout_devices: Some([420.0, 80.0, 680.0, 480.0]),
+            layout_debugger: Some([40.0, 40.0, 900.0, 600.0]),
             library_roots: vec![
                 LibraryRoot {
                     system: "nes".into(),

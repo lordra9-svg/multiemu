@@ -1102,20 +1102,36 @@ impl App {
         let mut open = self.settings_open;
         if self.detached_windows() {
             let id = egui::ViewportId::from_hash_of(("unko-settings", self.window_generation));
-            let builder = egui::ViewportBuilder::default()
+            let mut builder = egui::ViewportBuilder::default()
                 .with_title("Settings — Unko")
-                .with_inner_size([780.0, 540.0])
                 .with_min_inner_size([520.0, 360.0])
                 .with_resizable(true);
+            builder = if let Some([x, y, width, height]) = self.settings.layout_settings {
+                builder
+                    .with_position([x, y])
+                    .with_inner_size([width, height])
+            } else {
+                builder.with_inner_size([780.0, 540.0])
+            };
             let mut closed = false;
+            let mut layout = None;
             ctx.show_viewport_immediate(id, builder, |ctx, _class| {
                 self.settings_frame(ctx, &mut open, false);
+                let info = ctx.input(|input| input.viewport().clone());
+                if let Some(outer) = info.outer_rect {
+                    let size = info.inner_rect.map_or(outer.size(), |rect| rect.size());
+                    layout = Some([outer.min.x, outer.min.y, size.x, size.y]);
+                }
                 if ctx.input(|input| input.viewport().close_requested()) {
                     closed = true;
                 }
             });
+            if let Some(layout) = layout {
+                self.settings.layout_settings = Some(layout);
+            }
             if closed {
                 open = false;
+                let _ = self.settings.save(&Settings::path());
             }
         } else {
             self.settings_frame(ctx, &mut open, true);
@@ -1214,20 +1230,36 @@ impl App {
         let mut open = self.devices_open;
         if self.detached_windows() {
             let id = egui::ViewportId::from_hash_of(("unko-devices", self.window_generation));
-            let builder = egui::ViewportBuilder::default()
+            let mut builder = egui::ViewportBuilder::default()
                 .with_title("Devices — Unko")
-                .with_inner_size([680.0, 520.0])
                 .with_min_inner_size([420.0, 320.0])
                 .with_resizable(true);
+            builder = if let Some([x, y, width, height]) = self.settings.layout_devices {
+                builder
+                    .with_position([x, y])
+                    .with_inner_size([width, height])
+            } else {
+                builder.with_inner_size([680.0, 520.0])
+            };
             let mut closed = false;
+            let mut layout = None;
             ctx.show_viewport_immediate(id, builder, |ctx, _class| {
                 self.devices_frame(ctx, false);
+                let info = ctx.input(|input| input.viewport().clone());
+                if let Some(outer) = info.outer_rect {
+                    let size = info.inner_rect.map_or(outer.size(), |rect| rect.size());
+                    layout = Some([outer.min.x, outer.min.y, size.x, size.y]);
+                }
                 if ctx.input(|input| input.viewport().close_requested()) {
                     closed = true;
                 }
             });
+            if let Some(layout) = layout {
+                self.settings.layout_devices = Some(layout);
+            }
             if closed {
                 open = false;
+                let _ = self.settings.save(&Settings::path());
             }
         } else {
             self.devices_frame(ctx, true);
@@ -1597,13 +1629,16 @@ impl eframe::App for App {
             }
             if player.debug.open {
                 if let Some(view) = player.debug_view() {
+                    let mut layout = self.settings.layout_debugger;
                     let actions = debugger::window(
                         &mut player.debug,
                         ctx,
                         &view,
                         detached_windows,
                         window_generation,
+                        &mut layout,
                     );
+                    self.settings.layout_debugger = layout;
                     for action in actions {
                         player.apply_debug(action, ctx);
                     }
