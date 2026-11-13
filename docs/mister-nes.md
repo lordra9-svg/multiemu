@@ -68,29 +68,32 @@ Local checkouts used for comparison live under `refs/mister-nes`,
 
 ## Lessons for Unko
 
-Worth considering (none of this is implemented today):
+Worth considering (checked against the current shell):
 
 1. **Sprite-limit/extra-sprite toggle.** A "disable the 8-sprites-per-line
    limit" or "+8 sprites" presentation option is a common MiSTer/Nestopia/
-   Mesen feature; it is not accuracy-preserving, so it belongs behind an
-   explicit, off-by-default gameplay option.
+   Mesen feature; it is not accuracy-preserving, so it remains deliberately
+   out of scope for the accuracy pass.
 2. **Cheat capacity.** MiSTer supports 32 codes; Unko has no cheat engine yet.
    A Game Genie + raw-RAM cheat system with per-game persistence is the
    largest missing player-facing feature.
 3. **Custom palette files.** MiSTer boots a palette from `boot3.rom`; Nestopia
-   and Mesen read `.pal` files (64 × RGB triplets). Unko currently has four
-   built-in presets and no file import.
+   and Mesen read `.pal` files (64 × RGB triplets). Unko now imports
+   `.pal`/`.palette` (192-byte RGB, 768-byte RGBA, text) and has eight
+   presets, four of them generated from the ares ISC colorimetry.
 4. **Peripheral breadth.** Microphone and Miracle Piano are still missing from
    Unko; FDS, Zapper, Power Pad, Four Score, paddle and Family BASIC keyboard
    are present.
 5. **Region/header workflow.** MiSTer warns when a NES 2.0 header is absent and
-   supports auto-region. Unko reads NES 2.0 timing/region but has no database
-   of known bad headers or ROM repair workflow.
+   supports auto-region. Unko now warns too; header repair/editing and a
+   database of known bad headers remain external/future work.
 6. **Save-state coverage signalling.** MiSTer's mapper table tells the user
    which boards support states. Unko serializes every implemented mapper, so
    this is less of an issue, but a capability badge in the UI is a cheap
    equivalent.
-7. **Four-player and NSF** are already covered by Unko.
+7. **Four-player and NSF** are already covered by Unko, as are the MiSTer
+   accuracy knobs ported in the 2026-11-13 pass (PPU reset behaviour, RAM
+   clear, audio source, overscan/edge masking).
 
 ## Licensing boundary
 

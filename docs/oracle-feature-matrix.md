@@ -114,44 +114,59 @@ cheats, Lua 5.4, movie formats, and a debugger with conditional breakpoints,
 watchpoints, RAM search, hex editor and callstack. Also ships web/mobile/
 libretro builds. Source: local `refs/rustynes/README.md`.
 
-## Gaps and candidate work for Unko
+## Remaining gaps (2026-11-13)
 
-Ordered by player impact and fit with the existing architecture.
+This is the current answer to "what is still missing from the oracles". The
+matrix above is the comparison; this list is the work queue.
 
-**Tier 1 — player-facing**
+**Implemented since the first survey**
+- Per-channel audio mixer (5 APU channels + expansion), latency target,
+  resampler quality, NES RF/Crisp/Warm/Linear/custom filters.
+- `.pal`/`.palette` import and eight display presets (four generated from the
+  ares ISC colorimetry).
+- Output scaling/aspect/supersampling, window presets and scanline/LCD/CRT
+  output presets.
+- Microphone, Family BASIC tape loopback, Miracle Piano MIDI transport and
+  Datach barcode scanner (synthetic-tested; real-ROM validation pending).
+- MiSTer accuracy options: PPU reset behaviour, RAM clear, audio source,
+  overscan, edge masking, and the NES 2.0 missing-header warning.
+- Per-system library roots (NES scanned), grid/list columns, detachable
+  windows, Devices matrix and reset-all.
+
+**Still needed — player-facing**
 1. **Cheats**: Game Genie encode/decode plus raw RAM cheats, per-game
-   persistence, enable/disable. Unko has no cheat path today.
-2. **Speed control**: fast-forward (hold/toggle), speed presets, frame
-   advance as a normal control, and a **rewind ring** built on the existing
-   deterministic `UNKOST06` states (states are 0.7–1.5 MB, so the ring needs a
-   memory budget or delta compression).
-3. **Audio**: per-channel volume/mute (5 APU channels + expansion), sample
-   rate and buffer latency options, optional audio filters; first fix any
-   remaining accuracy gaps (FDS audio parity, DMC/expansion mixing) with
-   per-channel differential probes.
-4. **Palettes and shaders**: `.pal` import, the common Nestopia/Mesen palette
-   sets, and a GPU shader pass (glow on desktop/Android, wgpu on iOS) for
-   NTSC/CRT presets; the CPU filters stay as a fallback.
-5. **Resolution/upscale**: window presets, 1×–6× integer scale, aspect
-   Fit/4:3/8:7, fullscreen; optional output supersampling.
+   persistence, enable/disable. MiSTer supports 32 codes; Unko has none.
+2. **Speed and rewind**: fast-forward (hold/toggle), speed presets, frame
+   advance as a normal control, and a rewind ring over the deterministic
+   `UNKOST06` states (states are 0.7–1.5 MB, so the ring needs a memory budget
+   or delta compression). RustyNES/Mesen/FCEUX have these.
+3. **GPU shader pass**: built-in output presets exist, but arbitrary
+   GLSL/WGSL/slang shaders and MiSTer-style HQ2x/CRT-25/50/75 scanline
+   scaling are not implemented.
+4. **NTSC filter fidelity**: the core Composite/CRT filters are a 1-2-1
+   blend + scanlines. MiSTer offers Budget TV/Premium TV, brightness and
+   sharpness controls; Mesen/FCEUX/Nestopia have full NTSC models.
+5. **IPS/BPS soft-patching and a NES 2.0 header editor/repair database**
+   (MiSTer warns and points at an external repair tool; Unko now warns but
+   has no editor).
 
-**Tier 2 — hardware breadth**
-6. **VS. System / PlayChoice-10** (including DIP presets, 2C03/2C04/2C05
-   palettes, coin input) and the remaining peripherals: microphone, Miracle
-   Piano, Datach barcode reader, Karaoke Studio, tape recorder.
-7. **Optional accuracy knobs**: sprite-per-line limit toggle/extra sprites,
-   CPU/PPU overclock, and a NES/Famicom standards toggle for the few
-   conflicting cases.
-8. **Header repair**: a NES 2.0 header database plus an in-app header editor
-   and checksum/dump verification, and IPS/BPS soft-patching.
+**Still needed — hardware breadth**
+6. **VS. System / PlayChoice-10**: mapper 99/VS input, coin/service/DIP
+   switches, and 2C03/2C04-xxxx/2C05 palettes with the 2C05 security code.
+   Blocked on VS ROMs and palette/security dumps; no local evidence.
+7. **Miracle Piano MIDI replies**, **Datach EEPROM (X24C02)**, **FDS disk
+   speed / automatic side swap**, **Karaoke Studio**, **Family Trainer
+   variant**, **Subor keyboard**, **mouse** and **Famicom 3D glasses**.
+   The transports/scanners/microphone/tape are in; these need protocol
+   ROMs or hardware captures.
+8. **Optional accuracy knobs**: sprite-per-line limit / extra sprites,
+   CPU/PPU overclock. Deliberately not added (not accuracy-preserving);
+   the NES/Famicom PPU-reset and RAM-clear knobs are in.
 
-**Tier 3 — creator/community**
-9. **Movies/TAS**: input movie recording and playback; a TAStudio-style
-   editor is a much larger project.
-10. **Netplay**: rollback for 2–4 players; needs the deterministic core and
-    an option handshake (Unko already has the determinism).
+**Still needed — creator/community**
+9. **Movies/TAS** (input recording/playback, TAStudio).
+10. **Netplay** (rollback 2–4 players).
 11. **Lua scripting**, **RetroAchievements**, **HD packs**, **run-ahead**.
-    Each is a self-contained subsystem; none is required for accuracy.
 
 ## Licensing and provenance
 

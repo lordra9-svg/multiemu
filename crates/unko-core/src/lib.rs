@@ -30,6 +30,7 @@ pub use debug::{ApuState, CpuState, DebugSpace, Disassembly, PpuState};
 pub use input::{Button, InputState};
 pub use registry::{CoreRegistration, Factory, Registry};
 pub use types::{
-    Accuracy, AudioBuffer, AudioFilterModel, AudioQuality, CoreInfo, Features, FrameBuffer,
-    FrameStats, LoadOptions, Palette, PixelFormat, PortDevice, Region, SystemId, VideoFilter,
+    Accuracy, AudioBuffer, AudioFilterModel, AudioQuality, AudioSource, CoreInfo, Features,
+    FrameBuffer, FrameStats, LoadOptions, MaskEdges, Overscan, Palette, PixelFormat, PortDevice,
+    PpuResetBehavior, RamClear, Region, SystemId, VideoFilter,
 };

@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use unko_core::{
-    AudioFilterModel, AudioQuality, Core, DebugSpace, InputState, LoadOptions, PortDevice, Region,
-    Registry, SystemId, VideoFilter,
+    AudioFilterModel, AudioQuality, AudioSource, Core, DebugSpace, InputState, LoadOptions,
+    PortDevice, PpuResetBehavior, RamClear, Region, Registry, SystemId, VideoFilter,
 };
 
 use crate::audio::AudioOutput;
@@ -143,6 +143,9 @@ impl Player {
         core.set_audio_quality(settings.audio_quality);
         core.set_audio_filters(settings.audio_filter_model());
         core.set_channel_gains(settings.effective_channel_gains());
+        core.set_audio_source(settings.audio_source);
+        core.set_ram_clear(settings.ram_clear);
+        core.set_ppu_reset_behavior(settings.ppu_reset);
         if settings.palette == unko_core::Palette::Custom {
             if let Some(table) = crate::settings::load_palette(&settings.custom_palette) {
                 core.set_palette_table(table);
@@ -160,6 +163,12 @@ impl Player {
         }
 
         let core_id = core.info().id.to_string();
+        let mut message = String::new();
+        if settings.region == Region::Auto
+            && entry.header.as_ref().is_some_and(|header| !header.nes2)
+        {
+            message = "No NES 2.0 header; defaulting to NTSC".to_string();
+        }
         Ok(Self {
             core,
             texture: None,
@@ -171,7 +180,7 @@ impl Player {
             stem,
             core_id,
             save_dir,
-            message: String::new(),
+            message,
             texture_options: egui::TextureOptions::NEAREST,
             pacer: FramePacer::new(Instant::now()),
             next_repaint: Duration::ZERO,
@@ -608,6 +617,21 @@ impl Player {
     /// Applies the per-channel mixer gains live.
     pub fn set_channel_gains(&mut self, gains: [f32; 6]) {
         self.core.set_channel_gains(gains);
+    }
+
+    /// Selects which audio sources reach the mixer.
+    pub fn set_audio_source(&mut self, source: AudioSource) {
+        self.core.set_audio_source(source);
+    }
+
+    /// Selects the RAM fill used by the next soft reset.
+    pub fn set_ram_clear(&mut self, mode: RamClear) {
+        self.core.set_ram_clear(mode);
+    }
+
+    /// Selects the PPU register behaviour on a soft reset.
+    pub fn set_ppu_reset_behavior(&mut self, behavior: PpuResetBehavior) {
+        self.core.set_ppu_reset_behavior(behavior);
     }
 
     /// Pauses/resumes.

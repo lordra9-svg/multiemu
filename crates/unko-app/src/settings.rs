@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 
-use unko_core::{AudioFilterModel, AudioQuality, Palette, PortDevice, Region, VideoFilter};
+use unko_core::{
+    AudioFilterModel, AudioQuality, AudioSource, MaskEdges, Overscan, Palette, PortDevice,
+    PpuResetBehavior, RamClear, Region, VideoFilter,
+};
 
 use crate::gamepad::{button_name, NesButton, PadMapping};
 
@@ -281,6 +284,16 @@ pub struct Settings {
     pub channel_gains: [f32; 6],
     /// Per-channel mute switches, preserving the gain while muted.
     pub channel_mutes: [bool; 6],
+    /// Which audio sources reach the mixer.
+    pub audio_source: AudioSource,
+    /// Analog overscan crop.
+    pub overscan: Overscan,
+    /// Display mask over the left/right software-mask columns.
+    pub mask_edges: MaskEdges,
+    /// Work-RAM fill applied by the next soft reset.
+    pub ram_clear: RamClear,
+    /// PPU register behaviour on a soft reset.
+    pub ppu_reset: PpuResetBehavior,
     /// Keep integer pixel scaling when possible.
     pub integer_scale: bool,
     /// Use linear texture filtering (smooth scaling) instead of nearest.
@@ -372,6 +385,11 @@ impl Default for Settings {
             audio_low_pass: 14_000.0,
             channel_gains: [1.0; 6],
             channel_mutes: [false; 6],
+            audio_source: AudioSource::Both,
+            overscan: Overscan::Normal,
+            mask_edges: MaskEdges::Off,
+            ram_clear: RamClear::Zero,
+            ppu_reset: PpuResetBehavior::Famicom,
             integer_scale: true,
             linear_filter: false,
             zapper_port2: false,
@@ -480,6 +498,11 @@ impl Settings {
                     }
                     settings.channel_mutes = mutes;
                 }
+                "audio_source" => settings.audio_source = AudioSource::from_name(value),
+                "overscan" => settings.overscan = Overscan::from_name(value),
+                "mask_edges" => settings.mask_edges = MaskEdges::from_name(value),
+                "ram_clear" => settings.ram_clear = RamClear::from_name(value),
+                "ppu_reset" => settings.ppu_reset = PpuResetBehavior::from_name(value),
                 "integer_scale" => settings.integer_scale = parse_bool(value),
                 "linear_filter" => settings.linear_filter = parse_bool(value),
                 "zapper_port2" => settings.zapper_port2 = parse_bool(value),
@@ -630,6 +653,11 @@ audio_high_pass={}
 audio_low_pass={}
 channel_gains={}
 channel_mutes={}
+audio_source={}
+overscan={}
+mask_edges={}
+ram_clear={}
+ppu_reset={}
 integer_scale={}
 linear_filter={}
 palette={}
@@ -685,6 +713,11 @@ layout_debugger={}
                 .map(|muted| u8::from(*muted).to_string())
                 .collect::<Vec<_>>()
                 .join(","),
+            self.audio_source.name(),
+            self.overscan.name(),
+            self.mask_edges.name(),
+            self.ram_clear.name(),
+            self.ppu_reset.name(),
             self.integer_scale,
             self.linear_filter,
             self.palette.name(),
@@ -894,6 +927,23 @@ mod tests {
             rom_dir: PathBuf::from("/games"),
             theme: Theme::Light,
             palette: Palette::Consumer,
+            ..Settings::default()
+        };
+        settings.save(&path).expect("writes");
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded, settings);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn mister_accuracy_options_round_trip() {
+        let path = std::env::temp_dir().join("unko-settings-mister.conf");
+        let settings = Settings {
+            audio_source: AudioSource::Expansion,
+            overscan: Overscan::Everything,
+            mask_edges: MaskEdges::Both,
+            ram_clear: RamClear::Random,
+            ppu_reset: PpuResetBehavior::Nes,
             ..Settings::default()
         };
         settings.save(&path).expect("writes");

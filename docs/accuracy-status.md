@@ -1971,3 +1971,34 @@ needed before claiming parity.
 - The microphone/tape/piano/Datach additions landed after `UNKOST05` and
   changed the serialized peripheral layout, so the state magic is bumped to
   **`UNKOST06`**; older states are rejected by the normal bad-magic check.
+
+### 2026-11-13 — MiSTer accuracy options
+
+Ported the accuracy-relevant NES_MiSTer OSD options. Defaults preserve the
+previous behaviour:
+
+- **PPU reset behaviour** (Famicom / NES): a soft reset keeps the PPU
+  `$2000`/`$2001` registers on Famicom, or clears the derived register state
+  on the NES setting.
+- **RAM clear** (Keep / `$00` / `$FF` / Random): applied by the next soft
+  reset, matching MiSTer; the random fill is deterministic per reset loop.
+- **Audio source** (Both / Internal / Expansion / None): gates the 2A03 and
+  cartridge expansion contributions at the mixer while the machine keeps
+  running.
+- **Overscan** (Normal / Vertical / Borders / Everything) and **Mask edges**
+  (Off / Left / Both / Auto): display cropping and the 8-pixel software-mask
+  columns, in the Graphics page.
+- **NES 2.0 warning**: loading an iNES image with Auto region reports "No
+  NES 2.0 header; defaulting to NTSC", as MiSTer does. Bulk header repair
+  remains an external tool.
+- Advanced -> soft-reset controls explain that power-on starts from zeroed
+  work RAM and the options apply on the next reset.
+
+Still deferred because they need ROM/hardware evidence or are outside the
+accuracy charter: VS./PlayChoice-10, FDS disk speed and auto side swap (no
+local BIOS), Miracle Piano MIDI replies, Datach EEPROM, extra sprites,
+overclocking, and the 32-slot cheat engine.
+
+AccuracyCoin remains **146/151 with 0 failures** with the new defaults
+(`RamClear::Zero`, Famicom PPU reset, audio both sources), and 457 workspace
+tests pass.

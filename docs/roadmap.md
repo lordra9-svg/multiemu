@@ -125,6 +125,8 @@ The main effort is now the reference-parity accuracy core. Details in
       library roots (NES scanned; SNES/N64 tags are placeholders).
 - [x] Display aspect Fit/4:3/8:7, fixed 1-6x integer scale, 1-3x output
       supersampling, built-in output shader presets and window-size presets.
+- [x] MiSTer accuracy options: PPU reset behaviour, RAM clear, audio source,
+      overscan and edge masking, and the iNES/NES 2.0 warning.
 - [x] Palette `.pal`/`.palette` import (192/768-byte binary and text) with a
       custom table, plus Vivid/Soft/PAL-like/Studio display models generated
       from the ares NTSC colorimetry (ISC). Exact hardware tables remain

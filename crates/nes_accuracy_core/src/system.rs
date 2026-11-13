@@ -10,7 +10,9 @@ use crate::cart::{CartError, Cartridge, Mirroring};
 use crate::clock::Timing;
 use crate::cpu::Cpu;
 use crate::ppu::Ppu;
-use unko_core::{AudioFilterModel, AudioQuality, DebugSpace};
+use unko_core::{
+    AudioFilterModel, AudioQuality, AudioSource, DebugSpace, PpuResetBehavior, RamClear,
+};
 
 /// CPU clock in Hz (NTSC).
 pub const CPU_HZ: f64 = 1_789_773.0;
@@ -70,6 +72,12 @@ pub struct System {
     audio_filters: AudioFilterModel,
     /// `[pulse1, pulse2, triangle, noise, dmc, expansion]` gains.
     channel_gains: [f32; 6],
+    /// Which sources reach the mixer (host preference).
+    audio_source: AudioSource,
+    /// Work-RAM fill used by the next soft reset.
+    ram_clear: RamClear,
+    /// PPU register behaviour on soft reset.
+    ppu_reset: PpuResetBehavior,
     open_bus: u8,
     /// Internal 2A03 data bus (drives $4015 bit 5, not the external bus).
     internal_bus: u8,
@@ -592,6 +600,9 @@ impl System {
             audio_quality: AudioQuality::Standard,
             audio_filters: AudioFilterModel::NesRf,
             channel_gains: [1.0; 6],
+            audio_source: AudioSource::Both,
+            ram_clear: RamClear::Zero,
+            ppu_reset: PpuResetBehavior::Famicom,
             open_bus: 0,
             internal_bus: 0,
             stall_cycles: 0,
@@ -626,7 +637,24 @@ impl System {
         self.apu = Apu::new();
         self.apu.set_channel_gains(self.channel_gains);
         self.resampler.reset();
-        self.ram = [0; 0x800];
+        match self.ram_clear {
+            RamClear::Keep => {}
+            RamClear::Zero => self.ram = [0; 0x800],
+            RamClear::Fill => self.ram = [0xFF; 0x800],
+            RamClear::Random => {
+                // Deterministic per ROM so a recorded run is reproducible.
+                let mut state = 0x5EED_1234_ABCD_EF01u64;
+                for byte in &mut self.ram {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    *byte = (state >> 33) as u8;
+                }
+            }
+        }
+        if self.ppu_reset == PpuResetBehavior::Nes {
+            self.ppu.soft_reset_registers();
+        }
     }
 
     /// Attaches a device to a controller port.
@@ -735,6 +763,21 @@ impl System {
     pub fn set_channel_gains(&mut self, gains: [f32; 6]) {
         self.channel_gains = gains.map(|gain| gain.clamp(0.0, 1.0));
         self.apu.set_channel_gains(self.channel_gains);
+    }
+
+    /// Selects which audio sources reach the mixer.
+    pub fn set_audio_source(&mut self, source: AudioSource) {
+        self.audio_source = source;
+    }
+
+    /// Selects the work-RAM fill applied by the next soft reset.
+    pub fn set_ram_clear(&mut self, mode: RamClear) {
+        self.ram_clear = mode;
+    }
+
+    /// Selects the PPU register behaviour on a soft reset.
+    pub fn set_ppu_reset_behavior(&mut self, behavior: PpuResetBehavior) {
+        self.ppu_reset = behavior;
     }
 
     /// Re-applies the host's audio preferences to a freshly built or restored
@@ -1341,13 +1384,29 @@ impl System {
         self.phase = !self.phase;
     }
 
+    /// The current post-gain mix for the selected audio sources.
+    #[must_use]
+    fn current_mix(&self) -> f32 {
+        let internal = if matches!(self.audio_source, AudioSource::Both | AudioSource::Internal) {
+            self.apu.output
+        } else {
+            0.0
+        };
+        let expansion = if self.cart.has_expansion_audio()
+            && matches!(
+                self.audio_source,
+                AudioSource::Both | AudioSource::Expansion
+            ) {
+            self.cart.audio_mix() * self.channel_gains[5]
+        } else {
+            0.0
+        };
+        internal + expansion
+    }
+
     #[inline]
     fn mix_sample(&mut self) {
-        let output = if self.cart.has_expansion_audio() {
-            self.apu.output + self.cart.audio_mix() * self.channel_gains[5]
-        } else {
-            self.apu.output
-        };
+        let output = self.current_mix();
         self.resampler.add_sample(output);
     }
 
@@ -2216,6 +2275,52 @@ mod tests {
             "44.1 kHz frame produced {n} samples"
         );
         assert!(system.audio().iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn soft_reset_applies_ram_clear_and_ppu_behavior() {
+        let mut system = System::from_ines(&synthetic_nrom(0)).expect("load");
+        system.ram[0x10] = 0xAB;
+        system.ppu.ctrl = 0x90;
+        system.ppu.mask = 0x1E;
+
+        system.set_ram_clear(RamClear::Keep);
+        system.set_ppu_reset_behavior(PpuResetBehavior::Famicom);
+        system.reset();
+        assert_eq!(system.ram[0x10], 0xAB);
+        assert_eq!(system.ppu.ctrl, 0x90);
+        assert_eq!(system.ppu.mask, 0x1E);
+
+        system.set_ram_clear(RamClear::Zero);
+        system.reset();
+        assert_eq!(system.ram[0x10], 0);
+
+        system.set_ram_clear(RamClear::Fill);
+        system.reset();
+        assert_eq!(system.ram[0x10], 0xFF);
+
+        system.set_ram_clear(RamClear::Random);
+        system.reset();
+        assert!(system.ram.iter().any(|byte| *byte != 0));
+
+        system.set_ppu_reset_behavior(PpuResetBehavior::Nes);
+        system.reset();
+        assert_eq!(system.ppu.ctrl, 0);
+        assert_eq!(system.ppu.mask, 0);
+    }
+
+    #[test]
+    fn audio_source_gates_internal_and_expansion_mix() {
+        let mut system = System::from_ines(&synthetic_nrom(0)).expect("load");
+        system.apu.output = 0.5;
+        system.set_audio_source(AudioSource::Both);
+        assert_eq!(system.current_mix(), 0.5);
+        system.set_audio_source(AudioSource::Internal);
+        assert_eq!(system.current_mix(), 0.5);
+        system.set_audio_source(AudioSource::Expansion);
+        assert_eq!(system.current_mix(), 0.0);
+        system.set_audio_source(AudioSource::None);
+        assert_eq!(system.current_mix(), 0.0);
     }
 
     #[test]

@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, Vec2};
-use unko_core::{AudioFilterModel, AudioQuality, PortDevice, Region, VideoFilter};
+use unko_core::{
+    AudioFilterModel, AudioQuality, AudioSource, MaskEdges, Overscan, PortDevice, PpuResetBehavior,
+    RamClear, Region, VideoFilter,
+};
 
 use crate::audio::AudioOutput;
 use crate::debugger::{self, Action};
@@ -320,6 +323,15 @@ impl App {
             }
             if self.settings.supersample != old.supersample {
                 player.set_supersample(self.settings.supersample);
+            }
+            if self.settings.audio_source != old.audio_source {
+                player.set_audio_source(self.settings.audio_source);
+            }
+            if self.settings.ram_clear != old.ram_clear {
+                player.set_ram_clear(self.settings.ram_clear);
+            }
+            if self.settings.ppu_reset != old.ppu_reset {
+                player.set_ppu_reset_behavior(self.settings.ppu_reset);
             }
         }
         if let Some(audio) = &self.audio {
@@ -1191,7 +1203,7 @@ impl App {
                         ),
                         Tab::Paths => paths_tab(ui, &mut settings),
                         Tab::Nes => nes_tab(ui, &mut settings, selected_entry.as_ref()),
-                        Tab::Advanced => advanced_tab(ui),
+                        Tab::Advanced => advanced_tab(ui, &mut settings),
                     }
                 });
             });
@@ -1681,6 +1693,8 @@ impl eframe::App for App {
                     scale: self.settings.scale,
                     supersample: self.settings.supersample,
                     shader: self.settings.shader,
+                    overscan: self.settings.overscan,
+                    mask_edges: self.settings.mask_edges,
                     zapper_port,
                     paddle_port,
                     power_pad_port,
@@ -1810,6 +1824,32 @@ fn fit_aspect(available: Rect, aspect: f32) -> Rect {
     Rect::from_center_size(available.center(), Vec2::new(width, height))
 }
 
+/// Masks the 8-pixel software-mask columns that analog TVs commonly cropped.
+fn paint_mask(ui: &egui::Ui, target: Rect, mask: MaskEdges) {
+    let width = target.width() * 8.0 / 256.0;
+    let black = Color32::BLACK;
+    if matches!(mask, MaskEdges::Left | MaskEdges::Both | MaskEdges::Auto) {
+        ui.painter().rect_filled(
+            Rect::from_min_max(
+                target.left_top(),
+                egui::pos2(target.left() + width, target.bottom()),
+            ),
+            0.0,
+            black,
+        );
+    }
+    if mask == MaskEdges::Both {
+        ui.painter().rect_filled(
+            Rect::from_min_max(
+                egui::pos2(target.right() - width, target.top()),
+                target.right_bottom(),
+            ),
+            0.0,
+            black,
+        );
+    }
+}
+
 /// Draws the selected output post-process preset over the game image.
 fn paint_shader(ui: &egui::Ui, target: Rect, shader: ShaderPreset) {
     let step = (target.height() / 240.0).max(1.0);
@@ -1885,6 +1925,8 @@ struct ViewportOptions {
     scale: u32,
     supersample: u32,
     shader: ShaderPreset,
+    overscan: Overscan,
+    mask_edges: MaskEdges,
     zapper_port: Option<usize>,
     paddle_port: Option<usize>,
     power_pad_port: Option<usize>,
@@ -1908,6 +1950,8 @@ fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions)
         scale,
         supersample,
         shader,
+        overscan,
+        mask_edges,
         zapper_port,
         paddle_port,
         power_pad_port,
@@ -1974,12 +2018,13 @@ fn viewport(ctx: &egui::Context, player: &mut Player, options: &ViewportOptions)
             });
             if let Some(texture) = player.texture() {
                 let id = texture.id();
-                ui.painter().image(
-                    id,
-                    target,
-                    Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                    Color32::WHITE,
+                let (vx, vy, vw, vh) = overscan.visible();
+                let uv = Rect::from_min_max(
+                    egui::pos2(f32::from(vx) / 256.0, f32::from(vy) / 240.0),
+                    egui::pos2(f32::from(vx + vw) / 256.0, f32::from(vy + vh) / 240.0),
                 );
+                ui.painter().image(id, target, uv, Color32::WHITE);
+                paint_mask(ui, target, mask_edges);
                 paint_shader(ui, target, shader);
             } else {
                 ui.painter().text(
@@ -2429,6 +2474,34 @@ fn graphics_tab(ui: &mut egui::Ui, settings: &mut Settings, ctx: &egui::Context)
             ui.radio_value(&mut settings.aspect, aspect, aspect.label());
         }
     });
+    ui.horizontal(|ui| {
+        ui.label("Overscan");
+        egui::ComboBox::from_id_salt("overscan")
+            .selected_text(settings.overscan.label())
+            .show_ui(ui, |ui| {
+                for overscan in [
+                    Overscan::Normal,
+                    Overscan::Vertical,
+                    Overscan::Borders,
+                    Overscan::Everything,
+                ] {
+                    ui.selectable_value(&mut settings.overscan, overscan, overscan.label());
+                }
+            });
+        ui.label("Mask edges");
+        egui::ComboBox::from_id_salt("mask-edges")
+            .selected_text(settings.mask_edges.label())
+            .show_ui(ui, |ui| {
+                for mask in [
+                    MaskEdges::Off,
+                    MaskEdges::Left,
+                    MaskEdges::Both,
+                    MaskEdges::Auto,
+                ] {
+                    ui.selectable_value(&mut settings.mask_edges, mask, mask.label());
+                }
+            });
+    });
     ui.checkbox(&mut settings.integer_scale, "Integer scaling when possible");
     ui.add(egui::Slider::new(&mut settings.scale, 0..=6).text("Fixed integer scale (0 = auto)"));
     ui.horizontal(|ui| {
@@ -2590,6 +2663,21 @@ fn audio_tab(
     ui.add_space(10.0);
     ui.separator();
     ui.heading("Mixer");
+    ui.horizontal(|ui| {
+        ui.label("Audio source");
+        egui::ComboBox::from_id_salt("audio-source")
+            .selected_text(settings.audio_source.label())
+            .show_ui(ui, |ui| {
+                for source in [
+                    AudioSource::Both,
+                    AudioSource::Internal,
+                    AudioSource::Expansion,
+                    AudioSource::None,
+                ] {
+                    ui.selectable_value(&mut settings.audio_source, source, source.label());
+                }
+            });
+    });
     ui.label(
         RichText::new(
             "Per-channel gains. Muting keeps the slider value so it can be restored;              the expansion row covers VRC6/7, MMC5, Namco 163, 5B and FDS audio.",
@@ -3039,13 +3127,59 @@ fn nes_tab(ui: &mut egui::Ui, settings: &mut Settings, entry: Option<&GameEntry>
     );
 }
 
-fn advanced_tab(ui: &mut egui::Ui) {
+fn advanced_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.heading("Advanced");
     ui.add_space(8.0);
     ui.label("Core: Unko NES accuracy core");
     ui.label("State format: UNKOST06, ROM-fingerprinted and core-tagged");
     ui.label("Settings file: unko.conf");
-    ui.add_space(8.0);
+    ui.add_space(10.0);
+    ui.separator();
+    ui.heading("Soft-reset accuracy");
+    ui.horizontal(|ui| {
+        ui.label("PPU reset behavior");
+        egui::ComboBox::from_id_salt("ppu-reset")
+            .selected_text(settings.ppu_reset.label())
+            .show_ui(ui, |ui| {
+                for behavior in [PpuResetBehavior::Famicom, PpuResetBehavior::Nes] {
+                    ui.selectable_value(&mut settings.ppu_reset, behavior, behavior.label());
+                }
+            });
+    });
+    ui.horizontal(|ui| {
+        ui.label("RAM clear");
+        egui::ComboBox::from_id_salt("ram-clear")
+            .selected_text(settings.ram_clear.label())
+            .show_ui(ui, |ui| {
+                for mode in [
+                    RamClear::Keep,
+                    RamClear::Zero,
+                    RamClear::Fill,
+                    RamClear::Random,
+                ] {
+                    ui.selectable_value(&mut settings.ram_clear, mode, mode.label());
+                }
+            });
+    });
+    ui.label(
+        RichText::new(
+            "These apply on the next Emulation -> Reset (or the reset hotkey), matching the \
+             MiSTer options. A power-on load starts from zeroed work RAM.",
+        )
+        .weak()
+        .small(),
+    );
+    ui.add_space(10.0);
+    ui.separator();
+    ui.heading("ROM headers");
+    ui.label(
+        RichText::new(
+            "Auto region needs a NES 2.0 header; iNES images default to NTSC, as MiSTer warns. \
+             Bulk header repair is an external tool, not part of the core.",
+        )
+        .weak()
+        .small(),
+    );
     ui.label(
         RichText::new("Logging, run-ahead and rewind controls land with the next milestone.")
             .weak()

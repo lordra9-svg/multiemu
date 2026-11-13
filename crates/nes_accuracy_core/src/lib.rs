@@ -35,10 +35,10 @@ pub use system::System;
 
 use crate::clock::Region as ClockRegion;
 use unko_core::{
-    Accuracy, ApuState, AudioBuffer, AudioFilterModel, AudioQuality, Core, CoreError, CoreInfo,
-    CoreRegistration, CpuState, DebugSpace, Disassembly, Features, FrameBuffer, FrameStats,
-    InputState, LoadOptions, Palette, PixelFormat, PortDevice, PpuState, Region as HostRegion,
-    SystemId, VideoFilter,
+    Accuracy, ApuState, AudioBuffer, AudioFilterModel, AudioQuality, AudioSource, Core, CoreError,
+    CoreInfo, CoreRegistration, CpuState, DebugSpace, Disassembly, Features, FrameBuffer,
+    FrameStats, InputState, LoadOptions, Palette, PixelFormat, PortDevice, PpuResetBehavior,
+    PpuState, RamClear, Region as HostRegion, SystemId, VideoFilter,
 };
 
 /// Stable id of this core implementation.
@@ -93,6 +93,9 @@ pub struct AccuracyCore {
     audio_filters: AudioFilterModel,
     channel_gains: [f32; 6],
     palette_table: Option<[[u8; 3]; 64]>,
+    audio_source: AudioSource,
+    ram_clear: RamClear,
+    ppu_reset: PpuResetBehavior,
 }
 
 impl AccuracyCore {
@@ -110,6 +113,9 @@ impl AccuracyCore {
             audio_filters: AudioFilterModel::NesRf,
             channel_gains: [1.0; 6],
             palette_table: None,
+            audio_source: AudioSource::Both,
+            ram_clear: RamClear::Zero,
+            ppu_reset: PpuResetBehavior::Famicom,
         }
     }
 }
@@ -213,6 +219,9 @@ impl Core for AccuracyCore {
         system.set_audio_quality(self.audio_quality);
         system.set_audio_filters(self.audio_filters);
         system.set_channel_gains(self.channel_gains);
+        system.set_audio_source(self.audio_source);
+        system.set_ram_clear(self.ram_clear);
+        system.set_ppu_reset_behavior(self.ppu_reset);
         self.sample_rate = rate;
         self.system = Some(system);
         Ok(())
@@ -316,6 +325,27 @@ impl Core for AccuracyCore {
         self.channel_gains = gains;
         if let Some(system) = self.system.as_mut() {
             system.set_channel_gains(gains);
+        }
+    }
+
+    fn set_audio_source(&mut self, source: AudioSource) {
+        self.audio_source = source;
+        if let Some(system) = self.system.as_mut() {
+            system.set_audio_source(source);
+        }
+    }
+
+    fn set_ram_clear(&mut self, mode: RamClear) {
+        self.ram_clear = mode;
+        if let Some(system) = self.system.as_mut() {
+            system.set_ram_clear(mode);
+        }
+    }
+
+    fn set_ppu_reset_behavior(&mut self, behavior: PpuResetBehavior) {
+        self.ppu_reset = behavior;
+        if let Some(system) = self.system.as_mut() {
+            system.set_ppu_reset_behavior(behavior);
         }
     }
 

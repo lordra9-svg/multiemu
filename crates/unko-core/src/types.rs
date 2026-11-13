@@ -460,3 +460,250 @@ impl AudioFilterModel {
         }
     }
 }
+
+/// Power-on / soft-reset RAM fill policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RamClear {
+    /// Keep the current contents (a soft reset does not clear work RAM).
+    Keep,
+    /// Fill with `$00` (the previous emulator default).
+    #[default]
+    Zero,
+    /// Fill with `$FF`.
+    Fill,
+    /// Fill with a deterministic pseudo-random pattern.
+    Random,
+}
+
+impl RamClear {
+    /// Stable name for the settings file.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Zero => "zero",
+            Self::Fill => "fill",
+            Self::Random => "random",
+        }
+    }
+
+    /// Parses a persisted name.
+    #[must_use]
+    pub fn from_name(value: &str) -> Self {
+        match value {
+            "keep" | "none" => Self::Keep,
+            "fill" | "ff" => Self::Fill,
+            "random" => Self::Random,
+            _ => Self::Zero,
+        }
+    }
+
+    /// Human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Keep => "Keep contents",
+            Self::Zero => "Fill $00",
+            Self::Fill => "Fill $FF",
+            Self::Random => "Random",
+        }
+    }
+}
+
+/// PPU register behaviour on a soft reset (the MiSTer "PPU Reset Behavior"
+/// option).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PpuResetBehavior {
+    /// Famicom-style: a soft reset leaves the PPU registers alone.
+    #[default]
+    Famicom,
+    /// NES-style: clear the `$2000`/`$2001` derived registers.
+    Nes,
+}
+
+impl PpuResetBehavior {
+    /// Stable name for the settings file.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Famicom => "famicom",
+            Self::Nes => "nes",
+        }
+    }
+
+    /// Parses a persisted name.
+    #[must_use]
+    pub fn from_name(value: &str) -> Self {
+        match value {
+            "nes" => Self::Nes,
+            _ => Self::Famicom,
+        }
+    }
+
+    /// Human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Famicom => "Famicom (keep registers)",
+            Self::Nes => "NES (clear registers)",
+        }
+    }
+}
+
+/// Which audio sources reach the mixer (the MiSTer "Audio Enable" option).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AudioSource {
+    /// The 2A03 and cartridge expansion audio.
+    #[default]
+    Both,
+    /// Only the 2A03 APU.
+    Internal,
+    /// Only cartridge expansion audio.
+    Expansion,
+    /// Silence (the machine still runs).
+    None,
+}
+
+impl AudioSource {
+    /// Stable name for the settings file.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Both => "both",
+            Self::Internal => "internal",
+            Self::Expansion => "expansion",
+            Self::None => "none",
+        }
+    }
+
+    /// Parses a persisted name.
+    #[must_use]
+    pub fn from_name(value: &str) -> Self {
+        match value {
+            "internal" | "apu" => Self::Internal,
+            "expansion" | "cart" => Self::Expansion,
+            "none" | "off" => Self::None,
+            _ => Self::Both,
+        }
+    }
+
+    /// Human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Both => "Both",
+            Self::Internal => "Internal (2A03)",
+            Self::Expansion => "Cartridge expansion",
+            Self::None => "None",
+        }
+    }
+}
+
+/// Analog overscan crop (the MiSTer "Overscan" option).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Overscan {
+    /// All 256x240 pixels.
+    #[default]
+    Normal,
+    /// Hide 8 scanlines top and bottom.
+    Vertical,
+    /// Hide 8 pixels left and right.
+    Borders,
+    /// Hide 8 pixels on every side.
+    Everything,
+}
+
+impl Overscan {
+    /// Stable name for the settings file.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Vertical => "vertical",
+            Self::Borders => "borders",
+            Self::Everything => "everything",
+        }
+    }
+
+    /// Parses a persisted name.
+    #[must_use]
+    pub fn from_name(value: &str) -> Self {
+        match value {
+            "vertical" => Self::Vertical,
+            "borders" => Self::Borders,
+            "everything" | "all" => Self::Everything,
+            _ => Self::Normal,
+        }
+    }
+
+    /// Human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Vertical => "Vertical overscan",
+            Self::Borders => "Borders",
+            Self::Everything => "Everything",
+        }
+    }
+
+    /// Visible source rectangle in pixels: `(x, y, width, height)`.
+    #[must_use]
+    pub const fn visible(self) -> (u16, u16, u16, u16) {
+        match self {
+            Self::Normal => (0, 0, 256, 240),
+            Self::Vertical => (0, 8, 256, 224),
+            Self::Borders => (8, 0, 240, 240),
+            Self::Everything => (8, 8, 240, 224),
+        }
+    }
+}
+
+/// Display mask over the left/right software-mask columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskEdges {
+    /// Show every column.
+    #[default]
+    Off,
+    /// Mask the leftmost 8 pixels.
+    Left,
+    /// Mask both 8-pixel edges.
+    Both,
+    /// Mask the left edge unless the game already clips it.
+    Auto,
+}
+
+impl MaskEdges {
+    /// Stable name for the settings file.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Left => "left",
+            Self::Both => "both",
+            Self::Auto => "auto",
+        }
+    }
+
+    /// Parses a persisted name.
+    #[must_use]
+    pub fn from_name(value: &str) -> Self {
+        match value {
+            "left" => Self::Left,
+            "both" => Self::Both,
+            "auto" => Self::Auto,
+            _ => Self::Off,
+        }
+    }
+
+    /// Human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Left => "Left",
+            Self::Both => "Both",
+            Self::Auto => "Auto",
+        }
+    }
+}

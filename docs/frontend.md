@@ -118,6 +118,11 @@ platform toolchains.
   the linear downscale to the window; the PPU stays 256x240). Output shader
   presets (scanlines, LCD grid, CRT vignette) are painted over the image, on
   top of the core's Raw/Composite/CRT filters.
+- Accuracy options mirroring MiSTer: PPU reset behaviour (Famicom/NES),
+  work-RAM clear (Keep/$00/$FF/Random) on soft reset, audio source
+  (Both/Internal/Expansion/None), overscan cropping, software-mask edge
+  masking and the NES 2.0 missing-header warning. Defaults keep the previous
+  behaviour.
 - Windows: Settings, Devices and the Debugger open as native OS windows on
   desktop (each remembers its own size/position); mobile embeds them as
   panels. The General page has a confirmed "Reset all settings" that restores

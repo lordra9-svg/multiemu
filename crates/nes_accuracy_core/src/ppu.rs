@@ -1300,6 +1300,16 @@ impl Ppu {
         self.refresh_palette_rgb();
     }
 
+    /// Soft-reset the `$2000`/`$2001`-derived register state, as the
+    /// MiSTer "NES" PPU reset behaviour does. VRAM, OAM and palette RAM are
+    /// left intact.
+    pub fn soft_reset_registers(&mut self) {
+        self.ctrl = 0;
+        self.mask = 0;
+        self.span_len = 0;
+        self.refresh_palette_rgb();
+    }
+
     /// Supplies the 64-entry table used by [`PaletteVariant::Custom`].
     pub fn set_palette_table(&mut self, table: [[u8; 3]; 64]) {
         self.custom_palette = table.to_vec();

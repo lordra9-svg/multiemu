@@ -5,8 +5,8 @@ use std::fmt;
 use crate::debug::{ApuState, CpuState, DebugSpace, Disassembly, PpuState};
 use crate::input::InputState;
 use crate::types::{
-    AudioBuffer, AudioFilterModel, AudioQuality, CoreInfo, FrameBuffer, FrameStats, LoadOptions,
-    Palette, PortDevice, VideoFilter,
+    AudioBuffer, AudioFilterModel, AudioQuality, AudioSource, CoreInfo, FrameBuffer, FrameStats,
+    LoadOptions, Palette, PortDevice, PpuResetBehavior, RamClear, VideoFilter,
 };
 
 /// Errors a core may return to the host.
@@ -117,6 +117,15 @@ pub trait Core {
     /// Selects the analog output filter model. May take effect on the next
     /// frame.
     fn set_audio_filters(&mut self, _filters: AudioFilterModel) {}
+
+    /// Selects which audio sources reach the mixer.
+    fn set_audio_source(&mut self, _source: AudioSource) {}
+
+    /// Selects the work-RAM fill applied by the next soft reset.
+    fn set_ram_clear(&mut self, _mode: RamClear) {}
+
+    /// Selects the PPU register behaviour on a soft reset.
+    fn set_ppu_reset_behavior(&mut self, _behavior: PpuResetBehavior) {}
 
     /// Sets the per-channel mixer gains in
     /// `[pulse1, pulse2, triangle, noise, dmc, expansion]` order.
