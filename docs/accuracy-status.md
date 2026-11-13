@@ -1954,3 +1954,20 @@ readback-disable, device settings round-trip.
 
 Both are synthetic-validated; real Miracle Piano and Datach ROMs are still
 needed before claiming parity.
+
+### 2026-11-13 — accuracy and performance regression pass
+
+- AccuracyCoin isolated battery: **146/151 passed, 0 failed, 5 DRAW skips,
+  0 unrun** (199,320 frames).
+- 20-frame library audit: **3,904 rendering / 3,169 blank**, 0 unsupported
+  mapper, 28 load/run failures out of 7,101 scanned — identical to the last
+  run, so the audio, UI and palette work did not change video output.
+- CI budget: `unko bench --synthetic 3000 --min-fps 300` measured **786.2 fps**
+  (13.08x real time, 1.272 ms/frame), well above the 300 fps floor.
+- Determinism: `unko verify` on *Gimmick!* (60 frames) resumed from a
+  900,441-byte state and produced the same tail hash.
+- The canonical palette and Raw filter remain the default and the 120-frame
+  canonical trace is unchanged by the generated display palettes.
+- The microphone/tape/piano/Datach additions landed after `UNKOST05` and
+  changed the serialized peripheral layout, so the state magic is bumped to
+  **`UNKOST06`**; older states are rejected by the normal bad-magic check.

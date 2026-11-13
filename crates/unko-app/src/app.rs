@@ -3043,7 +3043,7 @@ fn advanced_tab(ui: &mut egui::Ui) {
     ui.heading("Advanced");
     ui.add_space(8.0);
     ui.label("Core: Unko NES accuracy core");
-    ui.label("State format: UNKOST05, ROM-fingerprinted and core-tagged");
+    ui.label("State format: UNKOST06, ROM-fingerprinted and core-tagged");
     ui.label("Settings file: unko.conf");
     ui.add_space(8.0);
     ui.label(

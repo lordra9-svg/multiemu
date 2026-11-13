@@ -83,7 +83,7 @@ bus. Its `Core` adapter:
 
 - loads iNES/NES 2.0 and raw FDS images;
 - exposes RGBA video and mono f32 audio through borrowed buffers;
-- serializes versioned `UNKOST05` save states, including mapper state and a ROM
+- serializes versioned `UNKOST06` save states, including mapper state and a ROM
   fingerprint;
 - maps the host input bits to the NES shift-register order.
 

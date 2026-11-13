@@ -1164,7 +1164,7 @@ fn usage() -> String {
   unko signatures <dir> [--frames N] [--mapper ID] [--limit N] [--check FILE]
   unko run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID]
           [--device1 NAME] [--device2 NAME] [--paddle N] [--paddle-fire]
-          [--filter raw|composite|crt] [--palette canonical|consumer|rgb|mono]
+          [--filter raw|composite|crt] [--palette canonical|consumer|rgb|mono|vivid|soft|pal|studio]
   unko verify <rom|archive> [frames]
   unko trace <rom|archive> [--frames N] [--core ID] [--out trace.txt] [--no-state] [--bios PATH] [--press-start N] [--audio-dir DIR]
   unko diff <a.trace> <b.trace> [--skip N] [--video]

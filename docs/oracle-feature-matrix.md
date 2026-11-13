@@ -123,7 +123,7 @@ Ordered by player impact and fit with the existing architecture.
    persistence, enable/disable. Unko has no cheat path today.
 2. **Speed control**: fast-forward (hold/toggle), speed presets, frame
    advance as a normal control, and a **rewind ring** built on the existing
-   deterministic `UNKOST05` states (states are 0.7–1.5 MB, so the ring needs a
+   deterministic `UNKOST06` states (states are 0.7–1.5 MB, so the ring needs a
    memory budget or delta compression).
 3. **Audio**: per-channel volume/mute (5 APU channels + expansion), sample
    rate and buffer latency options, optional audio filters; first fix any
