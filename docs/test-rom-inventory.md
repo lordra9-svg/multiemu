@@ -29,14 +29,12 @@ forces PAL timing and `UNKO_MMC3_ALT=1` selects the alternate MMC3 revision.
 
 Latest run, including the screen-text extractor:
 
-- **128 machine-readable passes**
-- **17 machine-readable failures**; the actionable ones are:
+- **129 machine-readable passes**
+- **15 machine-readable failures**; the actionable ones are:
   - `cpu_interrupts_v2/rom_singles/5-branch_delays_irq.nes` — branch/IRQ
     delay table CRC mismatch
   - `dmc_dma_during_read4/dma_4016_read.nes` — controller read corruption
     during DMC DMA
-  - `ppu_open_bus/ppu_open_bus.nes` #7 — `$2002` read refreshing the low
-    five decay bits
   - `pal_apu_tests/04,05,06,07,08,10,11` — PAL APU/PPU phase (the first
     three PAL APU tests pass)
   - `mmc3_test/4-scanline_timing.nes` and its `mmc3_test_2` twin — line-239
@@ -44,10 +42,11 @@ Latest run, including the screen-text extractor:
 - **Revision-dependent passes:** `mmc3_irq_tests/5.MMC3_rev_A`,
   `mmc3_test/6-MMC6` and `mmc3_test_2/6-MMC3_alt` pass when the alternate
   MMC3A/NEC revision is selected (`UNKO_MMC3_ALT=1` or Settings -> Advanced).
+  Without it they count as the three remaining revision failures.
 - **Input-dependent:** `read_joy3/thorough_test` needs a controller script;
   the power-on part of `cpu_reset/registers` now passes and the second part
   waits for an injected reset.
-- **118 without a machine-readable result**: visual, audio, input-driven or
+- **119 without a machine-readable result**: visual, audio, input-driven or
   screen-only tests. They load and run without panic; verdicts need a
   screenshot/audio oracle or a controller script.
 

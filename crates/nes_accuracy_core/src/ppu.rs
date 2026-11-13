@@ -996,14 +996,17 @@ impl Ppu {
                 }
                 let value = (sampled & 0xE0) | (self.io_bus & 0x1F);
                 self.io_bus = value;
-                self.io_bus_age = 0;
+                // A $2002 read does not refresh the low five decaying bits.
                 self.status &= !STATUS_VBLANK;
                 self.nmi_line = false;
                 self.write_latch = false;
                 value
             }
             4 => {
-                if self.scanline < 240 && self.mask & 0x18 != 0 && (321..=340).contains(&self.dot) {
+                let value = if self.scanline < 240
+                    && self.mask & 0x18 != 0
+                    && (321..=340).contains(&self.dot)
+                {
                     let address = if self.fetch_addr < 0x20 {
                         self.fetch_addr + 1
                     } else {
@@ -1018,7 +1021,11 @@ impl Ppu {
                     self.legacy_data
                 } else {
                     self.oam[usize::from(self.oam_addr)]
-                }
+                };
+                // $2004 drives all eight data lines and refreshes the decay.
+                self.io_bus = value;
+                self.io_bus_age = 0;
+                value
             }
             7 => {
                 if self.scanline < 240 && self.mask & 0x18 != 0 {
