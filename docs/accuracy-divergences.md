@@ -24,9 +24,6 @@ None in AccuracyCoin. All non-DRAW rows pass.
   differs from the reference; the other four interrupt singles pass.
 - `dmc_dma_during_read4/dma_4016_read` — controller bit reads during DMC DMA
   are corrupted (the other four DMC/read tests pass).
-- `extra/apu/apu_test_2`, `apu_test_5`, `apu_test_6` — the exact-cycle
-  `$4017` write-coincidence tests: the frame counter's write-delay window is
-  one cycle too narrow at 29831 and at 37282/37283.
 - The `read_joy3/thorough_test` failure is input-dependent (no controller
   script is supplied).
 
@@ -159,6 +156,12 @@ These do not fail any suite and are documented exceptions under the charter.
   the wiki (decrement per CPU cycle, `$0000 -> $FFFF` assert, write to `$D`
   acknowledges); the remaining difference is the CPU's interrupt-poll position
   inside a taken/not-taken branch, which needs a hardware trace to resolve.
+
+### APU frame write window (2026-11-14)
+
+The M-bit `$4017` reset now suppresses the half-frame step that would collide
+with the reset landing, then emits the write's own quarter/half clocks. This
+makes `extra/apu/apu_test_1..10` pass without changing AccuracyCoin.
 
 ## Recently closed (2026-11-13)
 

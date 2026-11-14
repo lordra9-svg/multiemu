@@ -46,14 +46,12 @@ This adds the x0000 APU tests, `holy_mapperel`, `extra/{apu,cpu,mappers,ppu}`,
 `audio-tests`, `dap`, `mmc5`, `mmc1_a12`, `m22` and a full copy of the blargg
 suites. Latest probe run:
 
-- **146 passes**
-- **18 failures** (the 15 above plus `extra/apu/apu_test_2`, `apu_test_5`
-  and `apu_test_6`)
+- **149 passes** in the default run (156 with PAL APU run in PAL mode)
+- **15 failures** (the NESdev 15, since the three extra APU failures now pass);
+  8 with PAL APU in PAL mode
 - **177 without a machine-readable verdict**
 
-The three new APU failures are the exact-cycle frame-counter write-coincidence
-tests: our counter merges at 29830/29831 and 37282/37283 for some phases but
-not all of them.
+The x0000 `apu_test_1..10` write-coincidence tests now all pass.
 
 `holy_mapperel` runs to the title/menu path but produces a uniform frame in
 the headless probe, so it needs an input script or a screenshot oracle.

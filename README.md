@@ -30,7 +30,7 @@ public reference suites:
 - AccuracyCoin v3.1.0 isolated: **146/146 non-DRAW rows pass**, 0 failed,
   5 DRAW skips, 0 unrun (199,320 frames)
 - NESdev archive baseline: **129 pass / 15 fail / 119 visual-or-input-only** (7 PAL APU failures pass when PAL timing is selected)
-- RustyNES test tree: **146 pass / 18 fail / 177 visual-or-input-only** (PAL APU passes in PAL mode)
+- RustyNES test tree: **149 pass / 15 fail / 177 visual-or-input-only** (156 / 8 with PAL APU in PAL mode)
 
 Compatibility from the local licensed 7,101-image NES audit:
 

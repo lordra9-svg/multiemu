@@ -689,6 +689,7 @@ struct FrameCounter {
     odd: bool,
     delay_irq: bool,
     delay_counter: [bool; 2],
+    suppress_half: bool,
     /// PAL 2A07 frame-counter periods.
     pal: bool,
 }
@@ -715,6 +716,7 @@ impl Default for FrameCounter {
             odd: true,
             delay_irq: false,
             delay_counter: [false; 2],
+            suppress_half: false,
             pal: false,
         }
     }
@@ -737,6 +739,7 @@ impl FrameCounter {
             FrameMode::Four
         };
         self.delay_counter[1] = true;
+        self.suppress_half = value & 0x80 != 0;
         self.inhibit = value & 0x40 != 0;
         if self.inhibit {
             self.irq_pending = false;
@@ -756,6 +759,7 @@ impl FrameCounter {
             if self.delay_counter[0] {
                 self.step = 0;
                 self.counter = self.period();
+                self.suppress_half = false;
                 if self.mode == FrameMode::Five {
                     events.half = true;
                 }
@@ -785,7 +789,8 @@ impl FrameCounter {
                 }
                 4 => {
                     self.step = 5;
-                    events.half = true;
+                    events.half = !self.suppress_half;
+                    self.suppress_half = false;
                     if self.mode == FrameMode::Four {
                         self.irq_pending = true;
                     }

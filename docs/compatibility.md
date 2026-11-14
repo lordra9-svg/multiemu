@@ -103,9 +103,10 @@ Public mapper-specific status:
 | AccuracyCoin 3.1.0 isolated | 146/146 non-DRAW; 146/151 total, 5 DRAW, 0 failed |
 | `nestest` | 8,980/8,980 lines exact |
 | blargg CPU / PPU / APU | CPU and PPU suites green; APU 13/13 |
-| NESdev archive | 129 pass / 15 fail / 119 visual/audio/input-only |
-| RustyNES test tree | 146 pass / 18 fail / 177 visual/audio/input-only |
-| Workspace tests | 473 pass, 0 failed |
+| x0000 APU write-window tests | 10/10 pass |
+| NESdev archive | 129 pass / 15 fail / 119 visual/audio/input-only; 8 failures with PAL APU in PAL mode |
+| RustyNES test tree | 149 pass / 15 fail / 177 visual/audio/input-only; 156 / 8 with PAL APU in PAL mode |
+| Workspace tests | 477 pass, 0 failed |
 
 The actionable accuracy failures are tracked in
 [`accuracy-divergences.md`](accuracy-divergences.md); the ROM/BIOS inventory is
