@@ -191,6 +191,8 @@ The main effort is now the reference-parity accuracy core. Details in
       CPU/PPU/OAM hex view + write, and PC breakpoints; F10/F9 step one
       instruction/frame while paused.
 - [x] Game Genie / cheat engine.
+- [x] ROM Manager: standalone DAT audit, 1G1R preferences, fixdat/CSV and safe
+      rebuild (`unko-rom-manager`, Tools → ROM Manager).
 
 ## M3 — prove "multi"
 

@@ -90,6 +90,7 @@ Public mapper-specific status:
 | Exact rewind, 64–256 MiB ring | **Done** |
 | Run-ahead 0–4 frames | **Done** |
 | Input movies / TAS (`UNKOMOV1`) | **Done** |
+| ROM Manager (DAT audit, 1G1R, fixdat/CSV, safe rebuild) | **Done** (standalone `unko-rom-manager`; ZIP input, no 7z/RAR/CHD yet) |
 | Game Genie + raw RAM cheats | **Done** |
 | Speed presets, fast-forward, frame advance | **Done** |
 | GPU shader presets (scanlines/LCD/CRT/NTSC Budget/Premium) | **Done** (glow; iOS fallback) |
@@ -107,7 +108,7 @@ Public mapper-specific status:
 | x0000 APU write-window tests | 10/10 pass |
 | NESdev archive | 136 pass / 12 fail / 115 visual/audio/input-only; 5 failures with PAL APU in PAL mode and the alternate MMC3 selector |
 | RustyNES test tree | 157 pass / 13 fail / 171 visual/audio/input-only; 164 / 6 with PAL APU in PAL mode |
-| Workspace tests | 482 pass, 0 failed |
+| Workspace tests | 494 pass, 0 failed |
 
 The actionable accuracy failures are tracked in
 [`accuracy-divergences.md`](accuracy-divergences.md); the ROM/BIOS inventory is

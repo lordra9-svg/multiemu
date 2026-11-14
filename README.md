@@ -63,6 +63,7 @@ crates/
   unko-nes/          # standalone reference-parity NES core (no unko-core dependency)
   unko-nes-host/     # Core ABI adapter between unko-nes and unko-core
   unko-nes-dev/      # AccuracyCoin battery and development harnesses
+  unko-rom-manager/  # standalone DAT audit, 1G1R, fixdat and rebuild core
   unko-cli/          # headless runner: info, scan, run, verify, trace, diff, bench, corpus
   unko-app/          # desktop shell (Dolphin-inspired UX)
 docs/
@@ -123,6 +124,30 @@ status bar, and one settings window with a category rail. See
 
 Gamepads are hot-plugged through SDL3; bindings, auto-fire, dead zone,
 per-game profiles and keyboard shortcuts are configurable in Settings.
+
+### ROM Manager
+
+The Tools → ROM Manager window audits a ROM folder against one or more
+Logiqx XML/No-Intro DATs, shows complete/partial/missing games, selects a
+1G1R set, exports fixdats/CSV and safely copies matched ROMs to an output
+folder. It is backed by the standalone `unko-rom-manager` crate, which has no
+dependency on the NES core or the shell.
+
+```sh
+# Open the manager with a DAT and source folder preloaded
+unko-app --rom-manager --dat "No-Intro NES.dat" --roms /path/to/roms
+
+# Headless equivalent
+cargo run -p unko-rom-manager -- \
+  --dat "No-Intro NES.dat" --input /path/to/roms --1g1r \
+  --fixdat missing.xml --csv report.csv --copy rebuilt
+```
+
+The feature comparison of the bundled managers (igir, RomVault, ClrMamePro,
+RomCenter and Romulus) is in
+[`docs/rom-manager-comparison.md`](docs/rom-manager-comparison.md). Current
+limits: ZIP input only, no 7z/RAR/CHD, no TorrentZip output and no patching
+yet; rebuild only copies and never deletes.
 
 ### Portable data folder
 

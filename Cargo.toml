@@ -6,6 +6,7 @@ members = [
     "crates/unko-nes",
     "crates/unko-nes-host",
     "crates/unko-nes-dev",
+    "crates/unko-rom-manager",
     "crates/unko-cli",
     "crates/unko-app",
 ]

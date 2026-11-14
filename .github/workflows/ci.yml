@@ -52,6 +52,14 @@ jobs:
           fi
           cargo check -p unko-nes-host
 
+      - name: Standalone ROM manager
+        run: |
+          cargo check -p unko-rom-manager --all-targets
+          if cargo tree -p unko-rom-manager | grep -Eq 'unko-core|unko-nes'; then
+            echo "unko-rom-manager must not depend on the NES or host core"
+            exit 1
+          fi
+
       - name: Test
         run: cargo test --workspace
 

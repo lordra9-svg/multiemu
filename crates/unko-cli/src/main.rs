@@ -24,6 +24,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     let command = args.next().ok_or_else(usage)?;
 
     match command.as_str() {
+        "rom-manager" => {
+            unko_rom_manager::cli::run(args).map_err(std::io::Error::other)?;
+        }
         "info" => {
             let path = args.next().ok_or_else(usage)?;
             let (entry, rom) = load_arg(&path)?;
@@ -1162,6 +1165,7 @@ fn create_core(registry: &Registry, id: Option<&str>) -> Result<Box<dyn Core>, S
 
 fn usage() -> String {
     "usage:
+  unko rom-manager --dat DAT --input ROMS [--1g1r] [--fixdat FILE] [--csv FILE] [--copy DIR]
   unko info <rom|archive>
   unko scan <dir>
   unko signatures <dir> [--frames N] [--mapper ID] [--limit N] [--check FILE]

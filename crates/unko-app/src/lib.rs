@@ -26,6 +26,7 @@ mod movie;
 mod paths;
 mod player;
 mod recording;
+mod rom_manager;
 mod settings;
 
 pub use app::{App, Args};

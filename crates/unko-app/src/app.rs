@@ -25,6 +25,7 @@ use crate::library::{self, GameEntry};
 use crate::paths;
 use crate::player::{self, Player};
 use crate::recording::RecordModes;
+use crate::rom_manager::RomManager;
 use crate::settings::{Aspect, HotkeyAction, Settings, ShaderPreset, Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +102,7 @@ pub struct App {
     microphone: bool,
     datach_code: String,
     confirm_reset: bool,
+    rom_manager: RomManager,
     window_generation: u32,
     #[cfg(not(target_os = "ios"))]
     gpu_shader: Option<crate::gpu_shader::Handle>,
@@ -123,6 +125,10 @@ pub struct Args {
     pub portable: bool,
     /// Print the resolved data folder and exit.
     pub print_data_dir: bool,
+    /// Open the ROM Manager window on launch.
+    pub rom_manager: bool,
+    /// DAT files to preload in the ROM Manager.
+    pub dat: Vec<PathBuf>,
 }
 
 impl App {
@@ -130,6 +136,11 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, mut settings: Settings, args: Args) -> Self {
         if let Some(dir) = args.roms {
             settings.rom_dir = paths::resolve(&dir);
+        }
+        let mut rom_manager = RomManager::new(settings.save_dir.clone(), settings.rom_dir.clone());
+        rom_manager.preload(args.dat.clone(), args.rom_manager);
+        if rom_manager.open && !args.dat.is_empty() {
+            rom_manager.start_scan();
         }
         apply_theme(&cc.egui_ctx, settings.theme);
         let library = scan(&settings.rom_dir);
@@ -196,6 +207,7 @@ impl App {
             microphone: false,
             datach_code: String::new(),
             confirm_reset: false,
+            rom_manager,
             window_generation: 0,
             #[cfg(not(target_os = "ios"))]
             gpu_shader,
@@ -918,6 +930,10 @@ impl App {
                     }
                     if ui.button("Devices").clicked() {
                         self.devices_open = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("ROM Manager…").clicked() {
+                        self.rom_manager.open = true;
                         ui.close_menu();
                     }
                     if ui
@@ -2125,6 +2141,7 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.rom_manager.poll();
         self.shortcuts(ctx);
         self.menu(ctx);
         self.toolbar(ctx);
@@ -2300,6 +2317,7 @@ impl eframe::App for App {
         self.settings_window(ctx);
         self.devices_window(ctx);
         self.cheats_window(ctx);
+        self.rom_manager.show(ctx);
         self.about_window(ctx);
         self.open_rom_window(ctx);
         self.reset_confirmation(ctx);

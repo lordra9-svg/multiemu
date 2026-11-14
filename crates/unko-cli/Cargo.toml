@@ -14,4 +14,5 @@ path = "src/main.rs"
 unko-core.workspace = true
 unko-nes = { path = "../unko-nes" }
 unko-nes-host = { path = "../unko-nes-host" }
+unko-rom-manager = { path = "../unko-rom-manager" }
 unko-rom = { path = "../unko-rom" }

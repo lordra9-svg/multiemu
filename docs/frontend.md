@@ -60,7 +60,7 @@ Key interaction rules worth keeping:
 | MenuBar: File | Open ROM, ROM folder, Rescan, Exit | now |
 | MenuBar: Emulation | Play/Pause, Stop, Reset, States, Screenshot, Fullscreen | now |
 | MenuBar: View | List/Grid, status bar, fullscreen | now |
-| MenuBar: Tools | Settings, Controllers, Graphics | now |
+| MenuBar: Tools | Settings, Controllers, Graphics, ROM Manager | now |
 | MenuBar: Help | About | now |
 | ToolBar | Open, Refresh, Play/Pause, Stop, Reset, Fullscreen, Shot, Config | now |
 | RenderWidget | `egui` texture viewport, aspect-correct | now |
@@ -68,7 +68,8 @@ Key interaction rules worth keeping:
 | Settings: Graphics | filter, palette + `.pal` import, aspect, integer scale, supersampling, GPU output shaders (scanlines/LCD/CRT/NTSC Budget/Premium, brightness/sharpness), window presets | now |
 | Settings: Audio | sample rate, latency target, resampler quality, output filter, volume/mute, per-channel mixer | now |
 | Settings: Controllers | fixed keyboard map, rebinding UI | partial |
-| Settings: Paths | ROM dir, save dir, per-system library roots | now |
+| Settings: Paths | portable data root, ROM dir, save dir, per-system library roots | now |
+| ROM Manager | DAT audit, 1G1R preferences, fixdat/CSV, safe copy/rebuild | now |
 | Settings: NES page | region, mapper/header info, deterministic RAM | now |
 | Settings: Advanced | core id, log level, state format | now |
 | Per-game properties | header/mapper/region overrides | later |
