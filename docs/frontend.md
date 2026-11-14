@@ -110,6 +110,14 @@ platform toolchains.
   palette import on desktop; text entries remain for platforms without a
   dialog backend, so the UI works in a headless/CI environment.
 
+## Window geometry
+
+Detached windows and the main window are created with their default sizes. The
+UI applies a remembered geometry only on the first frame a window appears; it
+never reapplies or auto-resizes it afterwards. Moving or resizing a window
+updates its `layout_*` key in `unko.conf`, which is written on close/exit and
+restored next time. Embedded mobile windows keep their default sizes.
+
 ## Portable data
 
 Settings → Paths shows the resolved data folder, a **Copy path** button and

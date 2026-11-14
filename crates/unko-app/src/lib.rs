@@ -47,16 +47,21 @@ pub fn run(args: Args) -> eframe::Result<()> {
     }
     eframe::run_native(
         "unko",
-        native_options(),
+        native_options(settings.layout_main),
         Box::new(move |cc| Ok(Box::new(App::new(cc, settings, args)))),
     )
 }
 
 /// Window options common to every target.
-fn native_options() -> NativeOptions {
-    let viewport = egui::ViewportBuilder::default()
-        .with_title("Unko")
-        .with_inner_size([1280.0, 800.0]);
+fn native_options(layout: Option<[f32; 4]>) -> NativeOptions {
+    let mut viewport = egui::ViewportBuilder::default().with_title("Unko");
+    viewport = if let Some([x, y, width, height]) = layout {
+        viewport
+            .with_position([x, y])
+            .with_inner_size([width, height])
+    } else {
+        viewport.with_inner_size([1280.0, 800.0])
+    };
     // A minimum window size only makes sense on a desktop.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let viewport = viewport.with_min_inner_size([960.0, 600.0]);
@@ -71,7 +76,7 @@ fn native_options() -> NativeOptions {
 #[allow(unsafe_code)] // the platform ABI requires an exported symbol
 #[unsafe(no_mangle)]
 pub fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
-    let mut options = native_options();
+    let mut options = native_options(None);
     options.android_app = Some(android_app);
     paths::init(None, false);
     let config = settings::Settings::path();

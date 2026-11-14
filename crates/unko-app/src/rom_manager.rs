@@ -18,6 +18,7 @@ pub struct RomManager {
     /// Window visibility.
     pub open: bool,
     focus_pending: bool,
+    focus_frames: u8,
     dat_paths: Vec<PathBuf>,
     dat_input: String,
     source: PathBuf,
@@ -46,6 +47,7 @@ impl RomManager {
         Self {
             open: false,
             focus_pending: false,
+            focus_frames: 0,
             dat_paths: Vec::new(),
             dat_input: String::new(),
             source,
@@ -74,13 +76,17 @@ impl RomManager {
             self.dat_paths = dats;
         }
         self.open |= open;
-        self.focus_pending |= open;
+        if open {
+            self.focus_pending = true;
+            self.focus_frames = 8;
+        }
     }
 
     /// Opens the manager and asks the OS window to take focus.
     pub fn request_focus(&mut self) {
         self.open = true;
         self.focus_pending = true;
+        self.focus_frames = 8;
     }
 
     /// Polls the background scan.
@@ -117,9 +123,10 @@ impl RomManager {
     /// Draws the detached OS window contents.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn show_contents(&mut self, ctx: &egui::Context) {
-        if self.focus_pending {
+        if self.focus_pending || self.focus_frames > 0 {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             self.focus_pending = false;
+            self.focus_frames = self.focus_frames.saturating_sub(1);
         }
         if self.busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));

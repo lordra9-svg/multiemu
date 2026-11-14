@@ -446,6 +446,8 @@ pub struct Settings {
     pub layout_cheats: Option<[f32; 4]>,
     /// Remembered ROM Manager OS-window geometry.
     pub layout_rom_manager: Option<[f32; 4]>,
+    /// Remembered main-window geometry.
+    pub layout_main: Option<[f32; 4]>,
 }
 
 impl Default for Settings {
@@ -517,6 +519,7 @@ impl Default for Settings {
             layout_debugger: None,
             layout_cheats: None,
             layout_rom_manager: None,
+            layout_main: None,
         }
     }
 }
@@ -692,6 +695,7 @@ impl Settings {
                 "layout_debugger" => settings.layout_debugger = parse_layout(value),
                 "layout_cheats" => settings.layout_cheats = parse_layout(value),
                 "layout_rom_manager" => settings.layout_rom_manager = parse_layout(value),
+                "layout_main" => settings.layout_main = parse_layout(value),
                 "library_root" => {
                     if let Some((system, path)) = value.split_once('|') {
                         settings.library_roots.push(LibraryRoot {
@@ -830,6 +834,7 @@ layout_devices={}
 layout_debugger={}
 layout_cheats={}
 layout_rom_manager={}
+layout_main={}
 ",
             paths::store_relative(&self.rom_dir, &base),
             paths::store_relative(&self.save_dir, &base),
@@ -916,6 +921,7 @@ layout_rom_manager={}
             layout_text(self.layout_debugger),
             layout_text(self.layout_cheats),
             layout_text(self.layout_rom_manager),
+            layout_text(self.layout_main),
         );
         for root in &self.library_roots {
             text.push_str(&format!(
@@ -1188,6 +1194,7 @@ mod tests {
             layout_debugger: Some([40.0, 40.0, 900.0, 600.0]),
             layout_cheats: Some([60.0, 60.0, 700.0, 520.0]),
             layout_rom_manager: Some([80.0, 80.0, 1040.0, 720.0]),
+            layout_main: Some([10.0, 20.0, 1280.0, 800.0]),
             library_roots: vec![
                 LibraryRoot {
                     system: "nes".into(),
@@ -1203,6 +1210,7 @@ mod tests {
         settings.save(&path).expect("writes");
         let text = fs::read_to_string(&path).expect("read");
         assert!(text.contains("layout_rom_manager=80,80,1040,720"));
+        assert!(text.contains("layout_main=10,20,1280,800"));
         let loaded = Settings::load(&path);
         assert_eq!(loaded, settings);
         let _ = fs::remove_file(path);

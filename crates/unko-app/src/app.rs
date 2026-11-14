@@ -103,6 +103,11 @@ pub struct App {
     datach_code: String,
     confirm_reset: bool,
     rom_manager: RomManager,
+    settings_window_shown: bool,
+    devices_window_shown: bool,
+    cheats_window_shown: bool,
+    rom_manager_window_shown: bool,
+    debugger_window_shown: bool,
     window_generation: u32,
     #[cfg(not(target_os = "ios"))]
     gpu_shader: Option<crate::gpu_shader::Handle>,
@@ -208,6 +213,11 @@ impl App {
             datach_code: String::new(),
             confirm_reset: false,
             rom_manager,
+            settings_window_shown: false,
+            devices_window_shown: false,
+            cheats_window_shown: false,
+            rom_manager_window_shown: false,
+            debugger_window_shown: false,
             window_generation: 0,
             #[cfg(not(target_os = "ios"))]
             gpu_shader,
@@ -1477,15 +1487,17 @@ impl App {
                 .with_title("ROM Manager — Unko")
                 .with_min_inner_size([760.0, 480.0])
                 .with_resizable(true);
-            builder = if let Some([x, y, width, height]) = self.settings.layout_rom_manager {
-                builder
-                    .with_position([x, y])
-                    .with_inner_size([width, height])
-            } else {
-                builder
-                    .with_position([80.0, 80.0])
-                    .with_inner_size([1040.0, 720.0])
-            };
+            if !self.rom_manager_window_shown {
+                builder = if let Some([x, y, width, height]) = self.settings.layout_rom_manager {
+                    builder
+                        .with_position([x, y])
+                        .with_inner_size([width, height])
+                } else {
+                    builder
+                        .with_position([80.0, 80.0])
+                        .with_inner_size([1040.0, 720.0])
+                };
+            }
             let mut closed = false;
             let mut layout = None;
             ctx.show_viewport_immediate(id, builder, |ctx, _class| {
@@ -1499,11 +1511,13 @@ impl App {
                     closed = true;
                 }
             });
+            self.rom_manager_window_shown = true;
             if let Some(layout) = layout {
                 self.settings.layout_rom_manager = Some(layout);
             }
             if closed {
                 self.rom_manager.open = false;
+                self.rom_manager_window_shown = false;
                 let _ = self.settings.save(&Settings::path());
             }
         }
@@ -1526,13 +1540,15 @@ impl App {
                 .with_title("Settings — Unko")
                 .with_min_inner_size([520.0, 360.0])
                 .with_resizable(true);
-            builder = if let Some([x, y, width, height]) = self.settings.layout_settings {
-                builder
-                    .with_position([x, y])
-                    .with_inner_size([width, height])
-            } else {
-                builder.with_inner_size([780.0, 540.0])
-            };
+            if !self.settings_window_shown {
+                builder = if let Some([x, y, width, height]) = self.settings.layout_settings {
+                    builder
+                        .with_position([x, y])
+                        .with_inner_size([width, height])
+                } else {
+                    builder.with_inner_size([780.0, 540.0])
+                };
+            }
             let mut closed = false;
             let mut layout = None;
             ctx.show_viewport_immediate(id, builder, |ctx, _class| {
@@ -1546,11 +1562,13 @@ impl App {
                     closed = true;
                 }
             });
+            self.settings_window_shown = true;
             if let Some(layout) = layout {
                 self.settings.layout_settings = Some(layout);
             }
             if closed {
                 open = false;
+                self.settings_window_shown = false;
                 let _ = self.settings.save(&Settings::path());
             }
         } else {
@@ -1637,6 +1655,11 @@ impl App {
         }
         if layout_reset {
             self.window_generation = self.window_generation.wrapping_add(1);
+            self.settings_window_shown = false;
+            self.devices_window_shown = false;
+            self.cheats_window_shown = false;
+            self.rom_manager_window_shown = false;
+            self.debugger_window_shown = false;
         }
         if reset_requested {
             self.confirm_reset = true;
@@ -1654,13 +1677,15 @@ impl App {
                 .with_title("Cheats — Unko")
                 .with_min_inner_size([560.0, 360.0])
                 .with_resizable(true);
-            builder = if let Some([x, y, width, height]) = self.settings.layout_cheats {
-                builder
-                    .with_position([x, y])
-                    .with_inner_size([width, height])
-            } else {
-                builder.with_inner_size([700.0, 480.0])
-            };
+            if !self.cheats_window_shown {
+                builder = if let Some([x, y, width, height]) = self.settings.layout_cheats {
+                    builder
+                        .with_position([x, y])
+                        .with_inner_size([width, height])
+                } else {
+                    builder.with_inner_size([700.0, 480.0])
+                };
+            }
             let mut closed = false;
             let mut layout = None;
             ctx.show_viewport_immediate(id, builder, |ctx, _class| {
@@ -1674,11 +1699,13 @@ impl App {
                     closed = true;
                 }
             });
+            self.cheats_window_shown = true;
             if let Some(layout) = layout {
                 self.settings.layout_cheats = Some(layout);
             }
             if closed {
                 open = false;
+                self.cheats_window_shown = false;
                 let _ = self.settings.save(&Settings::path());
             }
         } else {
@@ -1690,9 +1717,12 @@ impl App {
     fn cheats_frame(&mut self, ctx: &egui::Context, embedded: bool) {
         if self.player.is_none() {
             if embedded {
-                egui::Window::new("Cheats").show(ctx, |ui| {
-                    ui.label("Load a game to edit its cheats.");
-                });
+                egui::Window::new("Cheats")
+                    .default_size([420.0, 120.0])
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.label("Load a game to edit its cheats.");
+                    });
             }
             return;
         }
@@ -1862,13 +1892,15 @@ impl App {
                 .with_title("Devices — Unko")
                 .with_min_inner_size([420.0, 320.0])
                 .with_resizable(true);
-            builder = if let Some([x, y, width, height]) = self.settings.layout_devices {
-                builder
-                    .with_position([x, y])
-                    .with_inner_size([width, height])
-            } else {
-                builder.with_inner_size([680.0, 520.0])
-            };
+            if !self.devices_window_shown {
+                builder = if let Some([x, y, width, height]) = self.settings.layout_devices {
+                    builder
+                        .with_position([x, y])
+                        .with_inner_size([width, height])
+                } else {
+                    builder.with_inner_size([680.0, 520.0])
+                };
+            }
             let mut closed = false;
             let mut layout = None;
             ctx.show_viewport_immediate(id, builder, |ctx, _class| {
@@ -1882,11 +1914,13 @@ impl App {
                     closed = true;
                 }
             });
+            self.devices_window_shown = true;
             if let Some(layout) = layout {
                 self.settings.layout_devices = Some(layout);
             }
             if closed {
                 open = false;
+                self.devices_window_shown = false;
                 let _ = self.settings.save(&Settings::path());
             }
         } else {
@@ -2075,6 +2109,7 @@ impl App {
         let mut confirmed = false;
         egui::Window::new("Reset all settings?")
             .collapsible(false)
+            .default_size([460.0, 180.0])
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
@@ -2121,6 +2156,11 @@ impl App {
         self.active_mapping = self.settings.pad_mapping;
         self.tab = Tab::General;
         self.window_generation = self.window_generation.wrapping_add(1);
+        self.settings_window_shown = false;
+        self.devices_window_shown = false;
+        self.cheats_window_shown = false;
+        self.rom_manager_window_shown = false;
+        self.debugger_window_shown = false;
         self.apply_settings(ctx, &old);
         self.scan();
         self.set_status("Reset all settings to defaults");
@@ -2133,6 +2173,7 @@ impl App {
         let mut open = self.about_open;
         egui::Window::new("About Unko")
             .open(&mut open)
+            .default_size([460.0, 300.0])
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading("Unko");
@@ -2156,6 +2197,7 @@ impl App {
         let mut open = self.open_rom_open;
         egui::Window::new("Open ROM")
             .open(&mut open)
+            .default_size([480.0, 180.0])
             .resizable(false)
             .show(ctx, |ui| {
                 ui.label("Path to a ROM or archive (.nes, .zip, .7z, .rar):");
@@ -2343,6 +2385,7 @@ impl eframe::App for App {
                         detached_windows,
                         window_generation,
                         &mut layout,
+                        &mut self.debugger_window_shown,
                     );
                     self.settings.layout_debugger = layout;
                     for action in actions {
@@ -2373,6 +2416,15 @@ impl eframe::App for App {
 
         if let Some(entry) = self.pending_play.take() {
             self.start_entry(entry);
+        }
+
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let info = ctx.input(|input| input.viewport().clone());
+            if let Some(outer) = info.outer_rect {
+                let size = info.inner_rect.map_or(outer.size(), |rect| rect.size());
+                self.settings.layout_main = Some([outer.min.x, outer.min.y, size.x, size.y]);
+            }
         }
 
         if let Some(player) = &self.player {

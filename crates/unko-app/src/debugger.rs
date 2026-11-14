@@ -141,6 +141,7 @@ pub fn window(
     detach: bool,
     generation: u32,
     layout: &mut Option<[f32; 4]>,
+    shown: &mut bool,
 ) -> Vec<Action> {
     let mut actions = Vec::new();
     let mut open = debug.open;
@@ -173,13 +174,15 @@ pub fn window(
             .with_title("Debugger — Unko")
             .with_min_inner_size([560.0, 360.0])
             .with_resizable(true);
-        builder = if let Some([x, y, width, height]) = *layout {
-            builder
-                .with_position([x, y])
-                .with_inner_size([width, height])
-        } else {
-            builder.with_inner_size([780.0, 540.0])
-        };
+        if !*shown {
+            builder = if let Some([x, y, width, height]) = *layout {
+                builder
+                    .with_position([x, y])
+                    .with_inner_size([width, height])
+            } else {
+                builder.with_inner_size([780.0, 540.0])
+            };
+        }
         let mut closed = false;
         let mut captured = None;
         ctx.show_viewport_immediate(id, builder, |ctx, _class| {
@@ -196,11 +199,13 @@ pub fn window(
                 closed = true;
             }
         });
+        *shown = true;
         if let Some(captured) = captured {
             *layout = Some(captured);
         }
         if closed {
             debug.open = false;
+            *shown = false;
         }
     } else {
         egui::Window::new("Debugger")
@@ -696,7 +701,8 @@ mod tests {
         for tab in DebugTab::ALL {
             debug.tab = tab;
             let output = ctx.run(egui::RawInput::default(), |ctx| {
-                let actions = window(&mut debug, ctx, &view, false, 0, &mut None);
+                let mut shown = false;
+                let actions = window(&mut debug, ctx, &view, false, 0, &mut None, &mut shown);
                 assert!(actions.is_empty(), "no pointer input means no actions");
             });
             assert!(!output.shapes.is_empty(), "{tab:?} produced no shapes");

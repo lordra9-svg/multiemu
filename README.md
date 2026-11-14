@@ -125,6 +125,12 @@ status bar, and one settings window with a category rail. See
 Gamepads are hot-plugged through SDL3; bindings, auto-fire, dead zone,
 per-game profiles and keyboard shortcuts are configurable in Settings.
 
+Every OS window starts at its built-in default geometry on first use. The app
+does not resize windows automatically; after you move or resize one, its
+position and size are remembered in `unko.conf` (`layout_main`,
+`layout_settings`, `layout_devices`, `layout_debugger`, `layout_cheats`,
+`layout_rom_manager`) and restored on the next launch.
+
 ### ROM Manager
 
 The Tools → ROM Manager window opens as a separate OS window on desktop. It
