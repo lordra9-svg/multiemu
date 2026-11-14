@@ -933,7 +933,7 @@ impl App {
                         ui.close_menu();
                     }
                     if ui.button("ROM Manager…").clicked() {
-                        self.rom_manager.open = true;
+                        self.rom_manager.request_focus();
                         ui.close_menu();
                     }
                     if ui
@@ -1464,6 +1464,55 @@ impl App {
 
     fn detached_windows(&self) -> bool {
         self.settings.detachable_windows && !cfg!(any(target_os = "android", target_os = "ios"))
+    }
+
+    fn rom_manager_window(&mut self, ctx: &egui::Context) {
+        if !self.rom_manager.open {
+            return;
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let id = egui::ViewportId::from_hash_of(("unko-rom-manager", self.window_generation));
+            let mut builder = egui::ViewportBuilder::default()
+                .with_title("ROM Manager — Unko")
+                .with_min_inner_size([760.0, 480.0])
+                .with_resizable(true);
+            builder = if let Some([x, y, width, height]) = self.settings.layout_rom_manager {
+                builder
+                    .with_position([x, y])
+                    .with_inner_size([width, height])
+            } else {
+                builder
+                    .with_position([80.0, 80.0])
+                    .with_inner_size([1040.0, 720.0])
+            };
+            let mut closed = false;
+            let mut layout = None;
+            ctx.show_viewport_immediate(id, builder, |ctx, _class| {
+                self.rom_manager.show_contents(ctx);
+                let info = ctx.input(|input| input.viewport().clone());
+                if let Some(outer) = info.outer_rect {
+                    let size = info.inner_rect.map_or(outer.size(), |rect| rect.size());
+                    layout = Some([outer.min.x, outer.min.y, size.x, size.y]);
+                }
+                if ctx.input(|input| input.viewport().close_requested()) {
+                    closed = true;
+                }
+            });
+            if let Some(layout) = layout {
+                self.settings.layout_rom_manager = Some(layout);
+            }
+            if closed {
+                self.rom_manager.open = false;
+                let _ = self.settings.save(&Settings::path());
+            }
+        }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let mut open = self.rom_manager.open;
+            self.rom_manager.show_embedded(ctx, &mut open);
+            self.rom_manager.open = open;
+        }
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
@@ -2317,7 +2366,7 @@ impl eframe::App for App {
         self.settings_window(ctx);
         self.devices_window(ctx);
         self.cheats_window(ctx);
-        self.rom_manager.show(ctx);
+        self.rom_manager_window(ctx);
         self.about_window(ctx);
         self.open_rom_window(ctx);
         self.reset_confirmation(ctx);

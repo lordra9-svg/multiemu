@@ -17,6 +17,7 @@ type Job = std::result::Result<Vec<MatchReport>, String>;
 pub struct RomManager {
     /// Window visibility.
     pub open: bool,
+    focus_pending: bool,
     dat_paths: Vec<PathBuf>,
     dat_input: String,
     source: PathBuf,
@@ -44,6 +45,7 @@ impl RomManager {
     pub fn new(save_dir: PathBuf, source: PathBuf) -> Self {
         Self {
             open: false,
+            focus_pending: false,
             dat_paths: Vec::new(),
             dat_input: String::new(),
             source,
@@ -72,6 +74,13 @@ impl RomManager {
             self.dat_paths = dats;
         }
         self.open |= open;
+        self.focus_pending |= open;
+    }
+
+    /// Opens the manager and asks the OS window to take focus.
+    pub fn request_focus(&mut self) {
+        self.open = true;
+        self.focus_pending = true;
     }
 
     /// Polls the background scan.
@@ -105,22 +114,33 @@ impl RomManager {
         }
     }
 
-    /// Draws the window.
-    pub fn show(&mut self, ctx: &egui::Context) {
-        if !self.open {
+    /// Draws the detached OS window contents.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub fn show_contents(&mut self, ctx: &egui::Context) {
+        if self.focus_pending {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.focus_pending = false;
+        }
+        if self.busy {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        egui::CentralPanel::default().show(ctx, |ui| self.body(ui));
+    }
+
+    /// Draws an embedded window for mobile and non-desktop targets.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    pub fn show_embedded(&mut self, ctx: &egui::Context, open: &mut bool) {
+        if !*open {
             return;
         }
         if self.busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        let mut open = self.open;
         egui::Window::new("ROM Manager")
-            .open(&mut open)
+            .open(open)
             .resizable(true)
-            .default_width(920.0)
-            .default_height(620.0)
+            .default_size([1000.0, 700.0])
             .show(ctx, |ui| self.body(ui));
-        self.open = open;
     }
 
     fn body(&mut self, ui: &mut egui::Ui) {
@@ -321,56 +341,77 @@ impl RomManager {
                 MatchStatus::Partial => 1,
                 MatchStatus::Missing => 2,
             });
-            let mut shown = 0usize;
+            let filtered: Vec<usize> = order
+                .into_iter()
+                .filter(|index| {
+                    filter.is_empty()
+                        || report.dat.games[*index]
+                            .name
+                            .to_lowercase()
+                            .contains(&filter)
+                })
+                .collect();
+            ui.label(format!("{} matching games", filtered.len()));
+            let row_height = ui.spacing().interact_size.y.max(18.0);
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [380.0, row_height],
+                    egui::Label::new(RichText::new("Game").strong()),
+                );
+                ui.add_sized(
+                    [90.0, row_height],
+                    egui::Label::new(RichText::new("Status").strong()),
+                );
+                ui.add_sized(
+                    [60.0, row_height],
+                    egui::Label::new(RichText::new("ROMs").strong()),
+                );
+                ui.add_sized(
+                    [ui.available_width(), row_height],
+                    egui::Label::new(RichText::new("Source").strong()),
+                );
+            });
             egui::ScrollArea::vertical()
-                .max_height(330.0)
+                .max_height(ui.available_height().max(140.0))
                 .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    egui::Grid::new("rom-manager-games")
-                        .striped(true)
-                        .num_columns(4)
-                        .show(ui, |ui| {
-                            ui.strong("Game");
-                            ui.strong("Status");
-                            ui.strong("ROMs");
-                            ui.strong("Source");
-                            ui.end_row();
-                            for index in order.iter().copied() {
-                                let game = &report.dat.games[index];
-                                if !filter.is_empty() && !game.name.to_lowercase().contains(&filter)
-                                {
-                                    continue;
-                                }
-                                if shown >= 500 {
-                                    break;
-                                }
-                                shown += 1;
-                                let status = report.games[index];
-                                let color = match status.status {
-                                    MatchStatus::Complete => Color32::LIGHT_GREEN,
-                                    MatchStatus::Partial => Color32::YELLOW,
-                                    MatchStatus::Missing => Color32::GRAY,
-                                };
-                                ui.label(&game.name);
-                                ui.colored_label(color, status.status.label());
-                                ui.label(format!("{}/{}", status.matched, status.total));
-                                let source = game
-                                    .roms
-                                    .iter()
-                                    .enumerate()
-                                    .find_map(|(rom, _)| {
-                                        report
-                                            .flat_index(index, rom)
-                                            .and_then(|flat| report.source(flat))
-                                            .map(|rom| rom.origin.display())
-                                    })
-                                    .unwrap_or_default();
-                                ui.label(RichText::new(source).small().weak());
-                                ui.end_row();
-                            }
+                .show_rows(ui, row_height, filtered.len(), |ui, range| {
+                    for index in filtered[range].iter().copied() {
+                        let game = &report.dat.games[index];
+                        let status = report.games[index];
+                        let color = match status.status {
+                            MatchStatus::Complete => Color32::LIGHT_GREEN,
+                            MatchStatus::Partial => Color32::YELLOW,
+                            MatchStatus::Missing => Color32::GRAY,
+                        };
+                        let source = game
+                            .roms
+                            .iter()
+                            .enumerate()
+                            .find_map(|(rom, _)| {
+                                report
+                                    .flat_index(index, rom)
+                                    .and_then(|flat| report.source(flat))
+                                    .map(|rom| rom.origin.display())
+                            })
+                            .unwrap_or_default();
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [380.0, row_height],
+                                egui::Label::new(&game.name).truncate(),
+                            );
+                            ui.add_sized(
+                                [90.0, row_height],
+                                egui::Label::new(RichText::new(status.status.label()).color(color)),
+                            );
+                            ui.add_sized(
+                                [60.0, row_height],
+                                egui::Label::new(format!("{}/{}", status.matched, status.total)),
+                            );
+                            ui.add_sized(
+                                [ui.available_width(), row_height],
+                                egui::Label::new(RichText::new(source).small().weak()).truncate(),
+                            );
                         });
-                    if shown >= 500 {
-                        ui.label(RichText::new("Showing the first 500 matching games.").weak());
                     }
                 });
             action

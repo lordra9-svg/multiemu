@@ -69,7 +69,7 @@ Key interaction rules worth keeping:
 | Settings: Audio | sample rate, latency target, resampler quality, output filter, volume/mute, per-channel mixer | now |
 | Settings: Controllers | fixed keyboard map, rebinding UI | partial |
 | Settings: Paths | portable data root, ROM dir, save dir, per-system library roots | now |
-| ROM Manager | DAT audit, 1G1R preferences, fixdat/CSV, safe copy/rebuild | now |
+| ROM Manager | separate remembered OS window; full virtualized DAT list, 1G1R preferences, fixdat/CSV, safe copy/rebuild | now |
 | Settings: NES page | region, mapper/header info, deterministic RAM | now |
 | Settings: Advanced | core id, log level, state format | now |
 | Per-game properties | header/mapper/region overrides | later |

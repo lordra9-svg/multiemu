@@ -127,10 +127,12 @@ per-game profiles and keyboard shortcuts are configurable in Settings.
 
 ### ROM Manager
 
-The Tools → ROM Manager window audits a ROM folder against one or more
-Logiqx XML/No-Intro DATs, shows complete/partial/missing games, selects a
-1G1R set, exports fixdats/CSV and safely copies matched ROMs to an output
-folder. It is backed by the standalone `unko-rom-manager` crate, which has no
+The Tools → ROM Manager window opens as a separate OS window on desktop. It
+audits a ROM folder against one or more Logiqx XML/No-Intro DATs, shows
+complete/partial/missing games (the full list, virtualized for large DATs),
+selects a 1G1R set, exports fixdats/CSV and safely copies matched ROMs to an
+output folder. Its position and size are remembered in `unko.conf`; the
+default size is used the first time. It is backed by the standalone `unko-rom-manager` crate, which has no
 dependency on the NES core or the shell.
 
 ```sh
