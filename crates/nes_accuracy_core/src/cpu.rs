@@ -122,6 +122,11 @@ pub struct Cpu {
     prev_latched: bool,
     /// IRQ line state during the penultimate cycle.
     prev_irq: bool,
+    /// IRQ poll override for a taken in-page branch: the line must already be
+    /// asserted before the operand fetch, and the branch's final idle cycle
+    /// does not poll.
+    #[serde(skip)]
+    branch_poll_irq: Option<bool>,
     /// Service an NMI at the next instruction boundary.
     service_nmi: bool,
     /// Service an IRQ at the next instruction boundary.
@@ -260,6 +265,7 @@ impl Cpu {
         self.nmi_latched = false;
         self.prev_latched = false;
         self.prev_irq = false;
+        self.branch_poll_irq = None;
         self.service_nmi = false;
         self.service_irq = false;
     }
@@ -285,6 +291,7 @@ impl Cpu {
         } else {
             let opcode = self.fetch(bus);
             let i_before = self.registers.p.contains(Status::INTERRUPT);
+            self.branch_poll_irq = None;
             self.execute(bus, opcode);
 
             // The 6502 polls interrupt lines during the penultimate cycle.
@@ -305,7 +312,8 @@ impl Cpu {
             } else {
                 self.registers.p.contains(Status::INTERRUPT)
             };
-            if self.prev_irq && !poll_i {
+            let poll_irq = self.branch_poll_irq.take().unwrap_or(self.prev_irq);
+            if poll_irq && !poll_i {
                 self.service_irq = true;
             }
         }
@@ -842,7 +850,13 @@ impl Cpu {
     }
 
     fn branch(&mut self, bus: &mut impl CpuBus, condition: bool) {
+        // The IRQ line is sampled before the operand fetch. A taken in-page
+        // branch polls again after that fetch but its final idle cycle does
+        // not poll, so an IRQ that only asserts there waits for the next
+        // instruction.
+        let irq_before = self.last_irq;
         let offset = self.fetch(bus) as i8;
+        let irq_after = self.last_irq;
         if condition {
             // Cycle 3: dummy read of the next opcode address.
             self.read(bus, self.registers.pc);
@@ -851,6 +865,8 @@ impl Cpu {
             if (old & 0xFF00) != (target & 0xFF00) {
                 // Cycle 4: dummy read at the old high byte with the new low byte.
                 self.read(bus, (old & 0xFF00) | (target & 0x00FF));
+            } else {
+                self.branch_poll_irq = Some(irq_before && irq_after);
             }
             self.registers.pc = target;
         }
