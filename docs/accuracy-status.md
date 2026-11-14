@@ -4,7 +4,7 @@ Measured on the reference-parity core (`nes_accuracy_core`, MIT with
 documented ISC adaptations from ares). These are local runs
 against public test ROMs placed in `test-roms/` (gitignored).
 
-## Current summary (2026-11-13)
+## Current summary (2026-11-14)
 
 | Gate | Result |
 |---|---|
@@ -14,7 +14,7 @@ against public test ROMs placed in `test-roms/` (gitignored).
 | `ppu_vbl_nmi` | **12 / 12** |
 | `ppu_sprites` | **19 / 19** |
 | AccuracyCoin v3.1.0 isolated | **146 / 146 non-DRAW** (146/151 total, 0 failed, 5 DRAW skips, 0 unrun, 199,320 frames) |
-| Test suite | **424 core unit tests** plus the ROM-backed suites; **472 workspace tests**, 0 failed |
+| Test suite | **477 workspace tests**, 0 failed, plus the ROM-backed suites |
 
 Compatibility, local licensed 7,101-image NES library:
 
@@ -34,24 +34,41 @@ sample lands on fade/transition frames. "Rendering" is a boot smoke test, not
 a completion claim. The current audit, mapper breadth and per-mapper gaps are
 in `docs/mapper-audit.md`; the dated measurements are below.
 
-Performance: `unko bench --synthetic 3000 --min-fps 300` measures **784.7 fps**
-(13.06x real time, 1.274 ms/frame); release save states are 417,054 bytes at
+Performance: `unko bench --synthetic 3000 --min-fps 300` measures **791.6 fps**
+(13.17x real time, 1.263 ms/frame); release save states are 417,054 bytes at
 172 us save / 237 us restore. Details in `docs/performance.md`.
 
-## MMC3 A12 IRQ clocking (2026-11-13)
+## Public test-ROM suite (2026-11-14)
 
-The MMC3 scanline counter now clocks on filtered PPU A12 rising edges instead
-of a scanline-boundary callback. `$2006`/`$2007` address changes feed the same
-filter, the low-time threshold is three CPU cycles (nine NTSC PPU dots), and
+Fresh runs over the two reference trees (default NTSC, 1500 frames, screen-text
+verdicts including the alternate framebuffer font):
+
+| Tree | Pass | Fail | No verdict |
+|---|---:|---:|---:|
+| RustyNES tree (341) | 157 | 13 | 171 |
+| NESdev archive (263) | 136 | 12 | 115 |
+
+The remaining failures are region/selector/input caveats plus one screen-only
+CPU residual: the seven PAL APU singles (pass with `UNKO_REGION=pal`), three
+MMC3 revision rows (pass with `UNKO_MMC3_ALT=1`), `read_joy3/count_errors`
+(input script), and `cpu_exec_space_ppuio` (dummy fetch of a one-byte opcode).
+
+`dma_4016_read` now prints `08 08 07 08 08` and passes; all five
+`cpu_interrupts_v2` singles pass, including `5-branch_delays_irq`.
+
+## MMC3 A12 IRQ clocking (2026-11-14)
+
+The MMC3 scanline counter clocks on filtered PPU A12 rising edges instead of
+a scanline-boundary callback. `$2006`/`$2007` address changes feed the same
+filter, the low-time threshold is six CPU cycles (18 NTSC PPU dots), and
 sprite fetches are restricted to visible and pre-render lines. All MMC3
 variants forward the shared A12 detector.
 
-`mmc3_test_2` results: **5/6** with the alternate-revision selector —
-`1-clocking`, `2-details`, `3-A12_clocking`, `5-MMC3` and `6-MMC3_alt` pass.
-Without the selector the default MMC3B/C behavior fails the alternate row, as
-expected. `4-scanline_timing` fails only the line-239 `$2000=$10` boundary
-(test 12). The combined `mmc3_test` suite's `6-MMC6` also passes with the
-alternate selector. The selector is exposed as
+`mmc3_test_2` results: **6/6** with the alternate-revision selector —
+`1-clocking`, `2-details`, `3-A12_clocking`, `4-scanline_timing`, `5-MMC3` and
+`6-MMC3_alt` pass. Without the selector the default MMC3B/C behavior fails the
+alternate row, as expected. The combined `mmc3_test` suite's `6-MMC6` also
+passes with the alternate selector. The selector is exposed as
 `Settings -> Advanced -> Alternate MMC3 IRQ revision` (and
 `Core::set_mmc3_alternate`). AccuracyCoin remains
 **146/146 non-DRAW**, and the 20/120-frame library audit is unchanged

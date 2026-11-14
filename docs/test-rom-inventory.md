@@ -44,14 +44,18 @@ Still absent: **VS. System BIOS/palette dumps**, **PlayChoice-10 game ROMs**,
 
 This adds the x0000 APU tests, `holy_mapperel`, `extra/{apu,cpu,mappers,ppu}`,
 `audio-tests`, `dap`, `mmc5`, `mmc1_a12`, `m22` and a full copy of the blargg
-suites. Latest probe run:
+suites. Latest probe run (2026-11-14, screen-text verdicts including the
+alternate framebuffer font):
 
-- **149 passes** in the default run (156 with PAL APU run in PAL mode)
-- **15 failures** (the NESdev 15, since the three extra APU failures now pass);
-  8 with PAL APU in PAL mode
-- **177 without a machine-readable verdict**
+- **157 passes** in the default NTSC run. Running the PAL singles in PAL mode
+  moves all seven to pass (**164**), leaving **6** failures.
+- **13 failures**: seven PAL APU singles (region), three MMC3 revision rows
+  (selector), `read_joy3/count_errors` (input) and two copies of
+  `cpu_exec_space_ppuio` (screen-only CPU dummy-fetch residual).
+- **171 without a machine-readable verdict**
 
-The x0000 `apu_test_1..10` write-coincidence tests now all pass.
+The x0000 `apu_test_1..10` write-coincidence tests and the two previously open
+blargg failures (`dma_4016_read`, `5-branch_delays_irq`) now pass.
 
 `holy_mapperel` runs to the title/menu path but produces a uniform frame in
 the headless probe, so it needs an input script or a screenshot oracle.
@@ -76,31 +80,29 @@ rows from the nametables, and stops on `Passed`/`Failed`. Many NESdev tests
 only report by audio, so a missing result is not a failure. `UNKO_REGION=pal`
 forces PAL timing and `UNKO_MMC3_ALT=1` selects the alternate MMC3 revision.
 
-Latest run, including the screen-text extractor:
+Latest run (2026-11-14):
 
-- **129 machine-readable passes** and **15 failures** in the default
-  NTSC-region run. The 7 PAL APU failures all pass with PAL timing selected,
-  leaving **8** failures; the actionable ones are:
-  - `cpu_interrupts_v2/rom_singles/5-branch_delays_irq.nes` — branch/IRQ
-    delay table CRC mismatch
-  - `dmc_dma_during_read4/dma_4016_read.nes` — controller read corruption
-    during DMC DMA
-  - `mmc3_test/4-scanline_timing.nes` and its `mmc3_test_2` twin — line-239
-    `$2000=$10` one-dot boundary
+- **136 passes** and **12 failures** in the default NTSC run. The seven PAL APU
+  failures all pass with PAL timing selected, leaving **5** failures:
+  - three MMC3 revision rows, which pass with the alternate selector,
+  - `read_joy3/count_errors`, which needs a controller script,
+  - `cpu_exec_space/test_cpu_exec_space_ppuio`, a screen-only CPU dummy-fetch
+    residual.
 - **Revision-dependent passes:** `mmc3_irq_tests/5.MMC3_rev_A`,
   `mmc3_test/6-MMC6` and `mmc3_test_2/6-MMC3_alt` pass when the alternate
   MMC3A/NEC revision is selected (`UNKO_MMC3_ALT=1` or Settings -> Advanced).
-  Without it they count as the three remaining revision failures.
+  Without it they count as the three revision failures.
 - **Input-dependent:** `read_joy3/thorough_test` needs a controller script;
   the power-on part of `cpu_reset/registers` now passes and the second part
   waits for an injected reset.
-- **119 without a machine-readable result**: visual, audio, input-driven or
+- **115 without a machine-readable result**: visual, audio, input-driven or
   screen-only tests. They load and run without panic; verdicts need a
   screenshot/audio oracle or a controller script.
 
-The MMC3 A12 work (see `docs/accuracy-status.md`) fixed
-`1-clocking`, `2-details`, `3-A12_clocking`, `5-MMC3`, `6-MMC3_alt` and
-`6-MMC6`; only the line-239 one-dot boundary remains.
+The MMC3 A12, APU frame-window, DMC-alias and branch-poll fixes (see
+`docs/accuracy-status.md`) clear `1-clocking`, `2-details`, `3-A12_clocking`,
+`5-MMC3`, `6-MMC3_alt`, `6-MMC6`, the line-239 one-dot boundary, the seven
+PAL APU singles in PAL mode, `dma_4016_read` and `5-branch_delays_irq`.
 
 ## Still needed
 

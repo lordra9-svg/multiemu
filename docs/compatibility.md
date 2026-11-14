@@ -104,8 +104,8 @@ Public mapper-specific status:
 | `nestest` | 8,980/8,980 lines exact |
 | blargg CPU / PPU / APU | CPU and PPU suites green; APU 13/13 |
 | x0000 APU write-window tests | 10/10 pass |
-| NESdev archive | 129 pass / 15 fail / 119 visual/audio/input-only; 8 failures with PAL APU in PAL mode |
-| RustyNES test tree | 149 pass / 15 fail / 177 visual/audio/input-only; 156 / 8 with PAL APU in PAL mode |
+| NESdev archive | 136 pass / 12 fail / 115 visual/audio/input-only; 5 failures with PAL APU in PAL mode and the alternate MMC3 selector |
+| RustyNES test tree | 157 pass / 13 fail / 171 visual/audio/input-only; 164 / 6 with PAL APU in PAL mode |
 | Workspace tests | 477 pass, 0 failed |
 
 The actionable accuracy failures are tracked in

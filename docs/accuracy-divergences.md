@@ -6,7 +6,7 @@ ROM). It is required by the accuracy charter in `docs/accuracy.md`. Add a dated
 entry whenever a divergence is found, and remove it only when a test or a
 hardware capture proves the behaviour matches.
 
-Current snapshot: **2026-11-13**, AccuracyCoin v3.1.0, isolated battery
+Current snapshot: **2026-11-14**, AccuracyCoin v3.1.0, isolated battery
 **146/146 non-DRAW rows passed** (146/151 total, 0 failed, 5 DRAW skips,
 0 unrun).
 
@@ -18,14 +18,29 @@ image. "ErrorCode N" below is the ROM's `value >> 2` index; the CLI reports
 
 None in AccuracyCoin. All non-DRAW rows pass.
 
-### NESdev screen-suite failures (2026-11-13)
+### NESdev screen-suite status (2026-11-14)
 
-- `cpu_interrupts_v2/5-branch_delays_irq` — the branch-delay/IRQ table CRC
-  differs from the reference; the other four interrupt singles pass.
-- `dmc_dma_during_read4/dma_4016_read` — controller bit reads during DMC DMA
-  are corrupted (the other four DMC/read tests pass).
-- The `read_joy3/thorough_test` failure is input-dependent (no controller
-  script is supplied).
+Both previously open public failures now pass:
+
+- `cpu_interrupts_v2/5-branch_delays_irq` — a taken in-page branch now
+  samples the IRQ line before its operand fetch and skips the poll on its
+  final idle cycle, so the whole delay table and CRC match.
+- `dmc_dma_during_read4/dma_4016_read` — the APU register alias is applied
+  only to the real DMC sample-fetch address, not to halt/alignment dummy reads;
+  the ROM now prints `08 08 07 08 08` and passes.
+
+The remaining default-NTSC failures in the public trees are not open accuracy
+divergences:
+
+- The seven PAL APU singles fail only when the ROM runs with NTSC timing and
+  all pass with `UNKO_REGION=pal`.
+- `mmc3_test_2/6-MMC3_alt`, `mmc3_test/6-MMC6` and
+  `mmc3_irq_tests/5.MMC3_rev_A` pass with the alternate MMC3A/NEC revision
+  selected (`UNKO_MMC3_ALT=1` or Settings → Advanced).
+- `read_joy3/count_errors` is input-dependent (no controller script).
+- `cpu_exec_space/test_cpu_exec_space_ppuio` is a screen-only ROM that reports
+  a missing dummy fetch for the `AND` one-byte opcode; it is a CPU fetch
+  residual recorded here rather than an AccuracyCoin regression.
 
 ### MMC3 A12 timing (2026-11-14)
 

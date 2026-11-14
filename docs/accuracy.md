@@ -131,8 +131,8 @@ unko diff ref.trace new.trace
 - [x] `nestest` 0 diff (8980/8980 trace lines, including CYC).
 - [x] blargg `instr_timing` and `instr_basics` pass.
 - [x] Unit tests for reset, addressing, branches and stack.
-- [ ] Interrupt edge/branch-delay semantics and DMA: A2/A3 (tests are staged
-      and ignored until the PPU/APU provide the IRQ sources).
+- [x] Interrupt edge/branch-delay semantics and DMA: `cpu_interrupts_v2` 5/5
+      and `dmc_dma_during_read4` pass.
 
 See `docs/accuracy-status.md` for the measured log.
 
