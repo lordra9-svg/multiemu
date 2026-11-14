@@ -91,6 +91,14 @@ The `unko-nes-host` adapter:
 The core is deterministic and has no window, audio-device or filesystem
 dependency. The desktop shell owns SDL3 input, cpal output and all files.
 
+## ROM manager core
+
+`unko-rom-manager` is a separate, non-emulator feature core: DAT auditing,
+1G1R selection, fixdat/CSV reports and safe rebuilding. It has no dependency
+on `unko-core`, `unko-nes` or the app, and CI enforces that boundary. The app
+links it only for the Tools → ROM Manager window; the same crate ships a
+headless `unko-rom-manager` binary and can be used from any Rust project.
+
 ## What is deliberately not here yet
 
 - C ABI / dynamic plugin loading.
