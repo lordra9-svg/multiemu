@@ -1899,25 +1899,29 @@ impl System {
             }
             0x8000..=0xFFFF => {
                 let rom = self.genie_read(address, self.cart.cpu_read(address));
-                // The APU registers are mirrored every $20 bytes; a DMA read
-                // whose low five bits select a controller port conflicts with
-                // it: bits 5-7 come from ROM, bits 0-4 from the controller.
-                match address & 0x1F {
-                    // $4015 does not drive the data bus, but the read still
-                    // acknowledges/clears the frame IRQ flag.
-                    0x15 => {
-                        // $4015 acknowledges the frame IRQ, but the sample
-                        // ROM value still drives the external data bus.
-                        self.apu.read_status();
-                        rom
+                // The DMC sample fetch drives the sample address onto the bus.
+                // When its low five bits select an APU register, the fetched
+                // byte still triggers that register: `$4015` acknowledges the
+                // frame IRQ and `$4016`/`$4017` clock the pads. Halt/alignment
+                // dummy reads use the CPU address instead and must not alias.
+                if address == self.apu.dmc.address {
+                    match address & 0x1F {
+                        // Reading $4015 does not drive the bus, but it still
+                        // acknowledges the frame IRQ.
+                        0x15 => {
+                            self.apu.read_status();
+                            rom
+                        }
+                        0x16 => {
+                            (rom & 0xA0) | (self.open_bus & 0x40) | (self.read_controller(0) & 0x1F)
+                        }
+                        0x17 => {
+                            (rom & 0xA0) | (self.open_bus & 0x40) | (self.read_controller(1) & 0x1F)
+                        }
+                        _ => rom,
                     }
-                    0x16 => {
-                        (rom & 0xA0) | (self.open_bus & 0x40) | (self.read_controller(0) & 0x1F)
-                    }
-                    0x17 => {
-                        (rom & 0xA0) | (self.open_bus & 0x40) | (self.read_controller(1) & 0x1F)
-                    }
-                    _ => rom,
+                } else {
+                    rom
                 }
             }
             _ => self.open_bus,
