@@ -1720,7 +1720,7 @@ impl App {
             if entries.len() >= 32 {
                 error = Some("32 cheats maximum".into());
             } else {
-                match nes_accuracy_core::GameGenie::parse(&code) {
+                match unko_nes::GameGenie::parse(&code) {
                     Ok(decoded) => {
                         entries.push(CheatEntry {
                             cheat: unko_core::Cheat::GameGenie {

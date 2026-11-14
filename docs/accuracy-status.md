@@ -1,6 +1,6 @@
 # Accuracy status
 
-Measured on the reference-parity core (`nes_accuracy_core`, MIT with
+Measured on the reference-parity core (`unko-nes`, MIT with
 documented ISC adaptations from ares). These are local runs
 against public test ROMs placed in `test-roms/` (gitignored).
 
@@ -82,12 +82,12 @@ check. See `docs/accuracy-divergences.md` for the two open MMC3 failures.
 
 | Test | Result | Evidence |
 |---|---|---|
-| `nestest` golden log | **8980 / 8980 lines**, registers + PC + SP + P + CYC all match | `cargo test -p nes_accuracy_core --test nestest -- --nocapture` |
-| blargg `instr_timing` | **Passed** (official, NOP/SBC, unofficial) | `cargo test -p nes_accuracy_core --test blargg blargg_instr_timing -- --nocapture` |
-| blargg `instr_basics` | **Passed** | `cargo test -p nes_accuracy_core --test blargg blargg_instr_basics -- --nocapture` |
+| `nestest` golden log | **8980 / 8980 lines**, registers + PC + SP + P + CYC all match | `cargo test -p unko-nes --test nestest -- --nocapture` |
+| blargg `instr_timing` | **Passed** (official, NOP/SBC, unofficial) | `cargo test -p unko-nes --test blargg blargg_instr_timing -- --nocapture` |
+| blargg `instr_basics` | **Passed** | `cargo test -p unko-nes --test blargg blargg_instr_basics -- --nocapture` |
 | blargg interrupt suites | see A2/A3 | requires PPU NMI + APU/DMA timing; tests are `#[ignore]` |
 
-The CPU implementation in `crates/nes_accuracy_core/src/cpu.rs` is
+The CPU implementation in `crates/unko-nes/src/cpu.rs` is
 cycle-stepped: every cycle is a bus access or an explicit internal cycle, and
 the nestest comparison includes the absolute cycle counter, not just registers.
 
@@ -313,8 +313,8 @@ missing mapper feature.
 
 ### Core ABI
 
-New crate `nes_accuracy_core` implements `unko_core::Core`
-(id `nes_accuracy_core`), the only registered NES core. The CLI can select it
+New crate `unko-nes` plus the `unko-nes-host` adapter implements
+`unko_core::Core` (id `nes_accuracy_core`), the only registered NES core. The CLI can select it
 explicitly with `--core nes_accuracy_core`.
 
 ### Commercial verification
@@ -1973,7 +1973,7 @@ Continued the *Gimmick!* audio investigation with the MiSTer Sunsoft HDL
   `docs/accuracy-divergences.md`; neither is audible and neither fails a test
   ROM.
 
-New differential tooling in `crates/nes_accuracy_core/examples`: `exectrace`
+New differential tooling in `crates/unko-nes/examples`: `exectrace`
 (per-instruction CPU cycle/PC) and `expwrites` (per-cycle APU and expansion
 writes), both behind `--features apu-trace`.
 

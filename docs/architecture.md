@@ -22,16 +22,17 @@ input, audio, screenshot or save-state code.
 └───────────────▲──────────────────────────────┬───────────────┘
                 │ implements                    │ factory()
 ┌───────────────┴──────────────────────────────▼───────────────┐
-│ core crates: nes_accuracy_core (others later)                │
+│ core crates: unko-nes (standalone) · unko-nes-host (adapter) │
 │  SNES core · GB core · ...                                   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 The host never depends on a core crate. It depends on `unko-core` and builds
 a `Registry` from the cores it chooses to link (or, later, load as plugins).
-`nes_accuracy_core` is the only NES backend: the crate contains the
-reference-parity system itself plus its `Core` ABI adapter. The former
-TetaNES adapter has been retired.
+`unko-nes` is the only NES backend: it contains the reference-parity system
+itself and has **no** dependency on `unko-core` or the shell. `unko-nes-host`
+is a thin adapter that implements `unko_core::Core` on top of it and is the
+crate the app and CLI link. The former TetaNES adapter has been retired.
 
 `unko-rom` is a sibling boundary for *input*: it discovers loose ROMs and
 members of `.zip`/`.7z`/`.rar` archives, parses iNES metadata, and returns
@@ -78,8 +79,8 @@ the cores you chose to link.
 
 ## NES backend
 
-`nes_accuracy_core` owns the cycle-stepped CPU, PPU, APU, cartridge and system
-bus. Its `Core` adapter:
+`unko-nes` owns the cycle-stepped CPU, PPU, APU, cartridge and system bus.
+The `unko-nes-host` adapter:
 
 - loads iNES/NES 2.0 and raw FDS images;
 - exposes RGBA video and mono f32 audio through borrowed buffers;

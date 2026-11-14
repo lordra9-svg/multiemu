@@ -72,7 +72,7 @@ BIOS from Settings → Paths and persists disk writes.
 Downloaded to a temporary directory and run with:
 
 ```sh
-cargo run --release -p nes_accuracy_core --example testrom -- <rom> 1200
+cargo run --release -p unko-nes --example testrom -- <rom> 1200
 ```
 
 `testrom` polls the cartridge work-RAM text at `$6000`, then extracts ASCII
@@ -147,6 +147,6 @@ PAL APU singles in PAL mode, `dma_4016_read` and `5-branch_delays_irq`.
 
 ## Tool
 
-`crates/nes_accuracy_core/examples/testrom.rs` is the probe used above. It
+`crates/unko-nes/examples/testrom.rs` is the probe used above. It
 accepts a ROM and a frame budget and prints the `$6000` text, `$F0`/`$F8`
 completion bytes and the number of distinct final-frame colors.

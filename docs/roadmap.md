@@ -90,7 +90,7 @@ The main effort is now the reference-parity accuracy core. Details in
 
 - [x] Cargo workspace, MIT license, third-party notices.
 - [x] `unko-core`: `Core`, `CoreInfo`, `Registry`, video/audio/input/state types.
-- [x] `nes_accuracy_core`: load, frames, RGBA video, f32 audio, input, SRAM
+- [x] `unko-nes`: load, frames, RGBA video, f32 audio, input, SRAM
       and versioned save states. The TetaNES adapter has been retired.
 - [x] `unko-cli`: `info`, `run` (PPM screenshots), `bench`.
 - [x] App shell for five targets: shared `unko_app` library with desktop,
@@ -151,7 +151,8 @@ The main effort is now the reference-parity accuracy core. Details in
 - [x] Versioned accuracy-core save states and retirement of the TetaNES adapter.
 - [x] Test-ROM harness: `nestest`, blargg CPU/PPU/APU, `ppu_vbl_nmi`, MMC3 A12,
       and the AccuracyCoin isolated battery. Pass counts are recorded in
-      `docs/accuracy-status.md`; the suites run in `crates/nes_accuracy_core/tests/`.
+      `docs/accuracy-status.md`; the core tests run in `crates/unko-nes/tests/`
+      and the AccuracyCoin harness in `crates/unko-nes-dev/`.
 - [x] Mapper audit against a licensed ROM library: 7,101 images in four
       batches, results and ranked gaps in `docs/mapper-audit.md`. 7,073 load,
       0 unsupported, 28 failures; MMC2/MMC4 followed from it.

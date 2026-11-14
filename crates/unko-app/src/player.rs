@@ -231,7 +231,7 @@ impl Player {
         let rom = unko_rom::load(entry).map_err(|err| format!("read ROM: {err}"))?;
         let mut registry = Registry::new();
         // The accuracy core is the default now that it owns save states.
-        registry.register(nes_accuracy_core::registration());
+        registry.register(unko_nes_host::registration());
         let mut core = registry
             .create_default(SystemId::Nes)
             .ok_or("no NES core registered")?;
@@ -1529,7 +1529,7 @@ mod tests {
     #[test]
     fn rewind_replays_to_the_exact_state() {
         let rom = minimal_nrom();
-        let mut core = nes_accuracy_core::AccuracyCore::new();
+        let mut core = unko_nes_host::AccuracyCore::new();
         core.load(&rom, &unko_core::LoadOptions::default())
             .expect("load");
 
@@ -1568,7 +1568,7 @@ mod tests {
     #[ignore]
     fn bench_state_and_frame_cost() {
         let rom = minimal_nrom();
-        let mut core = nes_accuracy_core::AccuracyCore::new();
+        let mut core = unko_nes_host::AccuracyCore::new();
         core.load(&rom, &unko_core::LoadOptions::default())
             .expect("load");
         for _ in 0..10 {
@@ -1622,11 +1622,11 @@ mod tests {
     #[test]
     fn run_ahead_restore_matches_plain_emulation() {
         let rom = minimal_nrom();
-        let mut plain = nes_accuracy_core::AccuracyCore::new();
+        let mut plain = unko_nes_host::AccuracyCore::new();
         plain
             .load(&rom, &unko_core::LoadOptions::default())
             .expect("load plain");
-        let mut ahead = nes_accuracy_core::AccuracyCore::new();
+        let mut ahead = unko_nes_host::AccuracyCore::new();
         ahead
             .load(&rom, &unko_core::LoadOptions::default())
             .expect("load ahead");

@@ -1,0 +1,38 @@
+[package]
+name = "unko-nes"
+description = "Standalone, reference-parity NES core (no emulator-shell dependencies)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+[features]
+default = ["save-states", "cheats", "debug"]
+# Serialize/restore whole-machine snapshots.
+save-states = []
+# Game Genie and RAM cheat application.
+cheats = []
+# Debugger peek/poke and state inspection helpers.
+debug = []
+# Per-CPU-cycle APU channel trace used by the `apudump` differential example.
+# Off by default so the release hot path has no trace branch.
+apu-trace = []
+
+[[example]]
+name = "apudump"
+required-features = ["apu-trace"]
+
+[[example]]
+name = "exectrace"
+required-features = ["apu-trace"]
+
+[[example]]
+name = "expwrites"
+required-features = ["apu-trace"]
+
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+bincode = "1.3"
+serde-big-array = "0.5"

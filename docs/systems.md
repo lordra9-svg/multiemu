@@ -10,8 +10,8 @@ Status: `shipped` · `planned` · `deferred` · `reference-only`
 
 | | |
 |---|---|
-| Core | `nes_accuracy_core` (Rust, MIT + documented ISC ares adaptations) |
-| Adapter | `crates/nes_accuracy_core` (built-in `Core` implementation) |
+| Core | `unko-nes` (standalone Rust crate, MIT + documented ISC ares adaptations) |
+| Adapter | `crates/unko-nes-host` (built-in `Core` implementation) |
 | Accuracy bar | reference parity; see `docs/accuracy.md` |
 | Scope | licensed library, FDS, PAL/Dendy, expansion audio, Zapper, NSF, 405 enhanced video |
 | Status | default and only NES core; 146/146 non-DRAW AccuracyCoin rows; 7,073/7,101 images load (99.6%), 0 unsupported mapper IDs, 28 truncated dumps; 6,490 render by 120 frames |
@@ -89,6 +89,9 @@ implementation.
 
 | Core id | Crate | Role |
 |---|---|---|
-| `nes_accuracy_core` | `nes_accuracy_core` | reference-parity NES backend |
+| `nes_accuracy_core` | `unko-nes-host` | reference-parity NES backend; links `unko-nes` |
 
-Select with `--core nes_accuracy_core` in the CLI; it is also the default.
+The stable registry id remains `nes_accuracy_core` so existing save-state
+filenames and trace headers keep working. The reusable core crate is
+`unko-nes`; `unko-nes-host` is only the `unko_core` adapter. Select with
+`--core nes_accuracy_core` in the CLI; it is also the default.

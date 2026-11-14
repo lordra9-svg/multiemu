@@ -1,0 +1,10 @@
+[package]
+name = "unko-nes-dev"
+description = "Development harnesses for the Unko NES core (AccuracyCoin battery)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+unko-nes = { path = "../unko-nes" }

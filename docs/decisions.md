@@ -82,7 +82,7 @@ The NES target is **reference parity**, the license stays MIT, the core is pure
 Rust, and there is no deadline. The consequences:
 
 - A second NES core is written from public hardware documentation and
-  ISC-licensed ares source (`nes_accuracy_core`), independent of any GPL
+  ISC-licensed ares source (`unko-nes`), independent of any GPL
   source. ares adaptations are attributed in `PROVENANCE.md` and `NOTICE`.
 - The accuracy core became the default, gained versioned save states, and
   TetaNES was removed from the workspace and dependencies.

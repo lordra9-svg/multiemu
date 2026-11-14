@@ -1,7 +1,7 @@
 # Accuracy charter — NES
 
 Decision: **reference parity, Rust, MIT with documented ISC adaptations**, no
-deadline. `nes_accuracy_core` is the only NES core; TetaNES was retired after
+deadline. `unko-nes` is the only NES core; TetaNES was retired after
 the accuracy core met the mapper and save-state bar.
 
 ## 1. What "accurate" means
@@ -57,7 +57,7 @@ the intentional approximations live in that file.
 - Implementers of this core **do not read GPL emulator source**. That includes
   MesenCE, RustyNES and Dolphin.
 - ares is ISC and may be read or adapted with attribution. The adapted areas
-  are recorded in `crates/nes_accuracy_core/PROVENANCE.md`; the ares ISC
+  are recorded in `crates/unko-nes/PROVENANCE.md`; the ares ISC
   notice is in `licenses/ares-LICENSE.txt` and `NOTICE`.
 - Allowed inputs: NESdev wiki, chip datasheets, public hardware notes, test ROM
   behaviour, our own hardware captures, black-box runs of reference binaries,
@@ -112,7 +112,7 @@ Order inside the core:
 ## 6. Milestones
 
 ### A0 — harness and skeleton (done)
-- [x] Accuracy crate (`nes_accuracy_core`), now the only NES core.
+- [x] Accuracy crate (`unko-nes`), now the only NES core.
 - [x] Region timing table, CPU bus contract, CPU registers/reset.
 - [x] Deterministic frame/audio trace format and `unko trace` / `diff`.
 - [x] Provenance rules and crate-level `PROVENANCE.md`.

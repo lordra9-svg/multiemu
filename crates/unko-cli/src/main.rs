@@ -180,7 +180,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                             Ok(rom) => {
                                 let result =
                                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        let mut system = nes_accuracy_core::System::from_ines(&rom)
+                                        let mut system = unko_nes::System::from_ines(&rom)
                                             .map_err(|e| e.to_string())?;
                                         for _ in 0..frames {
                                             system.run_frame();
@@ -345,8 +345,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                     continue;
                 };
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut system = nes_accuracy_core::System::from_ines(&rom)
-                        .map_err(|err| err.to_string())?;
+                    let mut system =
+                        unko_nes::System::from_ines(&rom).map_err(|err| err.to_string())?;
                     let mut hash = FNV_OFFSET;
                     for _ in 0..frames {
                         system.run_frame();
@@ -521,8 +521,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
             let (_, rom) = load_arg(&path)?;
             if dump_ppu || dump_chr.is_some() || break_pc.is_some() {
-                let mut system =
-                    nes_accuracy_core::System::from_ines(&rom).map_err(|e| e.to_string())?;
+                let mut system = unko_nes::System::from_ines(&rom).map_err(|e| e.to_string())?;
                 if let Some(pc) = break_pc {
                     let limit = 2_000_000u32;
                     for _ in 0..limit {
@@ -738,7 +737,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 let disk = fs::read(&path)?;
                 let bios = fs::read(&bios)?;
                 let mut system =
-                    nes_accuracy_core::System::from_fds(&disk, &bios).map_err(|e| e.to_string())?;
+                    unko_nes::System::from_fds(&disk, &bios).map_err(|e| e.to_string())?;
                 let mut text = String::from("# unko trace v1\n");
                 text.push_str("core nes_accuracy_core\n");
                 text.push_str(&format!("frames {frames}\n"));
@@ -822,8 +821,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 .parse()
                 .map_err(|_| "boundary: bad frame count")?;
             let (_entry, rom) = load_arg(&path)?;
-            let mut system =
-                nes_accuracy_core::System::from_ines(&rom).map_err(|e| e.to_string())?;
+            let mut system = unko_nes::System::from_ines(&rom).map_err(|e| e.to_string())?;
             println!("# frame cpu_cycles scanline dot");
             for index in 0..frames {
                 system.run_frame();
@@ -1136,7 +1134,7 @@ fn synthetic_benchmark_rom() -> Vec<u8> {
 
 fn registry() -> Registry {
     let mut registry = Registry::new();
-    registry.register(nes_accuracy_core::registration());
+    registry.register(unko_nes_host::registration());
     registry
 }
 
@@ -1371,7 +1369,7 @@ fn run_parity(
         let Ok(rom) = unko_rom::load(entry) else {
             continue;
         };
-        let Ok(mut system) = nes_accuracy_core::System::from_ines(&rom) else {
+        let Ok(mut system) = unko_nes::System::from_ines(&rom) else {
             continue;
         };
         let mapper = system.cart.mapper();

@@ -17,7 +17,8 @@ path = "src/main.rs"
 
 [dependencies]
 unko-core.workspace = true
-nes_accuracy_core = { path = "../nes_accuracy_core" }
+unko-nes = { path = "../unko-nes" }
+unko-nes-host = { path = "../unko-nes-host" }
 unko-rom = { path = "../unko-rom" }
 eframe = { version = "0.31.1", default-features = false, features = ["default_fonts"] }
 egui = "0.31.1"

@@ -3,7 +3,9 @@ resolver = "2"
 members = [
     "crates/unko-core",
     "crates/unko-rom",
-    "crates/nes_accuracy_core",
+    "crates/unko-nes",
+    "crates/unko-nes-host",
+    "crates/unko-nes-dev",
     "crates/unko-cli",
     "crates/unko-app",
 ]

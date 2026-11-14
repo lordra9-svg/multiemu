@@ -11,7 +11,7 @@ a clean, multi-system emulator shell with a reference-parity NES core.
 - **No GPL source** (MesenCE, RustyNES, Dolphin, gopher64) may be copied,
   translated, vendored or linked. They are behaviour oracles only.
 - ares (ISC) may be adapted with attribution. Record every such adaptation in
-  `crates/nes_accuracy_core/PROVENANCE.md` and keep the ares notice in
+  `crates/unko-nes/PROVENANCE.md` and keep the ares notice in
   `NOTICE` / `licenses/ares-LICENSE.txt`.
 - Keep the accuracy claims honest. Do not raise the accuracy badge, and do not
   remove a divergence from `docs/accuracy-divergences.md`, without a passing
@@ -35,7 +35,7 @@ present.
 2. Reproduce it with the isolated runner:
 
    ```sh
-   cargo run -p nes_accuracy_core --release --example accuracycoin -- \
+   cargo run -p unko-nes-dev --release --example accuracycoin -- \
      test-roms/AccuracyCoin.nes test-roms/AccuracyCoin.tsv --isolated --only 46A
    ```
 
@@ -45,7 +45,7 @@ present.
    battery:
 
    ```sh
-   cargo run -p nes_accuracy_core --release --example accuracycoin -- \
+   cargo run -p unko-nes-dev --release --example accuracycoin -- \
      test-roms/AccuracyCoin.nes test-roms/AccuracyCoin.tsv --isolated
    ```
 

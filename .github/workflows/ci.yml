@@ -41,7 +41,16 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Clippy (debug tooling)
-        run: cargo clippy -p nes_accuracy_core --features apu-trace --all-targets -- -D warnings
+        run: cargo clippy -p unko-nes --features apu-trace --all-targets -- -D warnings
+
+      - name: Standalone core (no unko-core)
+        run: |
+          cargo check -p unko-nes --no-default-features
+          if cargo tree -p unko-nes | grep -q unko-core; then
+            echo "unko-nes must not depend on unko-core"
+            exit 1
+          fi
+          cargo check -p unko-nes-host
 
       - name: Test
         run: cargo test --workspace
@@ -84,7 +93,9 @@ jobs:
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
       - name: Check NES core
-        run: cargo check -p nes_accuracy_core --target ${{ matrix.target }}
+        run: cargo check -p unko-nes --target ${{ matrix.target }}
+      - name: Check host adapter
+        run: cargo check -p unko-nes-host --target ${{ matrix.target }}
       - name: Check app shell
         run: cargo check -p unko-app --target ${{ matrix.target }}
 

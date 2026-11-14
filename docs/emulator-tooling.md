@@ -163,7 +163,7 @@ gating:
   video/audio match counts, the first divergence of each, and the best
   alignment over ±N frames. This distinguishes a real rendering/audio defect
   from the known one-cycle frame-origin drift.
-- `cargo run -p nes_accuracy_core --features apu-trace --example apudump --
+- `cargo run -p unko-nes --features apu-trace --example apudump --
   <rom> <frame>` — prints every channel's DAC output and the mixed value for
   each CPU cycle of one frame (`cycle p1 p2 tri noise dmc mixed`), matching
   the reference oracle's `APU_TRACE=<frame>` records. The feature is off by

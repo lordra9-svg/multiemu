@@ -1,12 +1,13 @@
 # Unko
 
 A multi-platform, multi-core emulator shell written in Rust. The first system
-is the NES, powered by the reference-parity `nes_accuracy_core` behind a
+is the NES, powered by the reusable `unko-nes` core behind a
 system-agnostic interface.
 
 > **Rename:** this project was formerly `multi-emu` / `multiemu`. The emulator is
 > now **Unko**, the host crates are `unko-core`, `unko-rom`, `unko-cli` and
-> `unko-app`, and the NES core is `nes_accuracy_core` (`--core nes_accuracy_core`).
+> `unko-app`, the reusable NES core is `unko-nes`, and the host adapter is
+> `unko-nes-host` (registry id `nes_accuracy_core`).
 
 **Repository:** <https://github.com/lordra9-svg/unko>
 
@@ -59,7 +60,9 @@ Current figures, dated entries and the remaining limits are in
 crates/
   unko-core/         # SystemId, Core trait, video/audio/input/state types, registry
   unko-rom/          # discovery + .zip/.7z/.rar containers + iNES metadata
-  nes_accuracy_core/ # reference-parity NES core + its Core ABI adapter (MIT + documented ISC adaptations)
+  unko-nes/          # standalone reference-parity NES core (no unko-core dependency)
+  unko-nes-host/     # Core ABI adapter between unko-nes and unko-core
+  unko-nes-dev/      # AccuracyCoin battery and development harnesses
   unko-cli/          # headless runner: info, scan, run, verify, trace, diff, bench, corpus
   unko-app/          # desktop shell (Dolphin-inspired UX)
 docs/
@@ -81,7 +84,7 @@ docs/
 ```
 
 Target order: **NES → SNES (ares) → N64 (ares) → optional external Dolphin**.
-The NES track uses one core: `nes_accuracy_core`, a Rust core built to
+The NES track uses one core: `unko-nes`, a standalone Rust core built to
 reference parity. It is MIT with documented ISC-licensed adaptations from ares;
 MesenCE, RustyNES, gopher64 and Dolphin are GPL references or separate products.
 Details in `docs/systems.md`.
@@ -179,13 +182,37 @@ cargo run --release -p unko-cli -- corpus <library-dir> --frames 20
 To run the AccuracyCoin battery, supply the ROM and its catalog yourself:
 
 ```sh
-cargo run -p nes_accuracy_core --release --example accuracycoin -- \
+cargo run -p unko-nes-dev --release --example accuracycoin -- \
   test-roms/AccuracyCoin.nes test-roms/AccuracyCoin.tsv --isolated
 ```
 
+## Using the NES core in another project
+
+The `unko-nes` crate is standalone: it does not depend on `unko-core`, the
+CLI, the desktop shell, or any Unko state.
+
+```toml
+[dependencies]
+unko-nes = { git = "https://github.com/lordra9-svg/unko", branch = "main" }
+```
+
+```rust
+let mut nes = unko_nes::System::from_ines(&std::fs::read("game.nes")?)?;
+nes.set_sample_rate(48_000.0);
+nes.set_controller(0, 0);
+nes.run_frame();
+let rgba = nes.video();   // 256 × 240 RGBA8
+let audio = nes.audio();  // mono f32 samples for the frame
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Save states, cheats and debugger helpers are default features; build with
+`default-features = false` for a lean core. If you need the system-agnostic
+`unko_core::Core` interface, use the separate `unko-nes-host` adapter.
+
 ## Licensing
 
-Project code is MIT. Parts of the `nes_accuracy_core` NES core are adapted from
+Project code is MIT. Parts of the `unko-nes` NES core are adapted from
 ares under its ISC licence; attribution is in `NOTICE`,
 `licenses/ares-LICENSE.txt` and the crate's `PROVENANCE.md`. The desktop shell
 uses SDL3 (zlib), cpal, egui/eframe and the Rust audio/image crates listed in

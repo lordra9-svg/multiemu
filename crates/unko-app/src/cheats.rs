@@ -6,8 +6,8 @@
 use std::fs;
 use std::path::Path;
 
-use nes_accuracy_core::GameGenie;
 use unko_core::Cheat;
+use unko_nes::GameGenie;
 
 /// One editable cheat row.
 #[derive(Debug, Clone, PartialEq, Eq)]
