@@ -17453,7 +17453,7 @@ impl Mmc3A12 {
                 self.low_since = dots;
             }
         } else if self.low {
-            if dots.saturating_sub(self.low_since) >= 9 {
+            if dots.saturating_sub(self.low_since) >= 18 {
                 self.edges = self.edges.saturating_add(1);
             }
             self.low = false;

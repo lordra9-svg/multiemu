@@ -27,19 +27,12 @@ None in AccuracyCoin. All non-DRAW rows pass.
 - The `read_joy3/thorough_test` failure is input-dependent (no controller
   script is supplied).
 
-### MMC3 A12 timing (2026-11-13)
+### MMC3 A12 timing (2026-11-14)
 
-The new PPU-A12 clocking is 5/6 in `mmc3_test_2` with the alternate-revision
-selector:
-
-- `4-scanline_timing` — test 12 (`Scanline 239 IRQ should occur later when
-  $2000=$10`) is one dot late/early at the line-239 boundary. Tests for
-  scanlines 0 and 1 in both `$2000` modes pass, as do all `$2000=$08` cases.
-- `6-MMC3_alt` and the combined suite's `6-MMC6` pass when the alternate
-  MMC3A/NEC revision is selected; the default remains normal MMC3B/C.
-
-AccuracyCoin, the library audit and the existing mapper unit tests are
-unaffected.
+The PPU-A12 filter is now six CPU cycles (18 PPU dots), matching the
+documented/ares filter. `mmc3_test_2` passes 6/6; `mmc3_irq_tests` passes
+6/6 with the alternate revision selected for revision A. AccuracyCoin and
+the library audit are unaffected.
 
 ## Expansion-audio parity (2026-11-12)
 

@@ -58,7 +58,7 @@ Public mapper-specific status:
 
 | Area | Status |
 |---|---|
-| MMC1 / MMC3 / MMC5 / MMC6 | MMC3/MMC6 tests pass with the alternate-revision selector; MMC3 line-239 boundary remains |
+| MMC1 / MMC3 / MMC5 / MMC6 | MMC3/MMC6 tests pass; use the alternate-revision selector for revision-A titles |
 | VRC2/4/6/7 | Expansion audio verified per-cycle; VRC6 sawtooth follows the wiki/Mesen schedule |
 | FME-7, Namco 163, Sunsoft 5B | Expansion audio verified; FME-7 IRQ/audio fixes are unit-tested |
 | Unlicensed long tail | Best-effort; save-state round-trip and smoke audit only |
