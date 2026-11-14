@@ -211,6 +211,8 @@ pub struct Player {
     movie_playback: Option<(Vec<[u16; 4]>, usize)>,
     /// Extra frames emulated ahead of the committed frame (0 = off).
     run_ahead: u32,
+    /// Persisted FDS disk path, when this machine is a disk system.
+    fds_disk: Option<PathBuf>,
     sample_rate: f32,
     gamepad: [InputState; 4],
     touch: InputState,
@@ -233,16 +235,38 @@ impl Player {
         let mut core = registry
             .create_default(SystemId::Nes)
             .ok_or("no NES core registered")?;
-        core.load(
-            &rom,
-            &LoadOptions {
-                region: settings.region,
-                sample_rate: settings.sample_rate,
-                video_filter: settings.filter,
-                palette: settings.palette,
-            },
-        )
-        .map_err(|err| err.to_string())?;
+        let save_dir = settings.save_dir.clone();
+        fs::create_dir_all(&save_dir).map_err(|err| format!("create save dir: {err}"))?;
+        // Key saves by a content hash (FNV-1a 64) in addition to the scan CRC so
+        // renamed/colliding entries cannot share battery data.
+        let stem = format!("{}-{:016x}", entry.save_stem(), rom_fingerprint(&rom));
+        let options = LoadOptions {
+            region: settings.region,
+            sample_rate: settings.sample_rate,
+            video_filter: settings.filter,
+            palette: settings.palette,
+        };
+        let fds_disk = if entry.is_fds() {
+            let bios_path = &settings.fds_bios;
+            let bios = fs::read(bios_path).map_err(|err| {
+                format!(
+                    "FDS BIOS not found at {} ({err}); set it in Settings -> Paths",
+                    bios_path.display()
+                )
+            })?;
+            let disk_path = save_dir.join(format!("{stem}.fds"));
+            let disk = if disk_path.exists() {
+                fs::read(&disk_path).map_err(|err| format!("read FDS image: {err}"))?
+            } else {
+                rom.clone()
+            };
+            core.load_fds(&disk, &bios, &options)
+                .map_err(|err| err.to_string())?;
+            Some(disk_path)
+        } else {
+            core.load(&rom, &options).map_err(|err| err.to_string())?;
+            None
+        };
 
         // The shell re-applies the selected devices every frame; set the
         // initial pair here so the first frame already has the right devices.
@@ -269,11 +293,6 @@ impl Player {
             }
         }
 
-        let save_dir = settings.save_dir.clone();
-        fs::create_dir_all(&save_dir).map_err(|err| format!("create save dir: {err}"))?;
-        // Key saves by a content hash (FNV-1a 64) in addition to the scan CRC so
-        // renamed/colliding entries cannot share battery data.
-        let stem = format!("{}-{:016x}", entry.save_stem(), rom_fingerprint(&rom));
         let sram_path = save_dir.join(format!("{stem}.sav"));
         if let Ok(sram) = fs::read(&sram_path) {
             core.load_sram(&sram).map_err(|err| err.to_string())?;
@@ -287,7 +306,8 @@ impl Player {
 
         let core_id = core.info().id.to_string();
         let mut message = String::new();
-        if settings.region == Region::Auto
+        if !entry.is_fds()
+            && settings.region == Region::Auto
             && entry.header.as_ref().is_some_and(|header| !header.nes2)
         {
             message = "No NES 2.0 header; defaulting to NTSC".to_string();
@@ -323,6 +343,7 @@ impl Player {
             movie_state: None,
             movie_playback: None,
             run_ahead: settings.run_ahead,
+            fds_disk,
         };
         player.push_rewind_keyframe();
         Ok(player)
@@ -614,6 +635,23 @@ impl Player {
         if self.core.save_state(&mut state).is_ok() {
             self.rewind.push_keyframe(self.frames, state);
         }
+    }
+
+    /// Number of FDS disk sides (0 for cartridges).
+    #[must_use]
+    pub fn disk_sides(&self) -> usize {
+        self.core.disk_sides()
+    }
+
+    /// Currently inserted FDS side.
+    #[must_use]
+    pub fn current_disk_side(&self) -> usize {
+        self.core.current_disk_side()
+    }
+
+    /// Inserts an FDS side, or ejects it with `None`.
+    pub fn insert_disk_side(&mut self, side: Option<usize>) {
+        self.core.insert_disk_side(side);
     }
 
     /// Selects the alternate MMC3A/NEC IRQ revision.
@@ -1290,6 +1328,12 @@ impl Player {
         if !eeprom.is_empty() {
             let _ = fs::write(self.save_dir.join("datach.eeprom"), eeprom);
         }
+        if let Some(path) = &self.fds_disk {
+            let image = self.core.disk_image();
+            if !image.is_empty() {
+                let _ = fs::write(path, image);
+            }
+        }
         let mut state = Vec::new();
         if self.core.save_state(&mut state).is_ok() {
             let _ = fs::write(self.state_path(self.slot), state);
@@ -1539,6 +1583,28 @@ mod tests {
             core.run_frame().expect("frame");
         }
         println!("run_frame: {:?} each", start.elapsed() / 600);
+    }
+
+    #[test]
+    fn fds_entry_loads_with_a_user_bios() {
+        let dir = std::env::temp_dir().join("unko-fds-player-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let disk = dir.join("game.fds");
+        std::fs::write(&disk, vec![0u8; 65_500]).expect("disk");
+        let bios = dir.join("disksys.rom");
+        std::fs::write(&bios, vec![0u8; 8192]).expect("bios");
+        let entries = unko_rom::probe_path(&disk).expect("probe");
+        let settings = Settings {
+            save_dir: dir.join("saves"),
+            fds_bios: bios,
+            ..Settings::default()
+        };
+        let mut player = Player::start(&entries[0], &settings).expect("FDS starts");
+        assert_eq!(player.disk_sides(), 1);
+        assert_eq!(player.current_disk_side(), 0);
+        player.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

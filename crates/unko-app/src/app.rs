@@ -617,6 +617,29 @@ impl App {
                             .small(),
                         );
                     });
+                    let disk_sides = self
+                        .player
+                        .as_ref()
+                        .map_or(0, crate::player::Player::disk_sides);
+                    if disk_sides > 0 {
+                        let current = self
+                            .player
+                            .as_ref()
+                            .map_or(0, crate::player::Player::current_disk_side);
+                        ui.menu_button("Disk side", |ui| {
+                            for side in 0..disk_sides {
+                                if ui
+                                    .radio(current == side, format!("Side {}", side + 1))
+                                    .clicked()
+                                {
+                                    if let Some(player) = &mut self.player {
+                                        player.insert_disk_side(Some(side));
+                                    }
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                    }
                     ui.menu_button("Movie", |ui| {
                         let has_game = self.player.is_some();
                         let recording = self
@@ -1081,6 +1104,15 @@ impl App {
                         }
                         ui.label(format!("slot {}", player.slot));
                         ui.separator();
+                        let sides = player.disk_sides();
+                        if sides > 0 {
+                            ui.label(format!(
+                                "FDS side {}/{}",
+                                player.current_disk_side() + 1,
+                                sides
+                            ));
+                            ui.separator();
+                        }
                         ui.label(format!("{:.0} Hz", player.sample_rate()));
                         if player.recording() {
                             ui.separator();
@@ -3729,6 +3761,29 @@ fn paths_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 .pick_folder()
             {
                 settings.save_dir = path;
+            }
+        }
+    });
+    ui.label("FDS BIOS (disksys.rom, 8 KiB; never bundled)");
+    ui.horizontal(|ui| {
+        let mut bios = settings.fds_bios.display().to_string();
+        if ui.text_edit_singleline(&mut bios).changed() {
+            settings.fds_bios = PathBuf::from(bios);
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if ui.button("Browse…").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_directory(
+                    settings
+                        .fds_bios
+                        .parent()
+                        .filter(|path| !path.as_os_str().is_empty())
+                        .unwrap_or(&settings.save_dir),
+                )
+                .add_filter("FDS BIOS", &["rom", "bin"])
+                .pick_file()
+            {
+                settings.fds_bios = path;
             }
         }
     });

@@ -132,6 +132,46 @@ impl Default for AccuracyCore {
     }
 }
 
+impl AccuracyCore {
+    fn configure_system(
+        &mut self,
+        mut system: System,
+        options: &LoadOptions,
+    ) -> Result<(), CoreError> {
+        system.set_mmc3_alternate(self.mmc3_alternate);
+        // `Auto` keeps the timing the header declares; an explicit choice
+        // overrides it.
+        match options.region {
+            HostRegion::Auto => {}
+            HostRegion::Ntsc => system.set_region(ClockRegion::Ntsc),
+            HostRegion::Pal => system.set_region(ClockRegion::Pal),
+            HostRegion::Dendy => system.set_region(ClockRegion::Dendy),
+        }
+        self.filter = options.video_filter;
+        self.palette = options.palette;
+        system.set_palette(palette_variant(options.palette));
+        if let Some(table) = self.palette_table {
+            system.set_palette_table(table);
+        }
+        let rate = if options.sample_rate > 0.0 {
+            options.sample_rate
+        } else {
+            self.sample_rate
+        };
+        system.set_sample_rate(rate);
+        system.set_audio_quality(self.audio_quality);
+        system.set_audio_filters(self.audio_filters);
+        system.set_channel_gains(self.channel_gains);
+        system.set_audio_source(self.audio_source);
+        system.set_ram_clear(self.ram_clear);
+        system.set_ppu_reset_behavior(self.ppu_reset);
+        system.set_cheats(&self.cheats);
+        self.sample_rate = rate;
+        self.system = Some(system);
+        Ok(())
+    }
+}
+
 /// Simple composite/NTSC display approximation: a 3-tap horizontal luma blend
 /// plus a mild scanline attenuation. Display-only; it never feeds back into
 /// emulation state.
@@ -201,38 +241,38 @@ impl Core for AccuracyCore {
     }
 
     fn load(&mut self, rom: &[u8], options: &LoadOptions) -> Result<(), CoreError> {
-        let mut system = System::from_ines(rom).map_err(map_err)?;
-        system.set_mmc3_alternate(self.mmc3_alternate);
-        // `Auto` keeps the timing the header declares; an explicit choice
-        // overrides it.
-        match options.region {
-            HostRegion::Auto => {}
-            HostRegion::Ntsc => system.set_region(ClockRegion::Ntsc),
-            HostRegion::Pal => system.set_region(ClockRegion::Pal),
-            HostRegion::Dendy => system.set_region(ClockRegion::Dendy),
+        let system = System::from_ines(rom).map_err(map_err)?;
+        self.configure_system(system, options)
+    }
+
+    fn load_fds(
+        &mut self,
+        disk: &[u8],
+        bios: &[u8],
+        options: &LoadOptions,
+    ) -> Result<(), CoreError> {
+        let system = System::from_fds(disk, bios).map_err(map_err)?;
+        self.configure_system(system, options)
+    }
+
+    fn disk_sides(&self) -> usize {
+        self.system.as_ref().map_or(0, System::disk_side_count)
+    }
+
+    fn current_disk_side(&self) -> usize {
+        self.system.as_ref().map_or(0, System::current_disk_side)
+    }
+
+    fn insert_disk_side(&mut self, side: Option<usize>) {
+        if let Some(system) = self.system.as_mut() {
+            system.insert_disk_side(side);
         }
-        self.filter = options.video_filter;
-        self.palette = options.palette;
-        system.set_palette(palette_variant(options.palette));
-        if let Some(table) = self.palette_table {
-            system.set_palette_table(table);
-        }
-        let rate = if options.sample_rate > 0.0 {
-            options.sample_rate
-        } else {
-            self.sample_rate
-        };
-        system.set_sample_rate(rate);
-        system.set_audio_quality(self.audio_quality);
-        system.set_audio_filters(self.audio_filters);
-        system.set_channel_gains(self.channel_gains);
-        system.set_audio_source(self.audio_source);
-        system.set_ram_clear(self.ram_clear);
-        system.set_ppu_reset_behavior(self.ppu_reset);
-        system.set_cheats(&self.cheats);
-        self.sample_rate = rate;
-        self.system = Some(system);
-        Ok(())
+    }
+
+    fn disk_image(&mut self) -> Vec<u8> {
+        self.system
+            .as_mut()
+            .map_or_else(Vec::new, System::save_disk_image)
     }
 
     fn reset(&mut self) -> Result<(), CoreError> {

@@ -318,6 +318,8 @@ pub struct Settings {
     pub rom_dir: PathBuf,
     /// Folder for states, SRAM and screenshots.
     pub save_dir: PathBuf,
+    /// User-supplied FDS BIOS (`disksys.rom`); never bundled.
+    pub fds_bios: PathBuf,
     /// Timing region.
     pub region: Region,
     /// Core-side video filter.
@@ -446,6 +448,7 @@ impl Default for Settings {
         Self {
             rom_dir: default_data_root().join("roms"),
             save_dir: default_data_root().join("saves"),
+            fds_bios: default_data_root().join("disksys.rom"),
             region: Region::Auto,
             filter: VideoFilter::Raw,
             palette: Palette::Canonical,
@@ -544,6 +547,7 @@ impl Settings {
             match key.trim() {
                 "rom_dir" => settings.rom_dir = value.into(),
                 "save_dir" => settings.save_dir = value.into(),
+                "fds_bios" => settings.fds_bios = value.into(),
                 "region" => settings.region = parse_region(value),
                 "filter" => settings.filter = parse_filter(value),
                 "palette" => settings.palette = Palette::from_name(value),
@@ -744,6 +748,7 @@ impl Settings {
 # Unko settings
 rom_dir={}
 save_dir={}
+fds_bios={}
 speed_percent={}
 rewind_mb={}
 run_ahead={}
@@ -803,6 +808,7 @@ layout_cheats={}
 ",
             self.rom_dir.display(),
             self.save_dir.display(),
+            self.fds_bios.display(),
             self.speed_percent,
             self.rewind_mb,
             self.run_ahead,

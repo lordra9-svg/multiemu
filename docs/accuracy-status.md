@@ -24,9 +24,9 @@ Compatibility, local licensed 7,101-image NES library:
 | Loaded (mapper implemented) | 7,073 | 99.6% |
 | Unsupported mapper IDs | 0 | 0.0% |
 | Load/run failures (truncated images) | 28 | 0.39% |
-| Rendering at 20 frames | 3,904 | 55.0% of scanned |
-| Rendering at 120 frames | 6,499 | 91.5% of scanned |
-| Rendering at 240 frames | 6,426 | 90.5% of scanned |
+| Rendering at 20 frames | 3,898 | 54.9% of scanned |
+| Rendering at 120 frames | 6,490 | 91.4% of scanned |
+| Rendering at 240 frames | 6,417 | 90.4% of scanned |
 
 Only mapper 308 (NTDEC Batman) does not draw headless at 120 or 240 frames
 without Start input. The 240-frame count is lower than 120 because the exact
@@ -55,7 +55,7 @@ alternate selector. The selector is exposed as
 `Settings -> Advanced -> Alternate MMC3 IRQ revision` (and
 `Core::set_mmc3_alternate`). AccuracyCoin remains
 **146/146 non-DRAW**, and the 20/120-frame library audit is unchanged
-(3,904/6,499 rendering).
+(3,898/6,490 rendering).
 
 Because `Mmc3` and the PPU gained serialized A12 state, the save-state magic is
 now **`UNKOST07`**; `UNKOST06` states are rejected by the normal bad-magic
@@ -387,14 +387,14 @@ Chrono Trigger and Batman render their title screens; Auto-Upturn and Chess
 Academy render at 300 frames).
 
 Full-library mapper audit (7,101 images, 20 frames, four 2,000-entry batches):
-7,073 loaded (99.6%), 3,904 rendering (55.0%), 3,169 blank (44.6%), 0
+7,073 loaded (99.6%), 3,898 rendering (54.9%), 3,175 blank (44.7%), 0
 unsupported (0.0%) and 28 load/run failures (0.39%). The batched totals
 reproduce the single-pass numbers exactly. No mapper IDs remain unsupported.
-A 120-frame pass renders 6,499 with 574 blank; a 240-frame pass renders
-6,426 with 647 blank. The 240 total is slightly lower because several
+A 120-frame pass renders 6,490 with 583 blank; a 240-frame pass renders
+6,417 with 656 blank. The 240 total is slightly lower because several
 hundred games sit on a fade or transition frame at that exact sample;
 across both passes every loaded image renders except mapper 308 (NTDEC
-Batman), which waits for Start. The 120-frame pass adds 2,595 rendering
+Batman), which waits for Start. The 120-frame pass adds 2,592 rendering
 images over the 20-frame sample; the largest gains are MMC3 +654, MMC1
 +423, UxROM +254, mapper 30 +219, NROM +179, CNROM +101 and mapper 163
 +69.
@@ -1912,7 +1912,7 @@ oracle's video on 118/120 frames (previously a blank backdrop). Unit tests
 cover FME-7 banking/mirroring/IRQ and the VRC6 sawtooth sweep.
 
 Gates: fmt, clippy (with and without `apu-trace`), 433 tests. The 20-frame
-library audit improved to **3,904 rendering / 3,169 blank** (8 more images
+library audit improved to **3,898 rendering / 3,175 blank** (8 more images
 draw, all mapper 69); AccuracyCoin remains **146/151 with 0 failures**.
 
 ### 2026-11-12 — 5B/MAME/HDL alignment and DMC DAC mixing
@@ -2018,7 +2018,7 @@ needed before claiming parity.
 
 - AccuracyCoin isolated battery: **146/151 passed, 0 failed, 5 DRAW skips,
   0 unrun** (199,320 frames).
-- 20-frame library audit: **3,904 rendering / 3,169 blank**, 0 unsupported
+- 20-frame library audit: **3,898 rendering / 3,175 blank**, 0 unsupported
   mapper, 28 load/run failures out of 7,101 scanned — identical to the last
   run, so the audio, UI and palette work did not change video output.
 - CI budget: `unko bench --synthetic 3000 --min-fps 300` measured **786.2 fps**
@@ -2177,7 +2177,7 @@ trace of Crayon Shin-chan (Datach) runs without errors. The external X24C01
 - AccuracyCoin isolated battery: **146/151 passed, 0 failed, 5 DRAW skips,
   0 unrun** (199,320 frames), identical to the previous run.
 - 20-frame library audit over the 7,101-image NES set: **7,073 loaded,
-  3,904 rendering, 3,169 blank, 0 unsupported mapper, 28 load/run failures**
+  3,898 rendering, 3,175 blank, 0 unsupported mapper, 28 load/run failures**
   — byte-for-byte the same totals as the last audit, so the GPU shader,
   movie, run-ahead and Datach EEPROM changes did not alter core output.
 - CI budget: `unko bench --synthetic 3000 --min-fps 300` measured **784.7 fps**

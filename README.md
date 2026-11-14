@@ -17,8 +17,9 @@ UI, GPU output shaders, speed controls, cheats, save states, exact rewind,
 0-4 frame run-ahead and input-movie (TAS) record/playback. It runs the NES core
 headlessly or in a desktop window, produces RGBA video and f32 audio, plays
 audio through cpal, accepts keyboard, SDL3 gamepad, touch and peripheral input,
-records WAV/PNG/GIF, and verifies determinism. The same UI builds for Windows,
-macOS, Linux, iOS and Android.
+records WAV/PNG/GIF, and verifies determinism. FDS images load with a user-supplied `disksys.rom`
+(**Settings → Paths → FDS BIOS**), with disk-side selection and persisted
+disk writes. The same UI builds for Windows, macOS, Linux, iOS and Android.
 
 The accuracy core is at milestone **A5** (accuracy gate), verified against the
 public reference suites:
@@ -28,6 +29,8 @@ public reference suites:
 - `ppu_vbl_nmi` **12/12**, `ppu_sprites` **19/19**, blargg APU/DMC **13/13**
 - AccuracyCoin v3.1.0 isolated: **146/146 non-DRAW rows pass**, 0 failed,
   5 DRAW skips, 0 unrun (199,320 frames)
+- NESdev archive baseline: **129 pass / 15 fail / 119 visual-or-input-only**
+- RustyNES test tree: **146 pass / 18 fail / 177 visual-or-input-only**
 
 Compatibility from the local licensed 7,101-image NES audit:
 
@@ -37,14 +40,15 @@ Compatibility from the local licensed 7,101-image NES audit:
 | Loaded (mapper implemented) | 7,073 (**99.6%**) |
 | Unsupported mapper IDs | **0** |
 | Load/run failures | 28 (all truncated dumps) |
-| Rendering at 20 frames | 3,904 |
-| Rendering at 120 frames | 6,499 |
+| Rendering at 20 frames | 3,898 |
+| Rendering at 120 frames | 6,490 |
 | Distinct mapper IDs in the set | 285 |
 
 Only mapper 308 (NTDEC Batman) does not draw headless without Start input.
 "Rendering" in that audit is a boot smoke signal, not a completion claim; the
 20-frame window mostly measures how long a game stays on its boot screen.
 Current figures, dated entries and the remaining limits are in
+[`docs/compatibility.md`](docs/compatibility.md),
 [`docs/accuracy-status.md`](docs/accuracy-status.md) and
 [`docs/mapper-audit.md`](docs/mapper-audit.md); known divergences are in
 [`docs/accuracy-divergences.md`](docs/accuracy-divergences.md).
@@ -68,6 +72,7 @@ docs/
   implementation-plan.md # current easy-to-hard feature queue
   mapper-audit.md        # 7,101-image compatibility and mapper coverage
   test-rom-inventory.md  # NESdev suite coverage and missing BIOS/ROMs
+  compatibility.md       # systems, mappers, peripherals and feature support
   performance.md         # benchmark, state costs and efficiency budgets
   oracle-feature-matrix.md # comparison against the NES emulator field
   decisions.md           # license/stack/scope decisions

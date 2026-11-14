@@ -20,7 +20,7 @@ emulator's scope.
 | Accuracy model | cycle-level, per-dot PPU | cycle-level, per-dot | older cycle-ish core, TAS-oriented | cycle-accurate CPU, dot PPU | cycle-accurate, quirk-focused | cycle-accurate (2nd to Mesen on test-ROM rankings) | one master clock, per-half-cycle | dot-locked CPU/PPU, per-cycle bus |
 | AccuracyCoin | — (not claimed) | 100% claimed (v2.x) | not claimed | not claimed | test-ROM reference testbed | ranked high | 146/146 | **146/146 non-DRAW (146/151, 5 DRAW)** |
 | Mappers | many boards; NES core subset | 290+ | broad | broad + NstDatabase | NRS: all NES 2.0 mappers | broad + UNIF | 208 families | **245 implementations incl. 446** |
-| FDS | Yes | Yes | Yes | Yes | Yes | Yes (QD too) | Yes (real BIOS) | **core/CLI trace only (real BIOS); app loader queued** |
+| FDS | Yes | Yes | Yes | Yes | Yes | Yes (QD too) | Yes (real BIOS) | **core/CLI/desktop loading with a real BIOS; disk speed and auto-swap queued** |
 | VS. System / PlayChoice | VS | VS | VS (fixed list) | VS + PlayChoice-10 | VS | VS Uni + Dual | VS + PlayChoice-10 | **No** |
 | PAL / Dendy | region models | Yes | Yes (NTSC-PAL hybrid too) | Yes | Yes | Yes | Yes | **Yes** |
 | Expansion audio | VRC6/7, MMC5, N163, 5B, FDS, EPSM | VRC6/7, MMC5, N163, 5B, FDS, EPSM | VRC6/7, MMC5, N163, 5B, FDS | VRC6/7, MMC5, N163, 5B, FDS | VRC7, MMC5, N163, 5B, FDS (DLLs) | VRC6/7, MMC5, N163, 5B, FDS | VRC6/7, MMC5, N163, 5B, FDS | **VRC6/7, MMC5, N163, 5B, FDS** |
@@ -134,44 +134,37 @@ matrix above is the comparison; this list is the work queue.
 - Per-system library roots (NES scanned), grid/list columns, detachable
   windows, Devices matrix and reset-all.
 
-**Still needed — player-facing**
+**Implemented player-facing**
 1. **Cheats**: Game Genie (6/8-character with compare) and raw RAM, up to 32
-   entries per game, enable/disable and per-game persistence are implemented.
-2. **Speed, rewind and movies**: fast-forward (hold), 25-300% presets, frame
-   advance and the rewind ring (30-frame keyframes + input log, 64-256 MiB)
-   are implemented. Input movies (TAS) record the full start state plus
-   per-frame 4-port inputs in the `UNKOMOV1` format. Run-ahead (0-4 frames)
-   commits one frame, draws prediction frames and restores the committed
-   state.
-3. **GPU shader pass**: the built-in presets now run as glow fragment
-   shaders (scanlines/LCD/CRT/NTSC Budget/NTSC Premium). Arbitrary
-   GLSL/WGSL/slang shader loading and MiSTer-style HQ2x/CRT-25/50/75
-   scanline scaling are still not implemented.
-4. **NTSC filter fidelity**: the GPU NTSC Budget/Premium presets use 3- and
-   7-tap chroma filters with a scanline blend, not a full composite signal
-   model. The core Composite/CRT filters remain a 1-2-1 blend + scanlines;
-   Mesen/FCEUX/Nestopia have deeper NTSC models.
-5. **IPS/BPS soft-patching and a NES 2.0 header editor/repair database**
-   (MiSTer warns and points at an external repair tool; Unko now warns but
-   has no editor).
+   entries per game, enable/disable and per-game persistence.
+2. **Speed, rewind and movies**: 25-300% presets, hold-fast-forward, frame
+   advance, exact rewind (30-frame keyframes + input log, 64-256 MiB),
+   run-ahead 0-4 frames and `UNKOMOV1` input movies.
+3. **GPU shader presets**: scanlines/LCD/CRT/NTSC Budget/NTSC Premium as glow
+   fragment shaders with brightness/sharpness.
 
-**Still needed — hardware breadth**
-6. **VS. System / PlayChoice-10**: mapper 99/VS input, coin/service/DIP
+**Remaining gaps**
+1. **Arbitrary shader loading** (GLSL/WGSL/slang) and MiSTer-style
+   HQ2x/CRT-25/50/75 scaling. The built-in presets are shader-based, but the
+   NTSC Budget/Premium filters are 3/7-tap approximations rather than a full
+   composite signal model.
+2. **IPS/BPS soft-patching and a NES 2.0 header editor/repair database**
+   (missing-header warning only today).
+3. **VS. System / PlayChoice-10**: mapper 99/VS input, coin/service/DIP
    switches, and 2C03/2C04-xxxx/2C05 palettes with the 2C05 security code.
-   Blocked on VS ROMs and palette/security dumps; no local evidence.
-7. **Miracle Piano MIDI replies**, **Datach EEPROM (X24C02)**, **FDS disk
-   speed / automatic side swap**, **Karaoke Studio**, **Family Trainer
-   variant**, **Subor keyboard**, **mouse** and **Famicom 3D glasses**.
-   The transports/scanners/microphone/tape are in; these need protocol
-   ROMs or hardware captures.
-8. **Optional accuracy knobs**: sprite-per-line limit / extra sprites,
-   CPU/PPU overclock. Deliberately not added (not accuracy-preserving);
-   the NES/Famicom PPU-reset and RAM-clear knobs are in.
+   PlayChoice-10 BIOS is available; VS ROMs/palette data and PC10 games are
+   still missing.
+4. **FDS depth**: disk speed and automatic side swap. Loading, BIOS selection,
+   side switching and disk-write persistence are in.
+5. **Peripherals**: Miracle Piano MIDI replies (firmware), Datach external
+   X24C01 (Battle Rush), Karaoke Studio, SNES mouse and Famicom 3D glasses.
+6. **Optional accuracy knobs**: sprite-per-line limit / extra sprites,
+   CPU/PPU overclock. Deliberately not added (not accuracy-preserving).
+7. **Creator/community**: TAStudio-style movie editing, netplay (rollback
+   2-4 players), Lua scripting, RetroAchievements and HD packs.
 
-**Still needed — creator/community**
-9. **Movies/TAS** (input recording/playback, TAStudio).
-10. **Netplay** (rollback 2–4 players).
-11. **Lua scripting**, **RetroAchievements**, **HD packs**, **run-ahead**.
+ROM management, multi-system work and distribution gaps are tracked in
+`docs/roadmap.md` and `docs/compatibility.md`.
 
 ## Licensing and provenance
 

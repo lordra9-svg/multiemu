@@ -14,7 +14,7 @@ Status: `shipped` · `planned` · `deferred` · `reference-only`
 | Adapter | `crates/nes_accuracy_core` (built-in `Core` implementation) |
 | Accuracy bar | reference parity; see `docs/accuracy.md` |
 | Scope | licensed library, FDS, PAL/Dendy, expansion audio, Zapper, NSF, 405 enhanced video |
-| Status | default and only NES core; 146/146 non-DRAW AccuracyCoin rows; 7,073/7,101 images load (99.6%), 0 unsupported mapper IDs, 28 truncated dumps; 6,499 render by 120 frames |
+| Status | default and only NES core; 146/146 non-DRAW AccuracyCoin rows; 7,073/7,101 images load (99.6%), 0 unsupported mapper IDs, 28 truncated dumps; 6,490 render by 120 frames |
 
 The former TetaNES compatibility core was retired after the accuracy core
 gained save states and became the default. A future NES core can be registered

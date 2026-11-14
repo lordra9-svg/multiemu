@@ -145,6 +145,36 @@ pub trait Core {
     /// presentation state; it is never serialized.
     fn set_cheats(&mut self, _cheats: &[Cheat]) {}
 
+    /// Loads a raw Famicom Disk System image with its user-supplied BIOS.
+    fn load_fds(
+        &mut self,
+        _disk: &[u8],
+        _bios: &[u8],
+        _options: &LoadOptions,
+    ) -> Result<(), CoreError> {
+        Err(CoreError::Unsupported(
+            "FDS is not supported by this core".into(),
+        ))
+    }
+
+    /// Number of disk sides in the loaded FDS image (0 for cartridges).
+    fn disk_sides(&self) -> usize {
+        0
+    }
+
+    /// Currently inserted FDS side.
+    fn current_disk_side(&self) -> usize {
+        0
+    }
+
+    /// Inserts an FDS side, or ejects it with `None`.
+    fn insert_disk_side(&mut self, _side: Option<usize>) {}
+
+    /// Raw FDS image with pending writes flushed (empty for cartridges).
+    fn disk_image(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
+
     /// Sets the per-channel mixer gains in
     /// `[pulse1, pulse2, triangle, noise, dmc, expansion]` order.
     ///

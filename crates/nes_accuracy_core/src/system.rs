@@ -1219,6 +1219,12 @@ impl System {
         self.cart.disk_side_count()
     }
 
+    /// Currently inserted FDS side.
+    #[must_use]
+    pub fn current_disk_side(&self) -> usize {
+        self.cart.current_disk_side()
+    }
+
     /// Returns the raw `.fds` image with pending write-mode changes flushed
     /// (empty for cartridges).
     pub fn save_disk_image(&mut self) -> Vec<u8> {

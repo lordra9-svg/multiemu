@@ -32694,6 +32694,11 @@ impl Fds {
     pub fn set_side(&mut self, side: Option<usize>) {
         match side {
             Some(index) if index < self.sides => {
+                if index != self.side {
+                    // Flush write-mode changes from the old side before the
+                    // wire image is rebuilt for the new one.
+                    self.save_current_side();
+                }
                 self.side = index;
                 self.insert_not_ready = FDS_MOTOR_SPIN_UP;
                 self.spun_up = false;

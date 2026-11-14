@@ -33,8 +33,8 @@ The main effort is now the reference-parity accuracy core. Details in
       TC-112 (193), full PPU mirroring modes, the 143
       protected NROM and the 212/235/286 multicarts, `System` bus, Core ABI
       adapter and a `corpus` runner. Full-library audit: 7,073/7,101 load,
-      3,904 rendering at 20 frames, 0 unsupported, 0 panics; 120/240-frame
-      passes 6,499/6,426 rendering, with only input-gated 308 never drawing
+      3,898 rendering at 20 frames, 0 unsupported, 0 panics; 120/240-frame
+      passes 6,490/6,417 rendering, with only input-gated 308 never drawing
       headless;
       136/193/197 render 7/7,
       159/165 8/8, 172 4/6, 195 8/8 (Tiexue needs Start on its title screen)
@@ -172,7 +172,9 @@ The main effort is now the reference-parity accuracy core. Details in
       validation; both transports have synthetic tests. Device state is part
       of `UNKOST07` save states; the Controllers tab selects a device per
       port.
-- [ ] FDS (BIOS supplied by the user, never bundled), Vs. System.
+- [~] FDS (user BIOS, never bundled): core/CLI/app loading, side menu and
+      disk-write persistence are in; disk speed and automatic side swap remain.
+- [ ] Vs. System / PlayChoice-10 (blocked on ROMs/palette data).
 - [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation
       pending).
 - [x] Expansion audio levels and per-channel mixing: independent gain and mute for pulse 1/2, triangle, noise, DMC and expansion audio (host preferences, not save state).
@@ -187,7 +189,7 @@ The main effort is now the reference-parity accuracy core. Details in
       with CPU registers/disassembly, PPU timing/palette/OAM, APU meters,
       CPU/PPU/OAM hex view + write, and PC breakpoints; F10/F9 step one
       instruction/frame while paused.
-- [ ] Game Genie / cheat engine.
+- [x] Game Genie / cheat engine.
 
 ## M3 — prove "multi"
 

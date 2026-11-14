@@ -459,6 +459,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let mut paddle_fire = false;
             let mut filter = unko_core::VideoFilter::Raw;
             let mut palette = unko_core::Palette::Canonical;
+            let mut bios_path: Option<String> = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--frames" => {
@@ -505,6 +506,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                             &args.next().ok_or("--palette needs a name")?,
                         );
                     }
+                    "--bios" => bios_path = Some(args.next().ok_or("--bios needs a path")?),
                     "--break" => {
                         let pc = args.next().ok_or("--break needs an address")?;
                         let pc = pc.trim_start_matches("0x").trim_start_matches('$');
@@ -553,14 +555,17 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             let registry = registry();
             let mut core = create_core(&registry, core_id.as_deref())?;
-            core.load(
-                &rom,
-                &LoadOptions {
-                    video_filter: filter,
-                    palette,
-                    ..LoadOptions::default()
-                },
-            )?;
+            let options = LoadOptions {
+                video_filter: filter,
+                palette,
+                ..LoadOptions::default()
+            };
+            if let Some(bios) = &bios_path {
+                let bios = fs::read(bios)?;
+                core.load_fds(&rom, &bios, &options)?;
+            } else {
+                core.load(&rom, &options)?;
+            }
             core.set_video_filter(filter);
             core.set_palette(palette);
             if let Some(sram) = &sram_path {
@@ -1162,7 +1167,7 @@ fn usage() -> String {
   unko info <rom|archive>
   unko scan <dir>
   unko signatures <dir> [--frames N] [--mapper ID] [--limit N] [--check FILE]
-  unko run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID]
+  unko run <rom|archive> [--frames N] [--out frame.ppm] [--sram save.sav] [--press-start] [--core ID] [--bios PATH]
           [--device1 NAME] [--device2 NAME] [--paddle N] [--paddle-fire]
           [--filter raw|composite|crt] [--palette canonical|consumer|rgb|mono|vivid|soft|pal|studio]
   unko verify <rom|archive> [frames]

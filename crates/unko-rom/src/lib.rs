@@ -141,6 +141,12 @@ impl RomEntry {
         "nes"
     }
 
+    /// Whether this entry is a raw Famicom Disk System image.
+    #[must_use]
+    pub fn is_fds(&self) -> bool {
+        extension(Path::new(&self.file_name)).eq("fds")
+    }
+
     /// Human-readable size.
     #[must_use]
     pub fn size_label(&self) -> String {
@@ -227,9 +233,9 @@ pub fn probe_path(path: &Path) -> Result<Vec<RomEntry>, RomError> {
     }
     let extension = extension(path);
     match extension.as_str() {
-        "nes" => {
+        "nes" | "fds" => {
             let entry = plain_entry(path.to_path_buf()).ok_or_else(|| {
-                RomError::Invalid(format!("{} is not a valid iNES image", path.display()))
+                RomError::Invalid(format!("{} is not a valid NES/FDS image", path.display()))
             })?;
             Ok(vec![entry])
         }
@@ -280,7 +286,7 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<RomEntry>) {
             }
         } else if file_type.is_file() {
             match extension(&path).as_str() {
-                "nes" => {
+                "nes" | "fds" => {
                     if let Some(entry) = plain_entry(path) {
                         out.push(entry);
                     }
@@ -294,12 +300,17 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<RomEntry>) {
 
 fn plain_entry(path: PathBuf) -> Option<RomEntry> {
     let bytes = fs::read(&path).ok()?;
-    let header = parse_header(&bytes)?;
-    let metadata = fs::metadata(&path).ok();
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unknown.nes".into());
+    let is_fds = extension(&path).eq("fds");
+    let header = if is_fds {
+        None
+    } else {
+        Some(parse_header(&bytes)?)
+    };
+    let metadata = fs::metadata(&path).ok();
     let title = path
         .file_stem()
         .map(|name| name.to_string_lossy().replace('_', " "))
@@ -313,7 +324,7 @@ fn plain_entry(path: PathBuf) -> Option<RomEntry> {
         modified: metadata
             .and_then(|meta| meta.modified().ok())
             .and_then(system_time_secs),
-        header: Some(header),
+        header,
         id: crc32(&bytes),
     })
 }
@@ -347,7 +358,8 @@ fn scan_zip(path: &Path) -> Vec<RomEntry> {
             continue;
         };
         let name = name.into_owned();
-        if member.is_dir() || !extension(Path::new(&name)).eq("nes") {
+        let member_ext = extension(Path::new(&name));
+        if member.is_dir() || !(member_ext.eq("nes") || member_ext.eq("fds")) {
             continue;
         }
         let mut prefix = [0u8; 16];
@@ -355,8 +367,13 @@ fn scan_zip(path: &Path) -> Vec<RomEntry> {
             Ok(()) => parse_header(&prefix),
             Err(_) => None,
         };
-        let Some(header) = header else {
-            continue; // headerless ZIP images are not playable
+        let header = if member_ext.eq("fds") {
+            None
+        } else {
+            let Some(header) = header else {
+                continue; // headerless ZIP images are not playable
+            };
+            Some(header)
         };
         let title = member_title(&name);
         let size = member.size();
@@ -372,7 +389,7 @@ fn scan_zip(path: &Path) -> Vec<RomEntry> {
             file_name: name,
             size,
             modified,
-            header: Some(header),
+            header,
             id,
         });
     }
@@ -392,7 +409,10 @@ fn scan_7z(path: &Path) -> Vec<RomEntry> {
         .archive()
         .files
         .iter()
-        .filter(|file| !file.is_directory() && extension(Path::new(file.name())).eq("nes"))
+        .filter(|file| {
+            let ext = extension(Path::new(file.name()));
+            !file.is_directory() && (ext.eq("nes") || ext.eq("fds"))
+        })
         .map(|file| {
             let inner = file.name().to_string();
             RomEntry {
@@ -425,7 +445,8 @@ fn scan_rar(path: &Path) -> Vec<RomEntry> {
     members
         .enumerate()
         .filter(|(_, member)| {
-            !member.meta.is_directory && extension(Path::new(&member_name(member))).eq("nes")
+            let ext = extension(Path::new(&member_name(member)));
+            !member.meta.is_directory && (ext.eq("nes") || ext.eq("fds"))
         })
         .map(|(index, member)| {
             let inner = member_name(&member);
@@ -673,5 +694,22 @@ mod tests {
         zip.finish().expect("finish");
         assert!(scan(&dir).is_empty());
         let _ = fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn fds_entries_are_recognized() {
+        let entry = RomEntry {
+            source: Source::File(PathBuf::from("game.fds")),
+            container: Container::File,
+            title: "game".into(),
+            file_name: "game.fds".into(),
+            size: 65_500,
+            modified: None,
+            header: None,
+            id: 0,
+        };
+        assert!(entry.is_fds());
+        let mut cartridge = entry.clone();
+        cartridge.file_name = "game.nes".into();
+        assert!(!cartridge.is_fds());
     }
 }

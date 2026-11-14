@@ -62,8 +62,8 @@ the headless probe, so it needs an input script or a screenshot oracle.
 
 `refs/Minerva_Myrient/No-Intro/Nintendo - Family Computer Disk System (FDS)`
 and the `(QD)` folder contain FDS titles, including *Akumajou Dracula*.
-The core/CLI can boot them with a `--bios` path; the desktop app still has no
-`.fds` loader.
+The core, CLI (`--bios`) and desktop app can boot them; the desktop pulls the
+BIOS from Settings → Paths and persists disk writes.
 
 ## NESdev archive (`christopherpow/nes-test-roms`, 263 `.nes`)
 
@@ -111,7 +111,7 @@ The MMC3 A12 work (see `docs/accuracy-status.md`) fixed
 
 | Asset | Needed for | Notes |
 |---|---|---|
-| `disksys.rom` (FDS BIOS) | `fdsirqtests`, FDS mirroring/`$4023`/audio/`$4030` tests, every `.fds` title | A local Myrient archive has the BIOS zip; it is **not** in `test-roms/` and the desktop app has no `.fds` loader yet |
+| `disksys.rom` (FDS BIOS) | `fdsirqtests`, FDS mirroring/`$4023`/audio/`$4030` tests, every `.fds` title | A local Myrient archive has the BIOS zip; it is **not** in `test-roms/`, but the desktop app reads it from Settings → Paths |
 | VS. System BIOS/game ROMs + 2C03/2C04/2C05 palette/security data | `characterize-vs`, VS compatibility | Blocked on ROMs and palette dumps |
 | PlayChoice-10 BIOS/ROMs | PC10 compatibility | Blocked on assets |
 | Miracle Piano firmware | MIDI replies | The transport is implemented, but replies need the piano firmware or a real unit |

@@ -33,7 +33,7 @@ Current results (2026-11-13): every public row above is green — `nestest`
 `ppu_sprites` 19/19, blargg APU/DMC 13/13, and AccuracyCoin 146/146 non-DRAW
 (146/151 total, 5 DRAW skips, 0 failed, 199,320 frames). The 7,101-image
 commercial audit loads 7,073 (99.6%) with 0 unsupported mapper IDs and 28
-truncated dumps; 6,499 images render by 120 frames. Details in
+truncated dumps; 6,490 images render by 120 frames. Details in
 `docs/accuracy-status.md` and `docs/mapper-audit.md`.
 
 "Reference parity" is stronger than "runs the library": a game that looks right
