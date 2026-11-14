@@ -1211,6 +1211,16 @@ impl System {
         self.audio_rate
     }
 
+    /// Sets the FDS transfer-speed multiplier.
+    pub fn set_fds_speed(&mut self, speed: u8) {
+        self.cart.set_fds_speed(speed);
+    }
+
+    /// Enables or disables automatic FDS side swapping.
+    pub fn set_fds_auto_side_swap(&mut self, enabled: bool) {
+        self.cart.set_fds_auto_side_swap(enabled);
+    }
+
     /// Inserts an FDS disk side (`Some`) or ejects (`None`); no-op for
     /// non-FDS cartridges.
     pub fn insert_disk_side(&mut self, side: Option<usize>) {

@@ -175,6 +175,12 @@ pub trait Core {
         Vec::new()
     }
 
+    /// Sets the FDS transfer-speed multiplier (1/2/4/8).
+    fn set_fds_speed(&mut self, _speed: u8) {}
+
+    /// Enables or disables automatic FDS side swapping.
+    fn set_fds_auto_side_swap(&mut self, _enabled: bool) {}
+
     /// Sets the per-channel mixer gains in
     /// `[pulse1, pulse2, triangle, noise, dmc, expansion]` order.
     ///

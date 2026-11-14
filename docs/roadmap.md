@@ -172,8 +172,8 @@ The main effort is now the reference-parity accuracy core. Details in
       validation; both transports have synthetic tests. Device state is part
       of `UNKOST08` save states; the Controllers tab selects a device per
       port.
-- [~] FDS (user BIOS, never bundled): core/CLI/app loading, side menu and
-      disk-write persistence are in; disk speed and automatic side swap remain.
+- [x] FDS (user BIOS, never bundled): core/CLI/app loading, side menu,
+      disk-write persistence, 1/2/4/8x disk speed and opt-in auto side swap.
 - [ ] Vs. System / PlayChoice-10 (blocked on ROMs/palette data).
 - [x] NSF/NSFE parsing and player wiring (unit-tested; corpus validation
       pending).

@@ -807,6 +807,12 @@ pub trait Mapper: fmt::Debug + MapperState {
         Vec::new()
     }
 
+    /// Sets the FDS transfer-speed multiplier.
+    fn set_fds_speed(&mut self, _speed: u8) {}
+
+    /// Enables or disables automatic FDS side swapping.
+    fn set_fds_auto_side_swap(&mut self, _enabled: bool) {}
+
     /// Notification of a fully decoded PPUCTRL write (MMC5 8x16 mode).
     fn set_ppu_ctrl(&mut self, _value: u8) {}
 
@@ -1541,6 +1547,16 @@ impl Cartridge {
     /// Inserts an FDS disk side (`Some`) or ejects (`None`).
     pub fn insert_disk_side(&mut self, side: Option<usize>) {
         self.mapper.insert_disk_side(side);
+    }
+
+    /// Sets the FDS transfer-speed multiplier.
+    pub fn set_fds_speed(&mut self, speed: u8) {
+        self.mapper.set_fds_speed(speed);
+    }
+
+    /// Enables or disables automatic FDS side swapping.
+    pub fn set_fds_auto_side_swap(&mut self, enabled: bool) {
+        self.mapper.set_fds_auto_side_swap(enabled);
     }
 
     /// Number of sides in an FDS image (0 for non-FDS boards).
@@ -32564,6 +32580,10 @@ pub struct Fds {
     transfer_timer: u32,
     transfer_active: bool,
     skipping_gap: bool,
+    /// Disk transfer-speed multiplier (1, 2, 4 or 8).
+    speed: u8,
+    /// Automatically move to the next side when the current one ends.
+    auto_side: bool,
 
     mirroring: Mirroring,
     audio: FdsAudio,
@@ -32609,11 +32629,17 @@ impl Fds {
             transfer_timer: FDS_BYTE_CYCLES,
             transfer_active: false,
             skipping_gap: true,
+            speed: 1,
+            auto_side: false,
             mirroring: Mirroring::Vertical,
             audio: FdsAudio::default(),
         };
         fds.rebuild_wire();
         fds
+    }
+
+    fn byte_cycles(&self) -> u32 {
+        (FDS_BYTE_CYCLES / u32::from(self.speed.max(1))).max(1)
     }
 
     fn side_bytes(&self) -> &[u8] {
@@ -32725,7 +32751,7 @@ impl Fds {
         if active != self.transfer_active {
             self.transfer_active = active;
             if active {
-                self.transfer_timer = FDS_BYTE_CYCLES;
+                self.transfer_timer = self.byte_cycles();
                 if self.read_mode {
                     self.skipping_gap = true;
                 }
@@ -32755,6 +32781,9 @@ impl Fds {
             self.read_data = 0;
             self.end_of_head = true;
             self.motor_on = false;
+            if self.auto_side && self.side + 1 < self.sides {
+                self.set_side(Some(self.side + 1));
+            }
         }
         self.byte_transfer_flag = true;
     }
@@ -32808,7 +32837,7 @@ impl Fds {
         }
         if self.transfer_reset && !was_reset {
             self.skipping_gap = true;
-            self.transfer_timer = FDS_BYTE_CYCLES;
+            self.transfer_timer = self.byte_cycles();
         }
         // Writing $4025 acknowledges disk IRQs.
         self.byte_transfer_flag = false;
@@ -32983,6 +33012,18 @@ impl Mapper for Fds {
         self.mirroring
     }
 
+    fn set_fds_speed(&mut self, speed: u8) {
+        self.speed = match speed {
+            2 | 4 | 8 => speed,
+            _ => 1,
+        };
+        self.transfer_timer = self.byte_cycles();
+    }
+
+    fn set_fds_auto_side_swap(&mut self, enabled: bool) {
+        self.auto_side = enabled;
+    }
+
     fn number(&self) -> u16 {
         20
     }
@@ -33016,7 +33057,7 @@ impl Mapper for Fds {
             } else {
                 self.store_byte();
             }
-            self.transfer_timer = FDS_BYTE_CYCLES;
+            self.transfer_timer = self.byte_cycles();
         }
     }
 
@@ -42591,6 +42632,22 @@ mod tests {
         }
         assert_eq!(fds.wire[head1], 0xA5);
         assert_eq!(fds.status_4030() & 0x80, 0x80, "byte-transfer flag");
+    }
+
+    #[test]
+    fn fds_speed_multiplier_and_auto_side_settings() {
+        let mut fds = Fds::new(&vec![0u8; 2 * 65_500], &vec![0u8; 0x2000]);
+        assert_eq!(fds.byte_cycles(), FDS_BYTE_CYCLES);
+        fds.set_fds_speed(2);
+        assert_eq!(fds.byte_cycles(), FDS_BYTE_CYCLES / 2);
+        fds.set_fds_speed(3);
+        assert_eq!(
+            fds.byte_cycles(),
+            FDS_BYTE_CYCLES,
+            "unsupported speeds reset to 1x"
+        );
+        fds.set_fds_auto_side_swap(true);
+        assert!(fds.auto_side);
     }
 
     #[test]

@@ -154,8 +154,8 @@ matrix above is the comparison; this list is the work queue.
    switches, and 2C03/2C04-xxxx/2C05 palettes with the 2C05 security code.
    PlayChoice-10 BIOS is available; VS ROMs/palette data and PC10 games are
    still missing.
-4. **FDS depth**: disk speed and automatic side swap. Loading, BIOS selection,
-   side switching and disk-write persistence are in.
+4. **FDS depth**: loading, BIOS selection, side switching, disk-write
+   persistence, 1/2/4/8x disk speed and opt-in auto side swap are in.
 5. **Peripherals**: Miracle Piano MIDI replies (firmware), Datach external
    X24C01 (Battle Rush), Karaoke Studio, SNES mouse and Famicom 3D glasses.
 6. **Optional accuracy knobs**: sprite-per-line limit / extra sprites,

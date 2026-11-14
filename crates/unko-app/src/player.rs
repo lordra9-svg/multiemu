@@ -267,6 +267,8 @@ impl Player {
             core.load(&rom, &options).map_err(|err| err.to_string())?;
             None
         };
+        core.set_fds_speed(settings.fds_speed);
+        core.set_fds_auto_side_swap(settings.fds_auto_side);
 
         // The shell re-applies the selected devices every frame; set the
         // initial pair here so the first frame already has the right devices.
@@ -652,6 +654,16 @@ impl Player {
     /// Inserts an FDS side, or ejects it with `None`.
     pub fn insert_disk_side(&mut self, side: Option<usize>) {
         self.core.insert_disk_side(side);
+    }
+
+    /// Sets the FDS transfer-speed multiplier (1/2/4/8).
+    pub fn set_fds_speed(&mut self, speed: u8) {
+        self.core.set_fds_speed(speed);
+    }
+
+    /// Enables or disables automatic FDS side swapping.
+    pub fn set_fds_auto_side_swap(&mut self, enabled: bool) {
+        self.core.set_fds_auto_side_swap(enabled);
     }
 
     /// Selects the alternate MMC3A/NEC IRQ revision.

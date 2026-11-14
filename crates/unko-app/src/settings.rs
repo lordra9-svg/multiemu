@@ -320,6 +320,10 @@ pub struct Settings {
     pub save_dir: PathBuf,
     /// User-supplied FDS BIOS (`disksys.rom`); never bundled.
     pub fds_bios: PathBuf,
+    /// FDS transfer-speed multiplier (1, 2, 4 or 8).
+    pub fds_speed: u8,
+    /// Automatically move to the next FDS side.
+    pub fds_auto_side: bool,
     /// Timing region.
     pub region: Region,
     /// Core-side video filter.
@@ -449,6 +453,8 @@ impl Default for Settings {
             rom_dir: default_data_root().join("roms"),
             save_dir: default_data_root().join("saves"),
             fds_bios: default_data_root().join("disksys.rom"),
+            fds_speed: 1,
+            fds_auto_side: false,
             region: Region::Auto,
             filter: VideoFilter::Raw,
             palette: Palette::Canonical,
@@ -548,6 +554,13 @@ impl Settings {
                 "rom_dir" => settings.rom_dir = value.into(),
                 "save_dir" => settings.save_dir = value.into(),
                 "fds_bios" => settings.fds_bios = value.into(),
+                "fds_speed" => {
+                    settings.fds_speed = match value.parse().unwrap_or(1) {
+                        2 | 4 | 8 => value.parse().unwrap_or(1),
+                        _ => 1,
+                    }
+                }
+                "fds_auto_side" => settings.fds_auto_side = value == "true" || value == "1",
                 "region" => settings.region = parse_region(value),
                 "filter" => settings.filter = parse_filter(value),
                 "palette" => settings.palette = Palette::from_name(value),
@@ -749,6 +762,8 @@ impl Settings {
 rom_dir={}
 save_dir={}
 fds_bios={}
+fds_speed={}
+fds_auto_side={}
 speed_percent={}
 rewind_mb={}
 run_ahead={}
@@ -809,6 +824,8 @@ layout_cheats={}
             self.rom_dir.display(),
             self.save_dir.display(),
             self.fds_bios.display(),
+            self.fds_speed,
+            self.fds_auto_side,
             self.speed_percent,
             self.rewind_mb,
             self.run_ahead,

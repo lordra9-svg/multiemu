@@ -403,6 +403,12 @@ impl App {
             if self.settings.mmc3_alternate != old.mmc3_alternate {
                 player.set_mmc3_alternate(self.settings.mmc3_alternate);
             }
+            if self.settings.fds_speed != old.fds_speed {
+                player.set_fds_speed(self.settings.fds_speed);
+            }
+            if self.settings.fds_auto_side != old.fds_auto_side {
+                player.set_fds_auto_side_swap(self.settings.fds_auto_side);
+            }
         }
         if let Some(audio) = &self.audio {
             audio.set_volume(self.settings.volume);
@@ -3924,6 +3930,27 @@ fn advanced_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.label(
         RichText::new(
             "Use for boards that raise a single IRQ when reloading to zero (some Crystalis/MMC6 dumps). Normal MMC3B/C behavior is the default.",
+        )
+        .weak()
+        .small(),
+    );
+    ui.horizontal(|ui| {
+        ui.label("FDS disk speed");
+        egui::ComboBox::from_id_salt("fds-speed")
+            .selected_text(format!("{}x", settings.fds_speed))
+            .show_ui(ui, |ui| {
+                for speed in [1u8, 2, 4, 8] {
+                    ui.selectable_value(&mut settings.fds_speed, speed, format!("{speed}x"));
+                }
+            });
+    });
+    ui.checkbox(
+        &mut settings.fds_auto_side,
+        "Automatically swap FDS sides at end of side",
+    );
+    ui.label(
+        RichText::new(
+            "Disk speed scales the FDS byte-transfer cadence. Auto-swap is a convenience for multi-side images; leave it off for games that manage sides explicitly.",
         )
         .weak()
         .small(),

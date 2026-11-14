@@ -19,7 +19,7 @@ test, or a smoke audit covers it; a dash means no verdict yet.
 |---|---|---|
 | NES / Famicom (NTSC 2C02) | **Verified** | Default core; AccuracyCoin 146/146 non-DRAW |
 | NES PAL / Dendy | **Partial** | PPU timing implemented; PAL APU frame periods now pass 10/10 in PAL mode |
-| Famicom Disk System | **Partial** | Core, CLI (`--bios`) and desktop loader with a user `disksys.rom`; disk speed/auto side-swap still missing |
+| Famicom Disk System | **Verified** | Core, CLI (`--bios`) and desktop loader with a user `disksys.rom`; 1/2/4/8x disk speed, manual side selection and optional auto side-swap |
 | NSF / NSFE | **Loads only** | Parser and player wiring are unit-tested; corpus validation pending |
 | VS. System | **Blocked** | No VS BIOS, palette/security dumps or game ROMs locally |
 | PlayChoice-10 | **Blocked** | PC10 BIOS is present; no PC10 game ROMs |
