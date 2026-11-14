@@ -1294,6 +1294,19 @@ mod tests {
     }
 
     #[test]
+    fn pal_frame_periods_match_the_2a07() {
+        let mut apu = Apu::new();
+        apu.set_pal(true);
+        assert_eq!(apu.frame.period(), 8313);
+        apu.frame.step = 1;
+        assert_eq!(apu.frame.period(), 8314);
+        apu.frame.step = 4;
+        assert_eq!(apu.frame.period(), 1);
+        apu.frame.mode = FrameMode::Five;
+        assert_eq!(apu.frame.period(), 8312);
+    }
+
+    #[test]
     fn frame_irq_sets_and_clears() {
         let mut apu = Apu::new();
         for _ in 0..30_000 {
