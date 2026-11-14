@@ -22,6 +22,7 @@ use crate::gamepad::{
     button_name, mapping_from_text, mapping_to_text, Gamepads, NesButton, PadMapping,
 };
 use crate::library::{self, GameEntry};
+use crate::paths;
 use crate::player::{self, Player};
 use crate::recording::RecordModes;
 use crate::settings::{Aspect, HotkeyAction, Settings, ShaderPreset, Theme};
@@ -116,13 +117,19 @@ pub struct Args {
     pub settings: bool,
     /// Open the debugger window when a game starts.
     pub debug: bool,
+    /// Portable data folder override (`--data-dir`).
+    pub data_dir: Option<PathBuf>,
+    /// Use the folder beside the executable as the data root.
+    pub portable: bool,
+    /// Print the resolved data folder and exit.
+    pub print_data_dir: bool,
 }
 
 impl App {
     /// Builds the app, loading the library from the configured folder.
     pub fn new(cc: &eframe::CreationContext<'_>, mut settings: Settings, args: Args) -> Self {
         if let Some(dir) = args.roms {
-            settings.rom_dir = dir;
+            settings.rom_dir = paths::resolve(&dir);
         }
         apply_theme(&cc.egui_ctx, settings.theme);
         let library = scan(&settings.rom_dir);
@@ -3738,11 +3745,42 @@ fn device_combo(ui: &mut egui::Ui, id: &str, device: &mut PortDevice) {
 fn paths_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.heading("Paths");
     ui.add_space(8.0);
+    let root = paths::data_root();
+    ui.label("Data folder");
+    ui.horizontal(|ui| {
+        ui.monospace(root.display().to_string());
+        if ui.button("Copy path").clicked() {
+            ui.ctx().copy_text(root.display().to_string());
+        }
+        if ui.button("Use portable defaults").clicked() {
+            settings.rom_dir = paths::roms_dir();
+            settings.save_dir = paths::saves_dir();
+            settings.fds_bios = paths::fds_bios_path();
+        }
+    });
+    ui.label(
+        RichText::new(if paths::is_portable() {
+            "Portable: move this whole folder to another machine. Relative paths below are stored relative to it."
+        } else {
+            "Move the folder with unko.conf, roms/ and saves/ to another machine; paths are stored relative to it."
+        })
+        .weak()
+        .small(),
+    );
+    ui.label(
+        RichText::new(
+            "Override the data folder with --data-dir DIR or UNKO_HOME. Absolute paths below are kept absolute.",
+        )
+        .weak()
+        .small(),
+    );
+    ui.add_space(8.0);
+    ui.separator();
     ui.label("ROM folder");
     ui.horizontal(|ui| {
         let mut rom_dir = settings.rom_dir.display().to_string();
         if ui.text_edit_singleline(&mut rom_dir).changed() {
-            settings.rom_dir = PathBuf::from(rom_dir);
+            settings.rom_dir = paths::resolve(Path::new(&rom_dir));
         }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if ui.button("Browse…").clicked() {
@@ -3758,7 +3796,7 @@ fn paths_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.horizontal(|ui| {
         let mut save_dir = settings.save_dir.display().to_string();
         if ui.text_edit_singleline(&mut save_dir).changed() {
-            settings.save_dir = PathBuf::from(save_dir);
+            settings.save_dir = paths::resolve(Path::new(&save_dir));
         }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if ui.button("Browse…").clicked() {
@@ -3774,7 +3812,7 @@ fn paths_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.horizontal(|ui| {
         let mut bios = settings.fds_bios.display().to_string();
         if ui.text_edit_singleline(&mut bios).changed() {
-            settings.fds_bios = PathBuf::from(bios);
+            settings.fds_bios = paths::resolve(Path::new(&bios));
         }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if ui.button("Browse…").clicked() {

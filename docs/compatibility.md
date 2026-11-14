@@ -85,6 +85,7 @@ Public mapper-specific status:
 
 | Feature | Status |
 |---|---|
+| Portable data root (`unko.conf`, ROMs, saves, states, cheats, movies, captures) | **Done** (`--data-dir`, `UNKO_HOME`, `--portable`; relative config paths) |
 | Save states, 10 slots, thumbnails | **Done** |
 | Exact rewind, 64–256 MiB ring | **Done** |
 | Run-ahead 0–4 frames | **Done** |
@@ -106,7 +107,7 @@ Public mapper-specific status:
 | x0000 APU write-window tests | 10/10 pass |
 | NESdev archive | 136 pass / 12 fail / 115 visual/audio/input-only; 5 failures with PAL APU in PAL mode and the alternate MMC3 selector |
 | RustyNES test tree | 157 pass / 13 fail / 171 visual/audio/input-only; 164 / 6 with PAL APU in PAL mode |
-| Workspace tests | 477 pass, 0 failed |
+| Workspace tests | 482 pass, 0 failed |
 
 The actionable accuracy failures are tracked in
 [`accuracy-divergences.md`](accuracy-divergences.md); the ROM/BIOS inventory is

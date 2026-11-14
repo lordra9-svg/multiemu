@@ -23,6 +23,7 @@ mod gamepad;
 mod gpu_shader;
 mod library;
 mod movie;
+mod paths;
 mod player;
 mod recording;
 mod settings;
@@ -33,7 +34,16 @@ use eframe::NativeOptions;
 
 /// Runs the shell until its window closes.
 pub fn run(args: Args) -> eframe::Result<()> {
-    let settings = settings::Settings::load(&settings::Settings::path());
+    let root = paths::init(args.data_dir.clone(), args.portable);
+    if args.print_data_dir {
+        println!("{}", root.display());
+        return Ok(());
+    }
+    let config = settings::Settings::path();
+    let settings = settings::Settings::load(&config);
+    if !config.is_file() {
+        let _ = settings.save(&config);
+    }
     eframe::run_native(
         "unko",
         native_options(),
@@ -62,7 +72,12 @@ fn native_options() -> NativeOptions {
 pub fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     let mut options = native_options();
     options.android_app = Some(android_app);
-    let settings = settings::Settings::load(&settings::Settings::path());
+    paths::init(None, false);
+    let config = settings::Settings::path();
+    let settings = settings::Settings::load(&config);
+    if !config.is_file() {
+        let _ = settings.save(&config);
+    }
     let _ = eframe::run_native(
         "unko",
         options,

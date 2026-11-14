@@ -12,6 +12,33 @@ recording encoders are shared; only the platform glue differs.
 | iOS | winit + wgpu (Metal), touch overlay | cpal (CoreAudio) | Xcode app (static lib) |
 | Android | winit + glow (EGL), touch overlay | cpal (AAudio) | Gradle APK (cdylib) |
 
+## Portable data root
+
+The shell resolves one data root before loading settings. It contains
+`unko.conf`, `roms/`, `saves/` and `disksys.rom`; every state, SRAM file,
+thumbnail, cheat list, input movie, screenshot and recording lives under
+`saves/`. Moving the folder therefore moves the complete setup.
+
+Resolution order:
+
+1. `--data-dir DIR` / `--home DIR`;
+2. `UNKO_HOME` or `UNKO_DATA_DIR`;
+3. `--portable` (executable folder, AppImage folder, or the folder containing a
+   macOS `.app`);
+4. an `unko.conf` beside the executable;
+5. an `unko.conf` in the current directory (legacy);
+6. the executable folder when writable;
+7. the platform data directory (`ProjectDirs`) for read-only installs.
+
+Relative paths in `unko.conf` are resolved against the configuration file's
+folder and written back relative to it when possible; absolute paths remain
+absolute. On mobile the platform sandbox is the default, and `UNKO_HOME` can
+point at an imported/exported folder.
+
+The CLI does not keep hidden state: `--bios`, `--sram`, `--out` and
+`--audio-dir` take explicit paths, so the same portable folder works in
+scripts.
+
 ## What is verified where
 
 The repository's CI checks the full workspace on Linux, Windows and macOS, and
@@ -113,10 +140,10 @@ code is needed). Signing uses the standard Gradle release configuration.
   default on iOS/Android. SDL3 is a desktop-only dependency, so the mobile
   build uses the no-op gamepad backend in `src/gamepad/mobile.rs`; a native
   `GameController`/`Gamepad` backend can replace it without touching the UI.
-- **Paths**: settings live in the platform config directory
-  (`ProjectDirs`), saves/ROMs under the platform data directory; the shell
-  creates the config directory when saving. Desktop keeps the portable
-  `unko.conf` next to the executable.
+- **Paths**: mobile uses one platform data root (`ProjectDirs`) for
+  `unko.conf`, ROMs and saves; `UNKO_HOME` can point at an imported/exported
+  folder. Desktop portable installs keep the same layout beside the
+  executable, and read-only installs fall back to the platform data root.
 - **Lifecycle**: losing focus pauses the game; the audio stream is paused
   rather than fed silence, and the UI repaints at 4 Hz while idle.
 - **ROM import**: mobile has no file picker yet. ROMs must be present in the

@@ -115,13 +115,49 @@ cargo run -p unko-app --release
 cargo run -p unko-app --release -- --rom "roms/.../game.zip"
 ```
 
-The library defaults to `roms/`; pass `--roms DIR` to point elsewhere. The shell follows Dolphin's desktop
+The library defaults to `roms/` under the portable data folder; pass
+`--roms DIR` to point elsewhere. The shell follows Dolphin's desktop
 UX: a game library as the home screen, menu bar, toolbar, player viewport,
 status bar, and one settings window with a category rail. See
 `docs/frontend.md` for the blueprint and the GPL boundary.
 
 Gamepads are hot-plugged through SDL3; bindings, auto-fire, dead zone,
 per-game profiles and keyboard shortcuts are configurable in Settings.
+
+### Portable data folder
+
+Unko keeps every mutable file under one data root: `unko.conf`, `roms/`,
+`saves/` (states, thumbnails, SRAM, cheats, per-game profiles, FDS writes,
+movies, screenshots and recordings) and the user-supplied `disksys.rom`.
+Copying that folder to another machine keeps the whole setup intact.
+
+The root is resolved in this order:
+
+1. `--data-dir DIR` (or `--home DIR`);
+2. `UNKO_HOME` / `UNKO_DATA_DIR`;
+3. `--portable`, which selects the folder beside the executable (or beside the
+   AppImage / macOS `.app`);
+4. an `unko.conf` beside the executable;
+5. an `unko.conf` in the current directory (the legacy layout);
+6. the executable folder when it is writable;
+7. the platform data directory for read-only installs and mobile.
+
+Paths written to `unko.conf` are stored relative to the data folder whenever
+they live inside it, so moving the folder does not leave stale absolute
+paths. Settings → Paths shows the active data folder and offers **Use portable
+defaults**.
+
+```sh
+# Explicit portable folder
+unko-app --data-dir /media/usb/Unko
+
+# Portable beside the executable
+unko-app --portable
+```
+
+The CLI is already stateless for this purpose: `--bios`, `--sram`, `--out` and
+`--audio-dir` take explicit paths, so scripts can point at the same portable
+folder.
 
 ### Mobile and packaging
 

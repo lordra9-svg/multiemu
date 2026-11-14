@@ -6,14 +6,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use directories::ProjectDirs;
-
 use unko_core::{
     AudioFilterModel, AudioQuality, AudioSource, MaskEdges, Overscan, Palette, PortDevice,
     PpuResetBehavior, RamClear, Region, VideoFilter,
 };
 
 use crate::gamepad::{button_name, NesButton, PadMapping};
+use crate::paths;
 
 /// Actions with user-editable keyboard shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,9 +449,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            rom_dir: default_data_root().join("roms"),
-            save_dir: default_data_root().join("saves"),
-            fds_bios: default_data_root().join("disksys.rom"),
+            rom_dir: paths::roms_dir(),
+            save_dir: paths::saves_dir(),
+            fds_bios: paths::fds_bios_path(),
             fds_speed: 1,
             fds_auto_side: false,
             region: Region::Auto,
@@ -520,17 +519,13 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Default config path.
+    /// Default config path inside the active data root.
     ///
-    /// Desktop keeps Dolphin-style portable mode (`unko.conf` beside the
-    /// executable); mobile uses the platform configuration directory.
+    /// The root is resolved by [`crate::paths`]; desktop portable installs
+    /// keep `unko.conf` beside the executable, while read-only installs and
+    /// mobile use the platform data directory.
     pub fn path() -> PathBuf {
-        if cfg!(any(target_os = "ios", target_os = "android")) {
-            if let Some(dirs) = ProjectDirs::from("", "", "Unko") {
-                return dirs.config_dir().join("unko.conf");
-            }
-        }
-        PathBuf::from("unko.conf")
+        paths::config_path()
     }
 
     /// Loads settings, falling back to defaults for missing/unknown keys.
@@ -540,6 +535,7 @@ impl Settings {
         let Ok(text) = fs::read_to_string(path) else {
             return settings;
         };
+        let base = config_base(path);
         let mut explicit_port2 = false;
         for line in text.lines() {
             let line = line.trim();
@@ -551,9 +547,11 @@ impl Settings {
             };
             let value = value.trim();
             match key.trim() {
-                "rom_dir" => settings.rom_dir = value.into(),
-                "save_dir" => settings.save_dir = value.into(),
-                "fds_bios" => settings.fds_bios = value.into(),
+                "rom_dir" => settings.rom_dir = paths::resolve_from(&base, Path::new(value)),
+                "save_dir" => settings.save_dir = paths::resolve_from(&base, Path::new(value)),
+                "fds_bios" => {
+                    settings.fds_bios = paths::resolve_from(&base, Path::new(value));
+                }
                 "fds_speed" => {
                     settings.fds_speed = match value.parse().unwrap_or(1) {
                         2 | 4 | 8 => value.parse().unwrap_or(1),
@@ -564,7 +562,13 @@ impl Settings {
                 "region" => settings.region = parse_region(value),
                 "filter" => settings.filter = parse_filter(value),
                 "palette" => settings.palette = Palette::from_name(value),
-                "custom_palette" => settings.custom_palette = value.into(),
+                "custom_palette" => {
+                    settings.custom_palette = if value.is_empty() {
+                        PathBuf::new()
+                    } else {
+                        paths::resolve_from(&base, Path::new(value))
+                    }
+                }
                 "speed_percent" => {
                     settings.speed_percent = match value.parse::<u32>().unwrap_or(100) {
                         25 | 50 | 150 | 200 | 300 => value.parse().unwrap_or(100),
@@ -688,7 +692,7 @@ impl Settings {
                     if let Some((system, path)) = value.split_once('|') {
                         settings.library_roots.push(LibraryRoot {
                             system: system.trim().to_string(),
-                            path: PathBuf::from(path),
+                            path: paths::resolve_from(&base, Path::new(path)),
                         });
                     }
                 }
@@ -756,6 +760,7 @@ impl Settings {
                 let _ = fs::create_dir_all(dir);
             }
         }
+        let base = config_base(path);
         let mut text = format!(
             "\
 # Unko settings
@@ -821,9 +826,9 @@ layout_devices={}
 layout_debugger={}
 layout_cheats={}
 ",
-            self.rom_dir.display(),
-            self.save_dir.display(),
-            self.fds_bios.display(),
+            paths::store_relative(&self.rom_dir, &base),
+            paths::store_relative(&self.save_dir, &base),
+            paths::store_relative(&self.fds_bios, &base),
             self.fds_speed,
             self.fds_auto_side,
             self.speed_percent,
@@ -856,7 +861,7 @@ layout_cheats={}
             self.integer_scale,
             self.linear_filter,
             self.palette.name(),
-            self.custom_palette.display(),
+            paths::store_relative(&self.custom_palette, &base),
             self.port1_device.name(),
             self.port2_device.name(),
             self.port2_device == PortDevice::Zapper,
@@ -911,7 +916,7 @@ layout_cheats={}
                 "library_root={}|{}
 ",
                 root.system,
-                root.path.display()
+                paths::store_relative(&root.path, &base)
             ));
         }
         for action in HotkeyAction::ALL {
@@ -932,13 +937,11 @@ layout_cheats={}
     }
 }
 
-fn default_data_root() -> PathBuf {
-    if cfg!(any(target_os = "ios", target_os = "android")) {
-        if let Some(dirs) = ProjectDirs::from("", "", "Unko") {
-            return dirs.data_dir().to_path_buf();
-        }
-    }
-    PathBuf::new()
+/// Directory that relative paths in `path` are resolved against.
+fn config_base(path: &Path) -> PathBuf {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(paths::data_root, Path::to_path_buf)
 }
 
 /// Loads a 64-entry RGB palette from a binary `.pal` (192 bytes) or a text
@@ -1242,5 +1245,66 @@ mod tests {
     fn missing_file_uses_defaults() {
         let loaded = Settings::load(Path::new("/definitely/not/here/unko.conf"));
         assert_eq!(loaded, Settings::default());
+    }
+
+    #[test]
+    fn portable_config_round_trips_relative_paths() {
+        let dir = std::env::temp_dir().join(format!("unko-portable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("unko.conf");
+        let settings = Settings {
+            rom_dir: dir.join("roms"),
+            save_dir: dir.join("saves"),
+            fds_bios: dir.join("disksys.rom"),
+            custom_palette: dir.join("custom.pal"),
+            library_roots: vec![LibraryRoot {
+                system: "nes".into(),
+                path: dir.join("library"),
+            }],
+            ..Settings::default()
+        };
+        settings.save(&path).expect("save");
+        let text = fs::read_to_string(&path).expect("read");
+        for expected in [
+            "rom_dir=roms\n",
+            "save_dir=saves\n",
+            "fds_bios=disksys.rom\n",
+            "custom_palette=custom.pal\n",
+            "library_root=nes|library\n",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in {text}");
+        }
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.rom_dir, dir.join("roms"));
+        assert_eq!(loaded.save_dir, dir.join("saves"));
+        assert_eq!(loaded.fds_bios, dir.join("disksys.rom"));
+        assert_eq!(loaded.custom_palette, dir.join("custom.pal"));
+        assert_eq!(loaded.library_roots[0].path, dir.join("library"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn moved_config_resolves_against_the_new_folder() {
+        let first = std::env::temp_dir().join(format!("unko-move-a-{}", std::process::id()));
+        let second = std::env::temp_dir().join(format!("unko-move-b-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&first);
+        let _ = fs::remove_dir_all(&second);
+        fs::create_dir_all(&first).expect("first");
+        fs::create_dir_all(&second).expect("second");
+        let settings = Settings {
+            rom_dir: first.join("roms"),
+            save_dir: first.join("saves"),
+            fds_bios: first.join("disksys.rom"),
+            ..Settings::default()
+        };
+        settings.save(&first.join("unko.conf")).expect("save");
+        fs::copy(first.join("unko.conf"), second.join("unko.conf")).expect("copy");
+        let moved = Settings::load(&second.join("unko.conf"));
+        assert_eq!(moved.rom_dir, second.join("roms"));
+        assert_eq!(moved.save_dir, second.join("saves"));
+        assert_eq!(moved.fds_bios, second.join("disksys.rom"));
+        let _ = fs::remove_dir_all(&first);
+        let _ = fs::remove_dir_all(&second);
     }
 }

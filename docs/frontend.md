@@ -83,8 +83,8 @@ The shell is one egui/eframe codebase with platform backends behind it:
 | Linux | SDL3 | cpal/ALSA or PulseAudio | portable `unko.conf` or platform dirs |
 | Windows | SDL3 | cpal/WASAPI | portable `unko.conf` or platform dirs |
 | macOS | SDL3 | cpal/CoreAudio | portable `unko.conf` or platform dirs |
-| iOS | SDL3 + touch overlay | cpal/CoreAudio | `ProjectDirs` config/data |
-| Android | SDL3 + touch overlay | cpal/AAudio | `ProjectDirs` config/data |
+| iOS | SDL3 + touch overlay | cpal/CoreAudio | `ProjectDirs` data root; `UNKO_HOME` override |
+| Android | SDL3 + touch overlay | cpal/AAudio | `ProjectDirs` data root; `UNKO_HOME` override |
 
 SDL3 is built from source by Cargo for the desktop targets. The mobile shells
 use the touch overlay as their primary controller and a no-op gamepad backend,
@@ -108,6 +108,16 @@ platform toolchains.
 - **Native file dialogs are optional.** `rfd` is used for ROM/save folders and
   palette import on desktop; text entries remain for platforms without a
   dialog backend, so the UI works in a headless/CI environment.
+
+## Portable data
+
+Settings → Paths shows the resolved data folder, a **Copy path** button and
+**Use portable defaults**. All player-owned files (states, thumbnails, SRAM,
+cheats, per-game profiles, FDS writes, movies, screenshots and recordings)
+are created under the save folder, and `unko.conf` stores paths relative to
+the data folder when they are inside it. This makes the folder relocatable
+between machines; see `docs/platforms.md` for the resolution order and the
+`--data-dir` / `UNKO_HOME` overrides.
 
 ## Implementation notes
 
