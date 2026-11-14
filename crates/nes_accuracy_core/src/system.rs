@@ -676,6 +676,9 @@ impl System {
         // The reference console leaves reset on cycle 8 (one cycle of phase
         // after the CPU's seven-cycle reset sequence), which aligns the PPU
         // frame boundary and the APU cycle parity with its captures.
+        system
+            .apu
+            .set_pal(timing.region == crate::clock::Region::Pal);
         system.clock();
         system.cpu = cpu;
         system
@@ -908,6 +911,7 @@ impl System {
     /// The PPU scanline count and the CPU/PPU clock ratio follow the region.
     /// PAL/Dendy run without the NTSC odd-frame dot skip.
     pub fn set_region(&mut self, region: crate::clock::Region) {
+        self.apu.set_pal(region == crate::clock::Region::Pal);
         self.timing = Timing::for_region(region);
         self.ppu.timing = self.timing;
         self.ppu_credit = 0;
@@ -1017,7 +1021,7 @@ impl System {
     /// Serializes the whole console state (mapper state included).
     pub fn save_state(&self) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
-        out.extend_from_slice(b"UNKOST07");
+        out.extend_from_slice(b"UNKOST08");
         out.extend_from_slice(&self.cart.fingerprint().to_le_bytes());
         let mut cart_state = Vec::new();
         self.cart.save_state(&mut cart_state)?;
@@ -1059,7 +1063,7 @@ impl System {
 
     /// Restores a state produced by [`System::save_state`].
     pub fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
-        if data.len() < 8 + 8 + 4 || &data[..8] != b"UNKOST07" {
+        if data.len() < 8 + 8 + 4 || &data[..8] != b"UNKOST08" {
             return Err("not an Unko state (bad magic/version)".into());
         }
         let fingerprint = u64::from_le_bytes(

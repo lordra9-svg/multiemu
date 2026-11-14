@@ -58,7 +58,7 @@ alternate selector. The selector is exposed as
 (3,898/6,490 rendering).
 
 Because `Mmc3` and the PPU gained serialized A12 state, the save-state magic is
-now **`UNKOST07`**; `UNKOST06` states are rejected by the normal bad-magic
+now **`UNKOST08`**; `UNKOST06` states are rejected by the normal bad-magic
 check. See `docs/accuracy-divergences.md` for the two open MMC3 failures.
 
 ## A1 — 6502

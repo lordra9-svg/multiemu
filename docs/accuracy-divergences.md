@@ -24,8 +24,6 @@ None in AccuracyCoin. All non-DRAW rows pass.
   differs from the reference; the other four interrupt singles pass.
 - `dmc_dma_during_read4/dma_4016_read` — controller bit reads during DMC DMA
   are corrupted (the other four DMC/read tests pass).
-- `pal_apu_tests` 04-08 and 10-11 — PAL APU/PPU phase; the length-counter,
-  length-table and IRQ-flag tests pass in PAL mode.
 - `extra/apu/apu_test_2`, `apu_test_5`, `apu_test_6` — the exact-cycle
   `$4017` write-coincidence tests: the frame counter's write-delay window is
   one cycle too narrow at 29831 and at 37282/37283.
@@ -161,6 +159,13 @@ These do not fail any suite and are documented exceptions under the charter.
   the wiki (decrement per CPU cycle, `$0000 -> $FFFF` assert, write to `$D`
   acknowledges); the remaining difference is the CPU's interrupt-poll position
   inside a taken/not-taken branch, which needs a hardware trace to resolve.
+
+## Recently closed (2026-11-13)
+
+- **PAL APU frame counter.** Added the 2A07 periods
+  (`8313/8314/8312/8313/1/1` for 4-step and
+  `8313/8314/8312/8314/8312/1` for 5-step). All ten PAL APU tests now pass
+  when PAL timing is selected.
 
 ## Recently closed (2026-11-12)
 

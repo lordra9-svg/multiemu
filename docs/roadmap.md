@@ -170,7 +170,7 @@ The main effort is now the reference-parity accuracy core. Details in
       (mapper 157, UPC-A/EAN-13 modules at the documented 1000-cycle rate).
       The piano's MIDI replies and the Datach EEPROM need their real-ROM
       validation; both transports have synthetic tests. Device state is part
-      of `UNKOST07` save states; the Controllers tab selects a device per
+      of `UNKOST08` save states; the Controllers tab selects a device per
       port.
 - [~] FDS (user BIOS, never bundled): core/CLI/app loading, side menu and
       disk-write persistence are in; disk speed and automatic side swap remain.

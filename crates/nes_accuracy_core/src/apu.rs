@@ -689,10 +689,14 @@ struct FrameCounter {
     odd: bool,
     delay_irq: bool,
     delay_counter: [bool; 2],
+    /// PAL 2A07 frame-counter periods.
+    pal: bool,
 }
 
 const PERIOD4: [u16; 6] = [7457, 7456, 7458, 7457, 1, 1];
 const PERIOD5: [u16; 6] = [7457, 7456, 7458, 7458, 7452, 1];
+const PERIOD4_PAL: [u16; 6] = [8313, 8314, 8312, 8313, 1, 1];
+const PERIOD5_PAL: [u16; 6] = [8313, 8314, 8312, 8314, 8312, 1];
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct FrameEvents {
@@ -711,15 +715,18 @@ impl Default for FrameCounter {
             odd: true,
             delay_irq: false,
             delay_counter: [false; 2],
+            pal: false,
         }
     }
 }
 
 impl FrameCounter {
     fn period(&self) -> u16 {
-        match self.mode {
-            FrameMode::Four => PERIOD4[self.step],
-            FrameMode::Five => PERIOD5[self.step],
+        match (self.mode, self.pal) {
+            (FrameMode::Four, false) => PERIOD4[self.step],
+            (FrameMode::Five, false) => PERIOD5[self.step],
+            (FrameMode::Four, true) => PERIOD4_PAL[self.step],
+            (FrameMode::Five, true) => PERIOD5_PAL[self.step],
         }
     }
 
@@ -851,6 +858,11 @@ impl Apu {
         let mut apu = Self::default();
         apu.pulse1.ones_complement = true;
         apu
+    }
+
+    /// Selects the PAL 2A07 frame-counter periods.
+    pub fn set_pal(&mut self, pal: bool) {
+        self.frame.pal = pal;
     }
 
     /// Advances one CPU cycle.

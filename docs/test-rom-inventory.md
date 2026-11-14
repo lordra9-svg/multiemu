@@ -80,14 +80,13 @@ forces PAL timing and `UNKO_MMC3_ALT=1` selects the alternate MMC3 revision.
 
 Latest run, including the screen-text extractor:
 
-- **129 machine-readable passes**
-- **15 machine-readable failures**; the actionable ones are:
+- **129 machine-readable passes** and **15 failures** in the default
+  NTSC-region run. The 7 PAL APU failures all pass with PAL timing selected,
+  leaving **8** failures; the actionable ones are:
   - `cpu_interrupts_v2/rom_singles/5-branch_delays_irq.nes` — branch/IRQ
     delay table CRC mismatch
   - `dmc_dma_during_read4/dma_4016_read.nes` — controller read corruption
     during DMC DMA
-  - `pal_apu_tests/04,05,06,07,08,10,11` — PAL APU/PPU phase (the first
-    three PAL APU tests pass)
   - `mmc3_test/4-scanline_timing.nes` and its `mmc3_test_2` twin — line-239
     `$2000=$10` one-dot boundary
 - **Revision-dependent passes:** `mmc3_irq_tests/5.MMC3_rev_A`,
